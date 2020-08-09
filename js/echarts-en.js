@@ -274,3 +274,273 @@ var nativeReduce = arrayProto.reduce;
 
 // Avoid assign to an exported variable, for transforming to cjs.
 var methods = {};
+
+function $override(name, fn) {
+    // Clear ctx instance for different environment
+    if (name === 'createCanvas') {
+        _ctx = null;
+    }
+
+    methods[name] = fn;
+}
+
+/**
+ * Those data types can be cloned:
+ *     Plain object, Array, TypedArray, number, string, null, undefined.
+ * Those data types will be assgined using the orginal data:
+ *     BUILTIN_OBJECT
+ * Instance of user defined class will be cloned to a plain object, without
+ * properties in prototype.
+ * Other data types is not supported (not sure what will happen).
+ *
+ * Caution: do not support clone Date, for performance consideration.
+ * (There might be a large number of date in `series.data`).
+ * So date should not be modified in and out of echarts.
+ *
+ * @param {*} source
+ * @return {*} new
+ */
+function clone(source) {
+    if (source == null || typeof source !== 'object') {
+        return source;
+    }
+
+    var result = source;
+    var typeStr = objToString.call(source);
+
+    if (typeStr === '[object Array]') {
+        if (!isPrimitive(source)) {
+            result = [];
+            for (var i = 0, len = source.length; i < len; i++) {
+                result[i] = clone(source[i]);
+            }
+        }
+    }
+    else if (TYPED_ARRAY[typeStr]) {
+        if (!isPrimitive(source)) {
+            var Ctor = source.constructor;
+            if (source.constructor.from) {
+                result = Ctor.from(source);
+            }
+            else {
+                result = new Ctor(source.length);
+                for (var i = 0, len = source.length; i < len; i++) {
+                    result[i] = clone(source[i]);
+                }
+            }
+        }
+    }
+    else if (!BUILTIN_OBJECT[typeStr] && !isPrimitive(source) && !isDom(source)) {
+        result = {};
+        for (var key in source) {
+            if (source.hasOwnProperty(key)) {
+                result[key] = clone(source[key]);
+            }
+        }
+    }
+
+    return result;
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {*} target
+ * @param {*} source
+ * @param {boolean} [overwrite=false]
+ */
+function merge(target, source, overwrite) {
+    // We should escapse that source is string
+    // and enter for ... in ...
+    if (!isObject$1(source) || !isObject$1(target)) {
+        return overwrite ? clone(source) : target;
+    }
+
+    for (var key in source) {
+        if (source.hasOwnProperty(key)) {
+            var targetProp = target[key];
+            var sourceProp = source[key];
+
+            if (isObject$1(sourceProp)
+                && isObject$1(targetProp)
+                && !isArray(sourceProp)
+                && !isArray(targetProp)
+                && !isDom(sourceProp)
+                && !isDom(targetProp)
+                && !isBuiltInObject(sourceProp)
+                && !isBuiltInObject(targetProp)
+                && !isPrimitive(sourceProp)
+                && !isPrimitive(targetProp)
+            ) {
+                // 如果需要递归覆盖，就递归调用merge
+                merge(targetProp, sourceProp, overwrite);
+            }
+            else if (overwrite || !(key in target)) {
+                // 否则只处理overwrite为true，或者在目标对象中没有此属性的情况
+                // NOTE，在 target[key] 不存在的时候也是直接覆盖
+                target[key] = clone(source[key], true);
+            }
+        }
+    }
+
+    return target;
+}
+
+/**
+ * @param {Array} targetAndSources The first item is target, and the rests are source.
+ * @param {boolean} [overwrite=false]
+ * @return {*} target
+ */
+function mergeAll(targetAndSources, overwrite) {
+    var result = targetAndSources[0];
+    for (var i = 1, len = targetAndSources.length; i < len; i++) {
+        result = merge(result, targetAndSources[i], overwrite);
+    }
+    return result;
+}
+
+/**
+ * @param {*} target
+ * @param {*} source
+ * @memberOf module:zrender/core/util
+ */
+function extend(target, source) {
+    for (var key in source) {
+        if (source.hasOwnProperty(key)) {
+            target[key] = source[key];
+        }
+    }
+    return target;
+}
+
+/**
+ * @param {*} target
+ * @param {*} source
+ * @param {boolean} [overlay=false]
+ * @memberOf module:zrender/core/util
+ */
+function defaults(target, source, overlay) {
+    for (var key in source) {
+        if (source.hasOwnProperty(key)
+            && (overlay ? source[key] != null : target[key] == null)
+        ) {
+            target[key] = source[key];
+        }
+    }
+    return target;
+}
+
+var createCanvas = function () {
+    return methods.createCanvas();
+};
+
+methods.createCanvas = function () {
+    return document.createElement('canvas');
+};
+
+// FIXME
+var _ctx;
+
+function getContext() {
+    if (!_ctx) {
+        // Use util.createCanvas instead of createCanvas
+        // because createCanvas may be overwritten in different environment
+        _ctx = createCanvas().getContext('2d');
+    }
+    return _ctx;
+}
+
+/**
+ * 查询数组中元素的index
+ * @memberOf module:zrender/core/util
+ */
+function indexOf(array, value) {
+    if (array) {
+        if (array.indexOf) {
+            return array.indexOf(value);
+        }
+        for (var i = 0, len = array.length; i < len; i++) {
+            if (array[i] === value) {
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
+/**
+ * 构造类继承关系
+ *
+ * @memberOf module:zrender/core/util
+ * @param {Function} clazz 源类
+ * @param {Function} baseClazz 基类
+ */
+function inherits(clazz, baseClazz) {
+    var clazzPrototype = clazz.prototype;
+    function F() {}
+    F.prototype = baseClazz.prototype;
+    clazz.prototype = new F();
+
+    for (var prop in clazzPrototype) {
+        clazz.prototype[prop] = clazzPrototype[prop];
+    }
+    clazz.prototype.constructor = clazz;
+    clazz.superClass = baseClazz;
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {Object|Function} target
+ * @param {Object|Function} sorce
+ * @param {boolean} overlay
+ */
+function mixin(target, source, overlay) {
+    target = 'prototype' in target ? target.prototype : target;
+    source = 'prototype' in source ? source.prototype : source;
+
+    defaults(target, source, overlay);
+}
+
+/**
+ * Consider typed array.
+ * @param {Array|TypedArray} data
+ */
+function isArrayLike(data) {
+    if (!data) {
+        return;
+    }
+    if (typeof data === 'string') {
+        return false;
+    }
+    return typeof data.length === 'number';
+}
+
+/**
+ * 数组或对象遍历
+ * @memberOf module:zrender/core/util
+ * @param {Object|Array} obj
+ * @param {Function} cb
+ * @param {*} [context]
+ */
+function each$1(obj, cb, context) {
+    if (!(obj && cb)) {
+        return;
+    }
+    if (obj.forEach && obj.forEach === nativeForEach) {
+        obj.forEach(cb, context);
+    }
+    else if (obj.length === +obj.length) {
+        for (var i = 0, len = obj.length; i < len; i++) {
+            cb.call(context, obj[i], i, obj);
+        }
+    }
+    else {
+        for (var key in obj) {
+            if (obj.hasOwnProperty(key)) {
+                cb.call(context, obj[key], key, obj);
+            }
+        }
+    }
+}
+
+/**
+ * 数组映射
