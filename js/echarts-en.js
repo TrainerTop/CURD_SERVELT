@@ -544,3 +544,309 @@ function each$1(obj, cb, context) {
 
 /**
  * 数组映射
+ * @memberOf module:zrender/core/util
+ * @param {Array} obj
+ * @param {Function} cb
+ * @param {*} [context]
+ * @return {Array}
+ */
+function map(obj, cb, context) {
+    if (!(obj && cb)) {
+        return;
+    }
+    if (obj.map && obj.map === nativeMap) {
+        return obj.map(cb, context);
+    }
+    else {
+        var result = [];
+        for (var i = 0, len = obj.length; i < len; i++) {
+            result.push(cb.call(context, obj[i], i, obj));
+        }
+        return result;
+    }
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {Array} obj
+ * @param {Function} cb
+ * @param {Object} [memo]
+ * @param {*} [context]
+ * @return {Array}
+ */
+function reduce(obj, cb, memo, context) {
+    if (!(obj && cb)) {
+        return;
+    }
+    if (obj.reduce && obj.reduce === nativeReduce) {
+        return obj.reduce(cb, memo, context);
+    }
+    else {
+        for (var i = 0, len = obj.length; i < len; i++) {
+            memo = cb.call(context, memo, obj[i], i, obj);
+        }
+        return memo;
+    }
+}
+
+/**
+ * 数组过滤
+ * @memberOf module:zrender/core/util
+ * @param {Array} obj
+ * @param {Function} cb
+ * @param {*} [context]
+ * @return {Array}
+ */
+function filter(obj, cb, context) {
+    if (!(obj && cb)) {
+        return;
+    }
+    if (obj.filter && obj.filter === nativeFilter) {
+        return obj.filter(cb, context);
+    }
+    else {
+        var result = [];
+        for (var i = 0, len = obj.length; i < len; i++) {
+            if (cb.call(context, obj[i], i, obj)) {
+                result.push(obj[i]);
+            }
+        }
+        return result;
+    }
+}
+
+/**
+ * 数组项查找
+ * @memberOf module:zrender/core/util
+ * @param {Array} obj
+ * @param {Function} cb
+ * @param {*} [context]
+ * @return {*}
+ */
+function find(obj, cb, context) {
+    if (!(obj && cb)) {
+        return;
+    }
+    for (var i = 0, len = obj.length; i < len; i++) {
+        if (cb.call(context, obj[i], i, obj)) {
+            return obj[i];
+        }
+    }
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {Function} func
+ * @param {*} context
+ * @return {Function}
+ */
+function bind(func, context) {
+    var args = nativeSlice.call(arguments, 2);
+    return function () {
+        return func.apply(context, args.concat(nativeSlice.call(arguments)));
+    };
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {Function} func
+ * @return {Function}
+ */
+function curry(func) {
+    var args = nativeSlice.call(arguments, 1);
+    return function () {
+        return func.apply(this, args.concat(nativeSlice.call(arguments)));
+    };
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {*} value
+ * @return {boolean}
+ */
+function isArray(value) {
+    return objToString.call(value) === '[object Array]';
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {*} value
+ * @return {boolean}
+ */
+function isFunction$1(value) {
+    return typeof value === 'function';
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {*} value
+ * @return {boolean}
+ */
+function isString(value) {
+    return objToString.call(value) === '[object String]';
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {*} value
+ * @return {boolean}
+ */
+function isObject$1(value) {
+    // Avoid a V8 JIT bug in Chrome 19-20.
+    // See https://code.google.com/p/v8/issues/detail?id=2291 for more details.
+    var type = typeof value;
+    return type === 'function' || (!!value && type === 'object');
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {*} value
+ * @return {boolean}
+ */
+function isBuiltInObject(value) {
+    return !!BUILTIN_OBJECT[objToString.call(value)];
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {*} value
+ * @return {boolean}
+ */
+function isTypedArray(value) {
+    return !!TYPED_ARRAY[objToString.call(value)];
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {*} value
+ * @return {boolean}
+ */
+function isDom(value) {
+    return typeof value === 'object'
+        && typeof value.nodeType === 'number'
+        && typeof value.ownerDocument === 'object';
+}
+
+/**
+ * Whether is exactly NaN. Notice isNaN('a') returns true.
+ * @param {*} value
+ * @return {boolean}
+ */
+function eqNaN(value) {
+    return value !== value;
+}
+
+/**
+ * If value1 is not null, then return value1, otherwise judget rest of values.
+ * Low performance.
+ * @memberOf module:zrender/core/util
+ * @return {*} Final value
+ */
+function retrieve(values) {
+    for (var i = 0, len = arguments.length; i < len; i++) {
+        if (arguments[i] != null) {
+            return arguments[i];
+        }
+    }
+}
+
+function retrieve2(value0, value1) {
+    return value0 != null
+        ? value0
+        : value1;
+}
+
+function retrieve3(value0, value1, value2) {
+    return value0 != null
+        ? value0
+        : value1 != null
+        ? value1
+        : value2;
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {Array} arr
+ * @param {number} startIndex
+ * @param {number} endIndex
+ * @return {Array}
+ */
+function slice() {
+    return Function.call.apply(nativeSlice, arguments);
+}
+
+/**
+ * Normalize css liked array configuration
+ * e.g.
+ *  3 => [3, 3, 3, 3]
+ *  [4, 2] => [4, 2, 4, 2]
+ *  [4, 3, 2] => [4, 3, 2, 3]
+ * @param {number|Array.<number>} val
+ * @return {Array.<number>}
+ */
+function normalizeCssArray(val) {
+    if (typeof (val) === 'number') {
+        return [val, val, val, val];
+    }
+    var len = val.length;
+    if (len === 2) {
+        // vertical | horizontal
+        return [val[0], val[1], val[0], val[1]];
+    }
+    else if (len === 3) {
+        // top | horizontal | bottom
+        return [val[0], val[1], val[2], val[1]];
+    }
+    return val;
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {boolean} condition
+ * @param {string} message
+ */
+function assert$1(condition, message) {
+    if (!condition) {
+        throw new Error(message);
+    }
+}
+
+/**
+ * @memberOf module:zrender/core/util
+ * @param {string} str string to be trimed
+ * @return {string} trimed string
+ */
+function trim(str) {
+    if (str == null) {
+        return null;
+    }
+    else if (typeof str.trim === 'function') {
+        return str.trim();
+    }
+    else {
+        return str.replace(/^[\s\uFEFF\xA0]+|[\s\uFEFF\xA0]+$/g, '');
+    }
+}
+
+var primitiveKey = '__ec_primitive__';
+/**
+ * Set an object as primitive to be ignored traversing children in clone or merge
+ */
+function setAsPrimitive(obj) {
+    obj[primitiveKey] = true;
+}
+
+function isPrimitive(obj) {
+    return obj[primitiveKey];
+}
+
+/**
+ * @constructor
+ * @param {Object} obj Only apply `ownProperty`.
+ */
+function HashMap(obj) {
+    var isArr = isArray(obj);
+    // Key should not be set on this, otherwise
+    // methods get/set/... may be overrided.
+    this.data = {};
+    var thisMap = this;
