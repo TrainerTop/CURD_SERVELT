@@ -850,3 +850,277 @@ function HashMap(obj) {
     // methods get/set/... may be overrided.
     this.data = {};
     var thisMap = this;
+
+    (obj instanceof HashMap)
+        ? obj.each(visit)
+        : (obj && each$1(obj, visit));
+
+    function visit(value, key) {
+        isArr ? thisMap.set(value, key) : thisMap.set(key, value);
+    }
+}
+
+HashMap.prototype = {
+    constructor: HashMap,
+    // Do not provide `has` method to avoid defining what is `has`.
+    // (We usually treat `null` and `undefined` as the same, different
+    // from ES6 Map).
+    get: function (key) {
+        return this.data.hasOwnProperty(key) ? this.data[key] : null;
+    },
+    set: function (key, value) {
+        // Comparing with invocation chaining, `return value` is more commonly
+        // used in this case: `var someVal = map.set('a', genVal());`
+        return (this.data[key] = value);
+    },
+    // Although util.each can be performed on this hashMap directly, user
+    // should not use the exposed keys, who are prefixed.
+    each: function (cb, context) {
+        context !== void 0 && (cb = bind(cb, context));
+        for (var key in this.data) {
+            this.data.hasOwnProperty(key) && cb(this.data[key], key);
+        }
+    },
+    // Do not use this method if performance sensitive.
+    removeKey: function (key) {
+        delete this.data[key];
+    }
+};
+
+function createHashMap(obj) {
+    return new HashMap(obj);
+}
+
+function concatArray(a, b) {
+    var newArray = new a.constructor(a.length + b.length);
+    for (var i = 0; i < a.length; i++) {
+        newArray[i] = a[i];
+    }
+    var offset = a.length;
+    for (i = 0; i < b.length; i++) {
+        newArray[i + offset] = b[i];
+    }
+    return newArray;
+}
+
+
+function noop() {}
+
+
+var zrUtil = (Object.freeze || Object)({
+	$override: $override,
+	clone: clone,
+	merge: merge,
+	mergeAll: mergeAll,
+	extend: extend,
+	defaults: defaults,
+	createCanvas: createCanvas,
+	getContext: getContext,
+	indexOf: indexOf,
+	inherits: inherits,
+	mixin: mixin,
+	isArrayLike: isArrayLike,
+	each: each$1,
+	map: map,
+	reduce: reduce,
+	filter: filter,
+	find: find,
+	bind: bind,
+	curry: curry,
+	isArray: isArray,
+	isFunction: isFunction$1,
+	isString: isString,
+	isObject: isObject$1,
+	isBuiltInObject: isBuiltInObject,
+	isTypedArray: isTypedArray,
+	isDom: isDom,
+	eqNaN: eqNaN,
+	retrieve: retrieve,
+	retrieve2: retrieve2,
+	retrieve3: retrieve3,
+	slice: slice,
+	normalizeCssArray: normalizeCssArray,
+	assert: assert$1,
+	trim: trim,
+	setAsPrimitive: setAsPrimitive,
+	isPrimitive: isPrimitive,
+	createHashMap: createHashMap,
+	concatArray: concatArray,
+	noop: noop
+});
+
+var ArrayCtor = typeof Float32Array === 'undefined'
+    ? Array
+    : Float32Array;
+
+/**
+ * 创建一个向量
+ * @param {number} [x=0]
+ * @param {number} [y=0]
+ * @return {Vector2}
+ */
+function create(x, y) {
+    var out = new ArrayCtor(2);
+    if (x == null) {
+        x = 0;
+    }
+    if (y == null) {
+        y = 0;
+    }
+    out[0] = x;
+    out[1] = y;
+    return out;
+}
+
+/**
+ * 复制向量数据
+ * @param {Vector2} out
+ * @param {Vector2} v
+ * @return {Vector2}
+ */
+function copy(out, v) {
+    out[0] = v[0];
+    out[1] = v[1];
+    return out;
+}
+
+/**
+ * 克隆一个向量
+ * @param {Vector2} v
+ * @return {Vector2}
+ */
+function clone$1(v) {
+    var out = new ArrayCtor(2);
+    out[0] = v[0];
+    out[1] = v[1];
+    return out;
+}
+
+/**
+ * 设置向量的两个项
+ * @param {Vector2} out
+ * @param {number} a
+ * @param {number} b
+ * @return {Vector2} 结果
+ */
+function set(out, a, b) {
+    out[0] = a;
+    out[1] = b;
+    return out;
+}
+
+/**
+ * 向量相加
+ * @param {Vector2} out
+ * @param {Vector2} v1
+ * @param {Vector2} v2
+ */
+function add(out, v1, v2) {
+    out[0] = v1[0] + v2[0];
+    out[1] = v1[1] + v2[1];
+    return out;
+}
+
+/**
+ * 向量缩放后相加
+ * @param {Vector2} out
+ * @param {Vector2} v1
+ * @param {Vector2} v2
+ * @param {number} a
+ */
+function scaleAndAdd(out, v1, v2, a) {
+    out[0] = v1[0] + v2[0] * a;
+    out[1] = v1[1] + v2[1] * a;
+    return out;
+}
+
+/**
+ * 向量相减
+ * @param {Vector2} out
+ * @param {Vector2} v1
+ * @param {Vector2} v2
+ */
+function sub(out, v1, v2) {
+    out[0] = v1[0] - v2[0];
+    out[1] = v1[1] - v2[1];
+    return out;
+}
+
+/**
+ * 向量长度
+ * @param {Vector2} v
+ * @return {number}
+ */
+function len(v) {
+    return Math.sqrt(lenSquare(v));
+}
+var length = len; // jshint ignore:line
+
+/**
+ * 向量长度平方
+ * @param {Vector2} v
+ * @return {number}
+ */
+function lenSquare(v) {
+    return v[0] * v[0] + v[1] * v[1];
+}
+var lengthSquare = lenSquare;
+
+/**
+ * 向量乘法
+ * @param {Vector2} out
+ * @param {Vector2} v1
+ * @param {Vector2} v2
+ */
+function mul(out, v1, v2) {
+    out[0] = v1[0] * v2[0];
+    out[1] = v1[1] * v2[1];
+    return out;
+}
+
+/**
+ * 向量除法
+ * @param {Vector2} out
+ * @param {Vector2} v1
+ * @param {Vector2} v2
+ */
+function div(out, v1, v2) {
+    out[0] = v1[0] / v2[0];
+    out[1] = v1[1] / v2[1];
+    return out;
+}
+
+/**
+ * 向量点乘
+ * @param {Vector2} v1
+ * @param {Vector2} v2
+ * @return {number}
+ */
+function dot(v1, v2) {
+    return v1[0] * v2[0] + v1[1] * v2[1];
+}
+
+/**
+ * 向量缩放
+ * @param {Vector2} out
+ * @param {Vector2} v
+ * @param {number} s
+ */
+function scale(out, v, s) {
+    out[0] = v[0] * s;
+    out[1] = v[1] * s;
+    return out;
+}
+
+/**
+ * 向量归一化
+ * @param {Vector2} out
+ * @param {Vector2} v
+ */
+function normalize(out, v) {
+    var d = len(v);
+    if (d === 0) {
+        out[0] = 0;
+        out[1] = 0;
+    }
+    else {
