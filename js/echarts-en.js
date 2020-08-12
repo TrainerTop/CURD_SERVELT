@@ -1124,3 +1124,289 @@ function normalize(out, v) {
         out[1] = 0;
     }
     else {
+        out[0] = v[0] / d;
+        out[1] = v[1] / d;
+    }
+    return out;
+}
+
+/**
+ * 计算向量间距离
+ * @param {Vector2} v1
+ * @param {Vector2} v2
+ * @return {number}
+ */
+function distance(v1, v2) {
+    return Math.sqrt(
+        (v1[0] - v2[0]) * (v1[0] - v2[0])
+        + (v1[1] - v2[1]) * (v1[1] - v2[1])
+    );
+}
+var dist = distance;
+
+/**
+ * 向量距离平方
+ * @param {Vector2} v1
+ * @param {Vector2} v2
+ * @return {number}
+ */
+function distanceSquare(v1, v2) {
+    return (v1[0] - v2[0]) * (v1[0] - v2[0])
+        + (v1[1] - v2[1]) * (v1[1] - v2[1]);
+}
+var distSquare = distanceSquare;
+
+/**
+ * 求负向量
+ * @param {Vector2} out
+ * @param {Vector2} v
+ */
+function negate(out, v) {
+    out[0] = -v[0];
+    out[1] = -v[1];
+    return out;
+}
+
+/**
+ * 插值两个点
+ * @param {Vector2} out
+ * @param {Vector2} v1
+ * @param {Vector2} v2
+ * @param {number} t
+ */
+function lerp(out, v1, v2, t) {
+    out[0] = v1[0] + t * (v2[0] - v1[0]);
+    out[1] = v1[1] + t * (v2[1] - v1[1]);
+    return out;
+}
+
+/**
+ * 矩阵左乘向量
+ * @param {Vector2} out
+ * @param {Vector2} v
+ * @param {Vector2} m
+ */
+function applyTransform(out, v, m) {
+    var x = v[0];
+    var y = v[1];
+    out[0] = m[0] * x + m[2] * y + m[4];
+    out[1] = m[1] * x + m[3] * y + m[5];
+    return out;
+}
+
+/**
+ * 求两个向量最小值
+ * @param  {Vector2} out
+ * @param  {Vector2} v1
+ * @param  {Vector2} v2
+ */
+function min(out, v1, v2) {
+    out[0] = Math.min(v1[0], v2[0]);
+    out[1] = Math.min(v1[1], v2[1]);
+    return out;
+}
+
+/**
+ * 求两个向量最大值
+ * @param  {Vector2} out
+ * @param  {Vector2} v1
+ * @param  {Vector2} v2
+ */
+function max(out, v1, v2) {
+    out[0] = Math.max(v1[0], v2[0]);
+    out[1] = Math.max(v1[1], v2[1]);
+    return out;
+}
+
+
+var vector = (Object.freeze || Object)({
+	create: create,
+	copy: copy,
+	clone: clone$1,
+	set: set,
+	add: add,
+	scaleAndAdd: scaleAndAdd,
+	sub: sub,
+	len: len,
+	length: length,
+	lenSquare: lenSquare,
+	lengthSquare: lengthSquare,
+	mul: mul,
+	div: div,
+	dot: dot,
+	scale: scale,
+	normalize: normalize,
+	distance: distance,
+	dist: dist,
+	distanceSquare: distanceSquare,
+	distSquare: distSquare,
+	negate: negate,
+	lerp: lerp,
+	applyTransform: applyTransform,
+	min: min,
+	max: max
+});
+
+// TODO Draggable for group
+// FIXME Draggable on element which has parent rotation or scale
+function Draggable() {
+
+    this.on('mousedown', this._dragStart, this);
+    this.on('mousemove', this._drag, this);
+    this.on('mouseup', this._dragEnd, this);
+    this.on('globalout', this._dragEnd, this);
+    // this._dropTarget = null;
+    // this._draggingTarget = null;
+
+    // this._x = 0;
+    // this._y = 0;
+}
+
+Draggable.prototype = {
+
+    constructor: Draggable,
+
+    _dragStart: function (e) {
+        var draggingTarget = e.target;
+        if (draggingTarget && draggingTarget.draggable) {
+            this._draggingTarget = draggingTarget;
+            draggingTarget.dragging = true;
+            this._x = e.offsetX;
+            this._y = e.offsetY;
+
+            this.dispatchToElement(param(draggingTarget, e), 'dragstart', e.event);
+        }
+    },
+
+    _drag: function (e) {
+        var draggingTarget = this._draggingTarget;
+        if (draggingTarget) {
+
+            var x = e.offsetX;
+            var y = e.offsetY;
+
+            var dx = x - this._x;
+            var dy = y - this._y;
+            this._x = x;
+            this._y = y;
+
+            draggingTarget.drift(dx, dy, e);
+            this.dispatchToElement(param(draggingTarget, e), 'drag', e.event);
+
+            var dropTarget = this.findHover(x, y, draggingTarget).target;
+            var lastDropTarget = this._dropTarget;
+            this._dropTarget = dropTarget;
+
+            if (draggingTarget !== dropTarget) {
+                if (lastDropTarget && dropTarget !== lastDropTarget) {
+                    this.dispatchToElement(param(lastDropTarget, e), 'dragleave', e.event);
+                }
+                if (dropTarget && dropTarget !== lastDropTarget) {
+                    this.dispatchToElement(param(dropTarget, e), 'dragenter', e.event);
+                }
+            }
+        }
+    },
+
+    _dragEnd: function (e) {
+        var draggingTarget = this._draggingTarget;
+
+        if (draggingTarget) {
+            draggingTarget.dragging = false;
+        }
+
+        this.dispatchToElement(param(draggingTarget, e), 'dragend', e.event);
+
+        if (this._dropTarget) {
+            this.dispatchToElement(param(this._dropTarget, e), 'drop', e.event);
+        }
+
+        this._draggingTarget = null;
+        this._dropTarget = null;
+    }
+
+};
+
+function param(target, e) {
+    return {target: target, topTarget: e && e.topTarget};
+}
+
+/**
+ * Event Mixin
+ * @module zrender/mixin/Eventful
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
+ *         pissang (https://www.github.com/pissang)
+ */
+
+var arrySlice = Array.prototype.slice;
+
+/**
+ * Event dispatcher.
+ *
+ * @alias module:zrender/mixin/Eventful
+ * @constructor
+ * @param {Object} [eventProcessor] The object eventProcessor is the scope when
+ *        `eventProcessor.xxx` called.
+ * @param {Function} [eventProcessor.normalizeQuery]
+ *        param: {string|Object} Raw query.
+ *        return: {string|Object} Normalized query.
+ * @param {Function} [eventProcessor.filter] Event will be dispatched only
+ *        if it returns `true`.
+ *        param: {string} eventType
+ *        param: {string|Object} query
+ *        return: {boolean}
+ * @param {Function} [eventProcessor.afterTrigger] Call after all handlers called.
+ *        param: {string} eventType
+ */
+var Eventful = function (eventProcessor) {
+    this._$handlers = {};
+    this._$eventProcessor = eventProcessor;
+};
+
+Eventful.prototype = {
+
+    constructor: Eventful,
+
+    /**
+     * The handler can only be triggered once, then removed.
+     *
+     * @param {string} event The event name.
+     * @param {string|Object} [query] Condition used on event filter.
+     * @param {Function} handler The event handler.
+     * @param {Object} context
+     */
+    one: function (event, query, handler, context) {
+        return on(this, event, query, handler, context, true);
+    },
+
+    /**
+     * Bind a handler.
+     *
+     * @param {string} event The event name.
+     * @param {string|Object} [query] Condition used on event filter.
+     * @param {Function} handler The event handler.
+     * @param {Object} [context]
+     */
+    on: function (event, query, handler, context) {
+        return on(this, event, query, handler, context, false);
+    },
+
+    /**
+     * Whether any handler has bound.
+     *
+     * @param  {string}  event
+     * @return {boolean}
+     */
+    isSilent: function (event) {
+        var _h = this._$handlers;
+        return !_h[event] || !_h[event].length;
+    },
+
+    /**
+     * Unbind a event.
+     *
+     * @param {string} event The event name.
+     * @param {Function} [handler] The event handler.
+     */
+    off: function (event, handler) {
+        var _h = this._$handlers;
