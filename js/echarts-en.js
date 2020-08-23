@@ -3041,3 +3041,289 @@ var easing = {
                 * Math.sin((k - s) * (2 * Math.PI) / p) * 0.5 + 1;
 
     },
+
+    // 在某一动画开始沿指示的路径进行动画处理前稍稍收回该动画的移动
+    /**
+    * @param {number} k
+    * @return {number}
+    */
+    backIn: function (k) {
+        var s = 1.70158;
+        return k * k * ((s + 1) * k - s);
+    },
+    /**
+    * @param {number} k
+    * @return {number}
+    */
+    backOut: function (k) {
+        var s = 1.70158;
+        return --k * k * ((s + 1) * k + s) + 1;
+    },
+    /**
+    * @param {number} k
+    * @return {number}
+    */
+    backInOut: function (k) {
+        var s = 1.70158 * 1.525;
+        if ((k *= 2) < 1) {
+            return 0.5 * (k * k * ((s + 1) * k - s));
+        }
+        return 0.5 * ((k -= 2) * k * ((s + 1) * k + s) + 2);
+    },
+
+    // 创建弹跳效果
+    /**
+    * @param {number} k
+    * @return {number}
+    */
+    bounceIn: function (k) {
+        return 1 - easing.bounceOut(1 - k);
+    },
+    /**
+    * @param {number} k
+    * @return {number}
+    */
+    bounceOut: function (k) {
+        if (k < (1 / 2.75)) {
+            return 7.5625 * k * k;
+        }
+        else if (k < (2 / 2.75)) {
+            return 7.5625 * (k -= (1.5 / 2.75)) * k + 0.75;
+        }
+        else if (k < (2.5 / 2.75)) {
+            return 7.5625 * (k -= (2.25 / 2.75)) * k + 0.9375;
+        }
+        else {
+            return 7.5625 * (k -= (2.625 / 2.75)) * k + 0.984375;
+        }
+    },
+    /**
+    * @param {number} k
+    * @return {number}
+    */
+    bounceInOut: function (k) {
+        if (k < 0.5) {
+            return easing.bounceIn(k * 2) * 0.5;
+        }
+        return easing.bounceOut(k * 2 - 1) * 0.5 + 0.5;
+    }
+};
+
+/**
+ * 动画主控制器
+ * @config target 动画对象，可以是数组，如果是数组的话会批量分发onframe等事件
+ * @config life(1000) 动画时长
+ * @config delay(0) 动画延迟时间
+ * @config loop(true)
+ * @config gap(0) 循环的间隔时间
+ * @config onframe
+ * @config easing(optional)
+ * @config ondestroy(optional)
+ * @config onrestart(optional)
+ *
+ * TODO pause
+ */
+
+function Clip(options) {
+
+    this._target = options.target;
+
+    // 生命周期
+    this._life = options.life || 1000;
+    // 延时
+    this._delay = options.delay || 0;
+    // 开始时间
+    // this._startTime = new Date().getTime() + this._delay;// 单位毫秒
+    this._initialized = false;
+
+    // 是否循环
+    this.loop = options.loop == null ? false : options.loop;
+
+    this.gap = options.gap || 0;
+
+    this.easing = options.easing || 'Linear';
+
+    this.onframe = options.onframe;
+    this.ondestroy = options.ondestroy;
+    this.onrestart = options.onrestart;
+
+    this._pausedTime = 0;
+    this._paused = false;
+}
+
+Clip.prototype = {
+
+    constructor: Clip,
+
+    step: function (globalTime, deltaTime) {
+        // Set startTime on first step, or _startTime may has milleseconds different between clips
+        // PENDING
+        if (!this._initialized) {
+            this._startTime = globalTime + this._delay;
+            this._initialized = true;
+        }
+
+        if (this._paused) {
+            this._pausedTime += deltaTime;
+            return;
+        }
+
+        var percent = (globalTime - this._startTime - this._pausedTime) / this._life;
+
+        // 还没开始
+        if (percent < 0) {
+            return;
+        }
+
+        percent = Math.min(percent, 1);
+
+        var easing$$1 = this.easing;
+        var easingFunc = typeof easing$$1 === 'string' ? easing[easing$$1] : easing$$1;
+        var schedule = typeof easingFunc === 'function'
+            ? easingFunc(percent)
+            : percent;
+
+        this.fire('frame', schedule);
+
+        // 结束
+        if (percent === 1) {
+            if (this.loop) {
+                this.restart(globalTime);
+                // 重新开始周期
+                // 抛出而不是直接调用事件直到 stage.update 后再统一调用这些事件
+                return 'restart';
+            }
+
+            // 动画完成将这个控制器标识为待删除
+            // 在Animation.update中进行批量删除
+            this._needsRemove = true;
+            return 'destroy';
+        }
+
+        return null;
+    },
+
+    restart: function (globalTime) {
+        var remainder = (globalTime - this._startTime - this._pausedTime) % this._life;
+        this._startTime = globalTime - remainder + this.gap;
+        this._pausedTime = 0;
+
+        this._needsRemove = false;
+    },
+
+    fire: function (eventType, arg) {
+        eventType = 'on' + eventType;
+        if (this[eventType]) {
+            this[eventType](this._target, arg);
+        }
+    },
+
+    pause: function () {
+        this._paused = true;
+    },
+
+    resume: function () {
+        this._paused = false;
+    }
+};
+
+// Simple LRU cache use doubly linked list
+// @module zrender/core/LRU
+
+/**
+ * Simple double linked list. Compared with array, it has O(1) remove operation.
+ * @constructor
+ */
+var LinkedList = function () {
+
+    /**
+     * @type {module:zrender/core/LRU~Entry}
+     */
+    this.head = null;
+
+    /**
+     * @type {module:zrender/core/LRU~Entry}
+     */
+    this.tail = null;
+
+    this._len = 0;
+};
+
+var linkedListProto = LinkedList.prototype;
+/**
+ * Insert a new value at the tail
+ * @param  {} val
+ * @return {module:zrender/core/LRU~Entry}
+ */
+linkedListProto.insert = function (val) {
+    var entry = new Entry(val);
+    this.insertEntry(entry);
+    return entry;
+};
+
+/**
+ * Insert an entry at the tail
+ * @param  {module:zrender/core/LRU~Entry} entry
+ */
+linkedListProto.insertEntry = function (entry) {
+    if (!this.head) {
+        this.head = this.tail = entry;
+    }
+    else {
+        this.tail.next = entry;
+        entry.prev = this.tail;
+        entry.next = null;
+        this.tail = entry;
+    }
+    this._len++;
+};
+
+/**
+ * Remove entry.
+ * @param  {module:zrender/core/LRU~Entry} entry
+ */
+linkedListProto.remove = function (entry) {
+    var prev = entry.prev;
+    var next = entry.next;
+    if (prev) {
+        prev.next = next;
+    }
+    else {
+        // Is head
+        this.head = next;
+    }
+    if (next) {
+        next.prev = prev;
+    }
+    else {
+        // Is tail
+        this.tail = prev;
+    }
+    entry.next = entry.prev = null;
+    this._len--;
+};
+
+/**
+ * @return {number}
+ */
+linkedListProto.len = function () {
+    return this._len;
+};
+
+/**
+ * Clear list
+ */
+linkedListProto.clear = function () {
+    this.head = this.tail = null;
+    this._len = 0;
+};
+
+/**
+ * @constructor
+ * @param {} val
+ */
+var Entry = function (val) {
+    /**
+     * @type {}
+     */
+    this.value = val;
