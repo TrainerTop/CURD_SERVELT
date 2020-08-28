@@ -3868,3 +3868,272 @@ function lerp$1(normalizedValue, colors, fullOutput) {
     if (!(colors && colors.length)
         || !(normalizedValue >= 0 && normalizedValue <= 1)
     ) {
+        return;
+    }
+
+    var value = normalizedValue * (colors.length - 1);
+    var leftIndex = Math.floor(value);
+    var rightIndex = Math.ceil(value);
+    var leftColor = parse(colors[leftIndex]);
+    var rightColor = parse(colors[rightIndex]);
+    var dv = value - leftIndex;
+
+    var color = stringify(
+        [
+            clampCssByte(lerpNumber(leftColor[0], rightColor[0], dv)),
+            clampCssByte(lerpNumber(leftColor[1], rightColor[1], dv)),
+            clampCssByte(lerpNumber(leftColor[2], rightColor[2], dv)),
+            clampCssFloat(lerpNumber(leftColor[3], rightColor[3], dv))
+        ],
+        'rgba'
+    );
+
+    return fullOutput
+        ? {
+            color: color,
+            leftIndex: leftIndex,
+            rightIndex: rightIndex,
+            value: value
+        }
+        : color;
+}
+
+/**
+ * @deprecated
+ */
+var mapToColor = lerp$1;
+
+/**
+ * @param {string} color
+ * @param {number=} h 0 ~ 360, ignore when null.
+ * @param {number=} s 0 ~ 1, ignore when null.
+ * @param {number=} l 0 ~ 1, ignore when null.
+ * @return {string} Color string in rgba format.
+ * @memberOf module:zrender/util/color
+ */
+function modifyHSL(color, h, s, l) {
+    color = parse(color);
+
+    if (color) {
+        color = rgba2hsla(color);
+        h != null && (color[0] = clampCssAngle(h));
+        s != null && (color[1] = parseCssFloat(s));
+        l != null && (color[2] = parseCssFloat(l));
+
+        return stringify(hsla2rgba(color), 'rgba');
+    }
+}
+
+/**
+ * @param {string} color
+ * @param {number=} alpha 0 ~ 1
+ * @return {string} Color string in rgba format.
+ * @memberOf module:zrender/util/color
+ */
+function modifyAlpha(color, alpha) {
+    color = parse(color);
+
+    if (color && alpha != null) {
+        color[3] = clampCssFloat(alpha);
+        return stringify(color, 'rgba');
+    }
+}
+
+/**
+ * @param {Array.<number>} arrColor like [12,33,44,0.4]
+ * @param {string} type 'rgba', 'hsva', ...
+ * @return {string} Result color. (If input illegal, return undefined).
+ */
+function stringify(arrColor, type) {
+    if (!arrColor || !arrColor.length) {
+        return;
+    }
+    var colorStr = arrColor[0] + ',' + arrColor[1] + ',' + arrColor[2];
+    if (type === 'rgba' || type === 'hsva' || type === 'hsla') {
+        colorStr += ',' + arrColor[3];
+    }
+    return type + '(' + colorStr + ')';
+}
+
+
+var color = (Object.freeze || Object)({
+	parse: parse,
+	lift: lift,
+	toHex: toHex,
+	fastLerp: fastLerp,
+	fastMapToColor: fastMapToColor,
+	lerp: lerp$1,
+	mapToColor: mapToColor,
+	modifyHSL: modifyHSL,
+	modifyAlpha: modifyAlpha,
+	stringify: stringify
+});
+
+/**
+ * @module echarts/animation/Animator
+ */
+
+var arraySlice = Array.prototype.slice;
+
+function defaultGetter(target, key) {
+    return target[key];
+}
+
+function defaultSetter(target, key, value) {
+    target[key] = value;
+}
+
+/**
+ * @param  {number} p0
+ * @param  {number} p1
+ * @param  {number} percent
+ * @return {number}
+ */
+function interpolateNumber(p0, p1, percent) {
+    return (p1 - p0) * percent + p0;
+}
+
+/**
+ * @param  {string} p0
+ * @param  {string} p1
+ * @param  {number} percent
+ * @return {string}
+ */
+function interpolateString(p0, p1, percent) {
+    return percent > 0.5 ? p1 : p0;
+}
+
+/**
+ * @param  {Array} p0
+ * @param  {Array} p1
+ * @param  {number} percent
+ * @param  {Array} out
+ * @param  {number} arrDim
+ */
+function interpolateArray(p0, p1, percent, out, arrDim) {
+    var len = p0.length;
+    if (arrDim === 1) {
+        for (var i = 0; i < len; i++) {
+            out[i] = interpolateNumber(p0[i], p1[i], percent);
+        }
+    }
+    else {
+        var len2 = len && p0[0].length;
+        for (var i = 0; i < len; i++) {
+            for (var j = 0; j < len2; j++) {
+                out[i][j] = interpolateNumber(
+                    p0[i][j], p1[i][j], percent
+                );
+            }
+        }
+    }
+}
+
+// arr0 is source array, arr1 is target array.
+// Do some preprocess to avoid error happened when interpolating from arr0 to arr1
+function fillArr(arr0, arr1, arrDim) {
+    var arr0Len = arr0.length;
+    var arr1Len = arr1.length;
+    if (arr0Len !== arr1Len) {
+        // FIXME Not work for TypedArray
+        var isPreviousLarger = arr0Len > arr1Len;
+        if (isPreviousLarger) {
+            // Cut the previous
+            arr0.length = arr1Len;
+        }
+        else {
+            // Fill the previous
+            for (var i = arr0Len; i < arr1Len; i++) {
+                arr0.push(
+                    arrDim === 1 ? arr1[i] : arraySlice.call(arr1[i])
+                );
+            }
+        }
+    }
+    // Handling NaN value
+    var len2 = arr0[0] && arr0[0].length;
+    for (var i = 0; i < arr0.length; i++) {
+        if (arrDim === 1) {
+            if (isNaN(arr0[i])) {
+                arr0[i] = arr1[i];
+            }
+        }
+        else {
+            for (var j = 0; j < len2; j++) {
+                if (isNaN(arr0[i][j])) {
+                    arr0[i][j] = arr1[i][j];
+                }
+            }
+        }
+    }
+}
+
+/**
+ * @param  {Array} arr0
+ * @param  {Array} arr1
+ * @param  {number} arrDim
+ * @return {boolean}
+ */
+function isArraySame(arr0, arr1, arrDim) {
+    if (arr0 === arr1) {
+        return true;
+    }
+    var len = arr0.length;
+    if (len !== arr1.length) {
+        return false;
+    }
+    if (arrDim === 1) {
+        for (var i = 0; i < len; i++) {
+            if (arr0[i] !== arr1[i]) {
+                return false;
+            }
+        }
+    }
+    else {
+        var len2 = arr0[0].length;
+        for (var i = 0; i < len; i++) {
+            for (var j = 0; j < len2; j++) {
+                if (arr0[i][j] !== arr1[i][j]) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * Catmull Rom interpolate array
+ * @param  {Array} p0
+ * @param  {Array} p1
+ * @param  {Array} p2
+ * @param  {Array} p3
+ * @param  {number} t
+ * @param  {number} t2
+ * @param  {number} t3
+ * @param  {Array} out
+ * @param  {number} arrDim
+ */
+function catmullRomInterpolateArray(
+    p0, p1, p2, p3, t, t2, t3, out, arrDim
+) {
+    var len = p0.length;
+    if (arrDim === 1) {
+        for (var i = 0; i < len; i++) {
+            out[i] = catmullRomInterpolate(
+                p0[i], p1[i], p2[i], p3[i], t, t2, t3
+            );
+        }
+    }
+    else {
+        var len2 = p0[0].length;
+        for (var i = 0; i < len; i++) {
+            for (var j = 0; j < len2; j++) {
+                out[i][j] = catmullRomInterpolate(
+                    p0[i][j], p1[i][j], p2[i][j], p3[i][j],
+                    t, t2, t3
+                );
+            }
+        }
+    }
+}
