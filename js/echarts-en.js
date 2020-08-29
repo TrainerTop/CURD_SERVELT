@@ -5476,3 +5476,307 @@ Group.prototype = {
      * @return {module:zrender/Element}
      */
     childOfName: function (name) {
+        var children = this._children;
+        for (var i = 0; i < children.length; i++) {
+            if (children[i].name === name) {
+                return children[i];
+            }
+            }
+    },
+
+    /**
+     * @return {number}
+     */
+    childCount: function () {
+        return this._children.length;
+    },
+
+    /**
+     * 添加子节点到最后
+     * @param {module:zrender/Element} child
+     */
+    add: function (child) {
+        if (child && child !== this && child.parent !== this) {
+
+            this._children.push(child);
+
+            this._doAdd(child);
+        }
+
+        return this;
+    },
+
+    /**
+     * 添加子节点在 nextSibling 之前
+     * @param {module:zrender/Element} child
+     * @param {module:zrender/Element} nextSibling
+     */
+    addBefore: function (child, nextSibling) {
+        if (child && child !== this && child.parent !== this
+            && nextSibling && nextSibling.parent === this) {
+
+            var children = this._children;
+            var idx = children.indexOf(nextSibling);
+
+            if (idx >= 0) {
+                children.splice(idx, 0, child);
+                this._doAdd(child);
+            }
+        }
+
+        return this;
+    },
+
+    _doAdd: function (child) {
+        if (child.parent) {
+            child.parent.remove(child);
+        }
+
+        child.parent = this;
+
+        var storage = this.__storage;
+        var zr = this.__zr;
+        if (storage && storage !== child.__storage) {
+
+            storage.addToStorage(child);
+
+            if (child instanceof Group) {
+                child.addChildrenToStorage(storage);
+            }
+        }
+
+        zr && zr.refresh();
+    },
+
+    /**
+     * 移除子节点
+     * @param {module:zrender/Element} child
+     */
+    remove: function (child) {
+        var zr = this.__zr;
+        var storage = this.__storage;
+        var children = this._children;
+
+        var idx = indexOf(children, child);
+        if (idx < 0) {
+            return this;
+        }
+        children.splice(idx, 1);
+
+        child.parent = null;
+
+        if (storage) {
+
+            storage.delFromStorage(child);
+
+            if (child instanceof Group) {
+                child.delChildrenFromStorage(storage);
+            }
+        }
+
+        zr && zr.refresh();
+
+        return this;
+    },
+
+    /**
+     * 移除所有子节点
+     */
+    removeAll: function () {
+        var children = this._children;
+        var storage = this.__storage;
+        var child;
+        var i;
+        for (i = 0; i < children.length; i++) {
+            child = children[i];
+            if (storage) {
+                storage.delFromStorage(child);
+                if (child instanceof Group) {
+                    child.delChildrenFromStorage(storage);
+                }
+            }
+            child.parent = null;
+        }
+        children.length = 0;
+
+        return this;
+    },
+
+    /**
+     * 遍历所有子节点
+     * @param  {Function} cb
+     * @param  {}   context
+     */
+    eachChild: function (cb, context) {
+        var children = this._children;
+        for (var i = 0; i < children.length; i++) {
+            var child = children[i];
+            cb.call(context, child, i);
+        }
+        return this;
+    },
+
+    /**
+     * 深度优先遍历所有子孙节点
+     * @param  {Function} cb
+     * @param  {}   context
+     */
+    traverse: function (cb, context) {
+        for (var i = 0; i < this._children.length; i++) {
+            var child = this._children[i];
+            cb.call(context, child);
+
+            if (child.type === 'group') {
+                child.traverse(cb, context);
+            }
+        }
+        return this;
+    },
+
+    addChildrenToStorage: function (storage) {
+        for (var i = 0; i < this._children.length; i++) {
+            var child = this._children[i];
+            storage.addToStorage(child);
+            if (child instanceof Group) {
+                child.addChildrenToStorage(storage);
+            }
+        }
+    },
+
+    delChildrenFromStorage: function (storage) {
+        for (var i = 0; i < this._children.length; i++) {
+            var child = this._children[i];
+            storage.delFromStorage(child);
+            if (child instanceof Group) {
+                child.delChildrenFromStorage(storage);
+            }
+        }
+    },
+
+    dirty: function () {
+        this.__dirty = true;
+        this.__zr && this.__zr.refresh();
+        return this;
+    },
+
+    /**
+     * @return {module:zrender/core/BoundingRect}
+     */
+    getBoundingRect: function (includeChildren) {
+        // TODO Caching
+        var rect = null;
+        var tmpRect = new BoundingRect(0, 0, 0, 0);
+        var children = includeChildren || this._children;
+        var tmpMat = [];
+
+        for (var i = 0; i < children.length; i++) {
+            var child = children[i];
+            if (child.ignore || child.invisible) {
+                continue;
+            }
+
+            var childRect = child.getBoundingRect();
+            var transform = child.getLocalTransform(tmpMat);
+            // TODO
+            // The boundingRect cacluated by transforming original
+            // rect may be bigger than the actual bundingRect when rotation
+            // is used. (Consider a circle rotated aginst its center, where
+            // the actual boundingRect should be the same as that not be
+            // rotated.) But we can not find better approach to calculate
+            // actual boundingRect yet, considering performance.
+            if (transform) {
+                tmpRect.copy(childRect);
+                tmpRect.applyTransform(transform);
+                rect = rect || tmpRect.clone();
+                rect.union(tmpRect);
+            }
+            else {
+                rect = rect || childRect.clone();
+                rect.union(childRect);
+            }
+        }
+        return rect || tmpRect;
+    }
+};
+
+inherits(Group, Element);
+
+// https://github.com/mziccard/node-timsort
+var DEFAULT_MIN_MERGE = 32;
+
+var DEFAULT_MIN_GALLOPING = 7;
+
+function minRunLength(n) {
+    var r = 0;
+
+    while (n >= DEFAULT_MIN_MERGE) {
+        r |= n & 1;
+        n >>= 1;
+    }
+
+    return n + r;
+}
+
+function makeAscendingRun(array, lo, hi, compare) {
+    var runHi = lo + 1;
+
+    if (runHi === hi) {
+        return 1;
+    }
+
+    if (compare(array[runHi++], array[lo]) < 0) {
+        while (runHi < hi && compare(array[runHi], array[runHi - 1]) < 0) {
+            runHi++;
+        }
+
+        reverseRun(array, lo, runHi);
+    }
+    else {
+        while (runHi < hi && compare(array[runHi], array[runHi - 1]) >= 0) {
+            runHi++;
+        }
+    }
+
+    return runHi - lo;
+}
+
+function reverseRun(array, lo, hi) {
+    hi--;
+
+    while (lo < hi) {
+        var t = array[lo];
+        array[lo++] = array[hi];
+        array[hi--] = t;
+    }
+}
+
+function binaryInsertionSort(array, lo, hi, start, compare) {
+    if (start === lo) {
+        start++;
+    }
+
+    for (; start < hi; start++) {
+        var pivot = array[start];
+
+        var left = lo;
+        var right = start;
+        var mid;
+
+        while (left < right) {
+            mid = left + right >>> 1;
+
+            if (compare(pivot, array[mid]) < 0) {
+                right = mid;
+            }
+            else {
+                left = mid + 1;
+            }
+        }
+
+        var n = start - left;
+
+        switch (n) {
+            case 3:
+                array[left + 3] = array[left + 2];
+
+            case 2:
