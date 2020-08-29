@@ -5780,3 +5780,225 @@ function binaryInsertionSort(array, lo, hi, start, compare) {
                 array[left + 3] = array[left + 2];
 
             case 2:
+                array[left + 2] = array[left + 1];
+
+            case 1:
+                array[left + 1] = array[left];
+                break;
+            default:
+                while (n > 0) {
+                    array[left + n] = array[left + n - 1];
+                    n--;
+                }
+        }
+
+        array[left] = pivot;
+    }
+}
+
+function gallopLeft(value, array, start, length, hint, compare) {
+    var lastOffset = 0;
+    var maxOffset = 0;
+    var offset = 1;
+
+    if (compare(value, array[start + hint]) > 0) {
+        maxOffset = length - hint;
+
+        while (offset < maxOffset && compare(value, array[start + hint + offset]) > 0) {
+            lastOffset = offset;
+            offset = (offset << 1) + 1;
+
+            if (offset <= 0) {
+                offset = maxOffset;
+            }
+        }
+
+        if (offset > maxOffset) {
+            offset = maxOffset;
+        }
+
+        lastOffset += hint;
+        offset += hint;
+    }
+    else {
+        maxOffset = hint + 1;
+        while (offset < maxOffset && compare(value, array[start + hint - offset]) <= 0) {
+            lastOffset = offset;
+            offset = (offset << 1) + 1;
+
+            if (offset <= 0) {
+                offset = maxOffset;
+            }
+        }
+        if (offset > maxOffset) {
+            offset = maxOffset;
+        }
+
+        var tmp = lastOffset;
+        lastOffset = hint - offset;
+        offset = hint - tmp;
+    }
+
+    lastOffset++;
+    while (lastOffset < offset) {
+        var m = lastOffset + (offset - lastOffset >>> 1);
+
+        if (compare(value, array[start + m]) > 0) {
+            lastOffset = m + 1;
+        }
+        else {
+            offset = m;
+        }
+    }
+    return offset;
+}
+
+function gallopRight(value, array, start, length, hint, compare) {
+    var lastOffset = 0;
+    var maxOffset = 0;
+    var offset = 1;
+
+    if (compare(value, array[start + hint]) < 0) {
+        maxOffset = hint + 1;
+
+        while (offset < maxOffset && compare(value, array[start + hint - offset]) < 0) {
+            lastOffset = offset;
+            offset = (offset << 1) + 1;
+
+            if (offset <= 0) {
+                offset = maxOffset;
+            }
+        }
+
+        if (offset > maxOffset) {
+            offset = maxOffset;
+        }
+
+        var tmp = lastOffset;
+        lastOffset = hint - offset;
+        offset = hint - tmp;
+    }
+    else {
+        maxOffset = length - hint;
+
+        while (offset < maxOffset && compare(value, array[start + hint + offset]) >= 0) {
+            lastOffset = offset;
+            offset = (offset << 1) + 1;
+
+            if (offset <= 0) {
+                offset = maxOffset;
+            }
+        }
+
+        if (offset > maxOffset) {
+            offset = maxOffset;
+        }
+
+        lastOffset += hint;
+        offset += hint;
+    }
+
+    lastOffset++;
+
+    while (lastOffset < offset) {
+        var m = lastOffset + (offset - lastOffset >>> 1);
+
+        if (compare(value, array[start + m]) < 0) {
+            offset = m;
+        }
+        else {
+            lastOffset = m + 1;
+        }
+    }
+
+    return offset;
+}
+
+function TimSort(array, compare) {
+    var minGallop = DEFAULT_MIN_GALLOPING;
+    var runStart;
+    var runLength;
+    var stackSize = 0;
+
+    var tmp = [];
+
+    runStart = [];
+    runLength = [];
+
+    function pushRun(_runStart, _runLength) {
+        runStart[stackSize] = _runStart;
+        runLength[stackSize] = _runLength;
+        stackSize += 1;
+    }
+
+    function mergeRuns() {
+        while (stackSize > 1) {
+            var n = stackSize - 2;
+
+            if (n >= 1 && runLength[n - 1] <= runLength[n] + runLength[n + 1] || n >= 2 && runLength[n - 2] <= runLength[n] + runLength[n - 1]) {
+                if (runLength[n - 1] < runLength[n + 1]) {
+                    n--;
+                }
+            }
+            else if (runLength[n] > runLength[n + 1]) {
+                break;
+            }
+            mergeAt(n);
+        }
+    }
+
+    function forceMergeRuns() {
+        while (stackSize > 1) {
+            var n = stackSize - 2;
+
+            if (n > 0 && runLength[n - 1] < runLength[n + 1]) {
+                n--;
+            }
+
+            mergeAt(n);
+        }
+    }
+
+    function mergeAt(i) {
+        var start1 = runStart[i];
+        var length1 = runLength[i];
+        var start2 = runStart[i + 1];
+        var length2 = runLength[i + 1];
+
+        runLength[i] = length1 + length2;
+
+        if (i === stackSize - 3) {
+            runStart[i + 1] = runStart[i + 2];
+            runLength[i + 1] = runLength[i + 2];
+        }
+
+        stackSize--;
+
+        var k = gallopRight(array[start2], array, start1, length1, 0, compare);
+        start1 += k;
+        length1 -= k;
+
+        if (length1 === 0) {
+            return;
+        }
+
+        length2 = gallopLeft(array[start1 + length1 - 1], array, start2, length2, length2 - 1, compare);
+
+        if (length2 === 0) {
+            return;
+        }
+
+        if (length1 <= length2) {
+            mergeLow(start1, length1, start2, length2);
+        }
+        else {
+            mergeHigh(start1, length1, start2, length2);
+        }
+    }
+
+    function mergeLow(start1, length1, start2, length2) {
+        var i = 0;
+
+        for (i = 0; i < length1; i++) {
+            tmp[i] = array[start1 + i];
+        }
