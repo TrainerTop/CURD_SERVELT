@@ -6837,3 +6837,281 @@ Style.prototype = {
      * @type {string|Array.<number>}
      * @default 'inside'
      */
+    textPosition: 'inside',
+
+    /**
+     * If not specified, use the boundingRect of a `displayable`.
+     * @type {Object}
+     */
+    textRect: null,
+
+    /**
+     * [x, y]
+     * @type {Array.<number>}
+     */
+    textOffset: null,
+
+    /**
+     * @type {string}
+     */
+    textAlign: null,
+
+    /**
+     * @type {string}
+     */
+    textVerticalAlign: null,
+
+    /**
+     * @type {number}
+     */
+    textDistance: 5,
+
+    /**
+     * @type {string}
+     */
+    textShadowColor: 'transparent',
+
+    /**
+     * @type {number}
+     */
+    textShadowBlur: 0,
+
+    /**
+     * @type {number}
+     */
+    textShadowOffsetX: 0,
+
+    /**
+     * @type {number}
+     */
+    textShadowOffsetY: 0,
+
+    /**
+     * @type {string}
+     */
+    textBoxShadowColor: 'transparent',
+
+    /**
+     * @type {number}
+     */
+    textBoxShadowBlur: 0,
+
+    /**
+     * @type {number}
+     */
+    textBoxShadowOffsetX: 0,
+
+    /**
+     * @type {number}
+     */
+    textBoxShadowOffsetY: 0,
+
+    /**
+     * Whether transform text.
+     * Only useful in Path and Image element
+     * @type {boolean}
+     */
+    transformText: false,
+
+    /**
+     * Text rotate around position of Path or Image
+     * Only useful in Path and Image element and transformText is false.
+     */
+    textRotation: 0,
+
+    /**
+     * Text origin of text rotation, like [10, 40].
+     * Based on x, y of rect.
+     * Useful in label rotation of circular symbol.
+     * By default, this origin is textPosition.
+     * Can be 'center'.
+     * @type {string|Array.<number>}
+     */
+    textOrigin: null,
+
+    /**
+     * @type {string}
+     */
+    textBackgroundColor: null,
+
+    /**
+     * @type {string}
+     */
+    textBorderColor: null,
+
+    /**
+     * @type {number}
+     */
+    textBorderWidth: 0,
+
+    /**
+     * @type {number}
+     */
+    textBorderRadius: 0,
+
+    /**
+     * Can be `2` or `[2, 4]` or `[2, 3, 4, 5]`
+     * @type {number|Array.<number>}
+     */
+    textPadding: null,
+
+    /**
+     * Text styles for rich text.
+     * @type {Object}
+     */
+    rich: null,
+
+    /**
+     * {outerWidth, outerHeight, ellipsis, placeholder}
+     * @type {Object}
+     */
+    truncate: null,
+
+    /**
+     * https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/globalCompositeOperation
+     * @type {string}
+     */
+    blend: null,
+
+    /**
+     * @param {CanvasRenderingContext2D} ctx
+     */
+    bind: function (ctx, el, prevEl) {
+        var style = this;
+        var prevStyle = prevEl && prevEl.style;
+        // If no prevStyle, it means first draw.
+        // Only apply cache if the last time cachced by this function.
+        var notCheckCache = !prevStyle || ctx.__attrCachedBy !== ContextCachedBy.STYLE_BIND;
+
+        ctx.__attrCachedBy = ContextCachedBy.STYLE_BIND;
+
+        for (var i = 0; i < STYLE_COMMON_PROPS.length; i++) {
+            var prop = STYLE_COMMON_PROPS[i];
+            var styleName = prop[0];
+
+            if (notCheckCache || style[styleName] !== prevStyle[styleName]) {
+                // FIXME Invalid property value will cause style leak from previous element.
+                ctx[styleName] =
+                    fixShadow(ctx, styleName, style[styleName] || prop[1]);
+            }
+        }
+
+        if ((notCheckCache || style.fill !== prevStyle.fill)) {
+            ctx.fillStyle = style.fill;
+        }
+        if ((notCheckCache || style.stroke !== prevStyle.stroke)) {
+            ctx.strokeStyle = style.stroke;
+        }
+        if ((notCheckCache || style.opacity !== prevStyle.opacity)) {
+            ctx.globalAlpha = style.opacity == null ? 1 : style.opacity;
+        }
+
+        if ((notCheckCache || style.blend !== prevStyle.blend)) {
+            ctx.globalCompositeOperation = style.blend || 'source-over';
+        }
+        if (this.hasStroke()) {
+            var lineWidth = style.lineWidth;
+            ctx.lineWidth = lineWidth / (
+                (this.strokeNoScale && el && el.getLineScale) ? el.getLineScale() : 1
+            );
+        }
+    },
+
+    hasFill: function () {
+        var fill = this.fill;
+        return fill != null && fill !== 'none';
+    },
+
+    hasStroke: function () {
+        var stroke = this.stroke;
+        return stroke != null && stroke !== 'none' && this.lineWidth > 0;
+    },
+
+    /**
+     * Extend from other style
+     * @param {zrender/graphic/Style} otherStyle
+     * @param {boolean} overwrite true: overwrirte any way.
+     *                            false: overwrite only when !target.hasOwnProperty
+     *                            others: overwrite when property is not null/undefined.
+     */
+    extendFrom: function (otherStyle, overwrite) {
+        if (otherStyle) {
+            for (var name in otherStyle) {
+                if (otherStyle.hasOwnProperty(name)
+                    && (overwrite === true
+                        || (
+                            overwrite === false
+                                ? !this.hasOwnProperty(name)
+                                : otherStyle[name] != null
+                        )
+                    )
+                ) {
+                    this[name] = otherStyle[name];
+                }
+            }
+        }
+    },
+
+    /**
+     * Batch setting style with a given object
+     * @param {Object|string} obj
+     * @param {*} [obj]
+     */
+    set: function (obj, value) {
+        if (typeof obj === 'string') {
+            this[obj] = value;
+        }
+        else {
+            this.extendFrom(obj, true);
+        }
+    },
+
+    /**
+     * Clone
+     * @return {zrender/graphic/Style} [description]
+     */
+    clone: function () {
+        var newStyle = new this.constructor();
+        newStyle.extendFrom(this, true);
+        return newStyle;
+    },
+
+    getGradient: function (ctx, obj, rect) {
+        var method = obj.type === 'radial' ? createRadialGradient : createLinearGradient;
+        var canvasGradient = method(ctx, obj, rect);
+        var colorStops = obj.colorStops;
+        for (var i = 0; i < colorStops.length; i++) {
+            canvasGradient.addColorStop(
+                colorStops[i].offset, colorStops[i].color
+            );
+        }
+        return canvasGradient;
+    }
+
+};
+
+var styleProto = Style.prototype;
+for (var i = 0; i < STYLE_COMMON_PROPS.length; i++) {
+    var prop = STYLE_COMMON_PROPS[i];
+    if (!(prop[0] in styleProto)) {
+        styleProto[prop[0]] = prop[1];
+    }
+}
+
+// Provide for others
+Style.getGradient = styleProto.getGradient;
+
+var Pattern = function (image, repeat) {
+    // Should do nothing more in this constructor. Because gradient can be
+    // declard by `color: {image: ...}`, where this constructor will not be called.
+
+    this.image = image;
+    this.repeat = repeat;
+
+    // Can be cloned
+    this.type = 'pattern';
+};
+
+Pattern.prototype.getCanvasPattern = function (ctx) {
+    return ctx.createPattern(this.image, this.repeat || 'repeat');
+};
