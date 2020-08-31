@@ -6563,3 +6563,277 @@ Storage.prototype = {
                 el.delChildrenFromStorage(this);
             }
         }
+    },
+
+    addToStorage: function (el) {
+        if (el) {
+            el.__storage = this;
+            el.dirty(false);
+        }
+        return this;
+    },
+
+    delFromStorage: function (el) {
+        if (el) {
+            el.__storage = null;
+        }
+
+        return this;
+    },
+
+    /**
+     * 清空并且释放Storage
+     */
+    dispose: function () {
+        this._renderList =
+        this._roots = null;
+    },
+
+    displayableSortFunc: shapeCompareFunc
+};
+
+var SHADOW_PROPS = {
+    'shadowBlur': 1,
+    'shadowOffsetX': 1,
+    'shadowOffsetY': 1,
+    'textShadowBlur': 1,
+    'textShadowOffsetX': 1,
+    'textShadowOffsetY': 1,
+    'textBoxShadowBlur': 1,
+    'textBoxShadowOffsetX': 1,
+    'textBoxShadowOffsetY': 1
+};
+
+var fixShadow = function (ctx, propName, value) {
+    if (SHADOW_PROPS.hasOwnProperty(propName)) {
+        return value *= ctx.dpr;
+    }
+    return value;
+};
+
+var ContextCachedBy = {
+    NONE: 0,
+    STYLE_BIND: 1,
+    PLAIN_TEXT: 2
+};
+
+// Avoid confused with 0/false.
+var WILL_BE_RESTORED = 9;
+
+var STYLE_COMMON_PROPS = [
+    ['shadowBlur', 0], ['shadowOffsetX', 0], ['shadowOffsetY', 0], ['shadowColor', '#000'],
+    ['lineCap', 'butt'], ['lineJoin', 'miter'], ['miterLimit', 10]
+];
+
+// var SHADOW_PROPS = STYLE_COMMON_PROPS.slice(0, 4);
+// var LINE_PROPS = STYLE_COMMON_PROPS.slice(4);
+
+var Style = function (opts) {
+    this.extendFrom(opts, false);
+};
+
+function createLinearGradient(ctx, obj, rect) {
+    var x = obj.x == null ? 0 : obj.x;
+    var x2 = obj.x2 == null ? 1 : obj.x2;
+    var y = obj.y == null ? 0 : obj.y;
+    var y2 = obj.y2 == null ? 0 : obj.y2;
+
+    if (!obj.global) {
+        x = x * rect.width + rect.x;
+        x2 = x2 * rect.width + rect.x;
+        y = y * rect.height + rect.y;
+        y2 = y2 * rect.height + rect.y;
+    }
+
+    // Fix NaN when rect is Infinity
+    x = isNaN(x) ? 0 : x;
+    x2 = isNaN(x2) ? 1 : x2;
+    y = isNaN(y) ? 0 : y;
+    y2 = isNaN(y2) ? 0 : y2;
+
+    var canvasGradient = ctx.createLinearGradient(x, y, x2, y2);
+
+    return canvasGradient;
+}
+
+function createRadialGradient(ctx, obj, rect) {
+    var width = rect.width;
+    var height = rect.height;
+    var min = Math.min(width, height);
+
+    var x = obj.x == null ? 0.5 : obj.x;
+    var y = obj.y == null ? 0.5 : obj.y;
+    var r = obj.r == null ? 0.5 : obj.r;
+    if (!obj.global) {
+        x = x * width + rect.x;
+        y = y * height + rect.y;
+        r = r * min;
+    }
+
+    var canvasGradient = ctx.createRadialGradient(x, y, 0, x, y, r);
+
+    return canvasGradient;
+}
+
+
+Style.prototype = {
+
+    constructor: Style,
+
+    /**
+     * @type {string}
+     */
+    fill: '#000',
+
+    /**
+     * @type {string}
+     */
+    stroke: null,
+
+    /**
+     * @type {number}
+     */
+    opacity: 1,
+
+    /**
+     * @type {number}
+     */
+    fillOpacity: null,
+
+    /**
+     * @type {number}
+     */
+    strokeOpacity: null,
+
+    /**
+     * @type {Array.<number>}
+     */
+    lineDash: null,
+
+    /**
+     * @type {number}
+     */
+    lineDashOffset: 0,
+
+    /**
+     * @type {number}
+     */
+    shadowBlur: 0,
+
+    /**
+     * @type {number}
+     */
+    shadowOffsetX: 0,
+
+    /**
+     * @type {number}
+     */
+    shadowOffsetY: 0,
+
+    /**
+     * @type {number}
+     */
+    lineWidth: 1,
+
+    /**
+     * If stroke ignore scale
+     * @type {Boolean}
+     */
+    strokeNoScale: false,
+
+    // Bounding rect text configuration
+    // Not affected by element transform
+    /**
+     * @type {string}
+     */
+    text: null,
+
+    /**
+     * If `fontSize` or `fontFamily` exists, `font` will be reset by
+     * `fontSize`, `fontStyle`, `fontWeight`, `fontFamily`.
+     * So do not visit it directly in upper application (like echarts),
+     * but use `contain/text#makeFont` instead.
+     * @type {string}
+     */
+    font: null,
+
+    /**
+     * The same as font. Use font please.
+     * @deprecated
+     * @type {string}
+     */
+    textFont: null,
+
+    /**
+     * It helps merging respectively, rather than parsing an entire font string.
+     * @type {string}
+     */
+    fontStyle: null,
+
+    /**
+     * It helps merging respectively, rather than parsing an entire font string.
+     * @type {string}
+     */
+    fontWeight: null,
+
+    /**
+     * It helps merging respectively, rather than parsing an entire font string.
+     * Should be 12 but not '12px'.
+     * @type {number}
+     */
+    fontSize: null,
+
+    /**
+     * It helps merging respectively, rather than parsing an entire font string.
+     * @type {string}
+     */
+    fontFamily: null,
+
+    /**
+     * Reserved for special functinality, like 'hr'.
+     * @type {string}
+     */
+    textTag: null,
+
+    /**
+     * @type {string}
+     */
+    textFill: '#000',
+
+    /**
+     * @type {string}
+     */
+    textStroke: null,
+
+    /**
+     * @type {number}
+     */
+    textWidth: null,
+
+    /**
+     * Only for textBackground.
+     * @type {number}
+     */
+    textHeight: null,
+
+    /**
+     * textStroke may be set as some color as a default
+     * value in upper applicaion, where the default value
+     * of textStrokeWidth should be 0 to make sure that
+     * user can choose to do not use text stroke.
+     * @type {number}
+     */
+    textStrokeWidth: 0,
+
+    /**
+     * @type {number}
+     */
+    textLineHeight: null,
+
+    /**
+     * 'inside', 'left', 'right', 'top', 'bottom'
+     * [x, y]
+     * Based on x, y of rect.
+     * @type {string|Array.<number>}
+     * @default 'inside'
+     */
