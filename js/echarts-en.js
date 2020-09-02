@@ -7353,3 +7353,284 @@ Layer.prototype = {
 
 var requestAnimationFrame = (
     typeof window !== 'undefined'
+    && (
+        (window.requestAnimationFrame && window.requestAnimationFrame.bind(window))
+        // https://github.com/ecomfe/zrender/issues/189#issuecomment-224919809
+        || (window.msRequestAnimationFrame && window.msRequestAnimationFrame.bind(window))
+        || window.mozRequestAnimationFrame
+        || window.webkitRequestAnimationFrame
+    )
+) || function (func) {
+    setTimeout(func, 16);
+};
+
+var globalImageCache = new LRU(50);
+
+/**
+ * @param {string|HTMLImageElement|HTMLCanvasElement|Canvas} newImageOrSrc
+ * @return {HTMLImageElement|HTMLCanvasElement|Canvas} image
+ */
+function findExistImage(newImageOrSrc) {
+    if (typeof newImageOrSrc === 'string') {
+        var cachedImgObj = globalImageCache.get(newImageOrSrc);
+        return cachedImgObj && cachedImgObj.image;
+    }
+    else {
+        return newImageOrSrc;
+    }
+}
+
+/**
+ * Caution: User should cache loaded images, but not just count on LRU.
+ * Consider if required images more than LRU size, will dead loop occur?
+ *
+ * @param {string|HTMLImageElement|HTMLCanvasElement|Canvas} newImageOrSrc
+ * @param {HTMLImageElement|HTMLCanvasElement|Canvas} image Existent image.
+ * @param {module:zrender/Element} [hostEl] For calling `dirty`.
+ * @param {Function} [cb] params: (image, cbPayload)
+ * @param {Object} [cbPayload] Payload on cb calling.
+ * @return {HTMLImageElement|HTMLCanvasElement|Canvas} image
+ */
+function createOrUpdateImage(newImageOrSrc, image, hostEl, cb, cbPayload) {
+    if (!newImageOrSrc) {
+        return image;
+    }
+    else if (typeof newImageOrSrc === 'string') {
+
+        // Image should not be loaded repeatly.
+        if ((image && image.__zrImageSrc === newImageOrSrc) || !hostEl) {
+            return image;
+        }
+
+        // Only when there is no existent image or existent image src
+        // is different, this method is responsible for load.
+        var cachedImgObj = globalImageCache.get(newImageOrSrc);
+
+        var pendingWrap = {hostEl: hostEl, cb: cb, cbPayload: cbPayload};
+
+        if (cachedImgObj) {
+            image = cachedImgObj.image;
+            !isImageReady(image) && cachedImgObj.pending.push(pendingWrap);
+        }
+        else {
+            image = new Image();
+            image.onload = image.onerror = imageOnLoad;
+
+            globalImageCache.put(
+                newImageOrSrc,
+                image.__cachedImgObj = {
+                    image: image,
+                    pending: [pendingWrap]
+                }
+            );
+
+            image.src = image.__zrImageSrc = newImageOrSrc;
+        }
+
+        return image;
+    }
+    // newImageOrSrc is an HTMLImageElement or HTMLCanvasElement or Canvas
+    else {
+        return newImageOrSrc;
+    }
+}
+
+function imageOnLoad() {
+    var cachedImgObj = this.__cachedImgObj;
+    this.onload = this.onerror = this.__cachedImgObj = null;
+
+    for (var i = 0; i < cachedImgObj.pending.length; i++) {
+        var pendingWrap = cachedImgObj.pending[i];
+        var cb = pendingWrap.cb;
+        cb && cb(this, pendingWrap.cbPayload);
+        pendingWrap.hostEl.dirty();
+    }
+    cachedImgObj.pending.length = 0;
+}
+
+function isImageReady(image) {
+    return image && image.width && image.height;
+}
+
+var textWidthCache = {};
+var textWidthCacheCounter = 0;
+
+var TEXT_CACHE_MAX = 5000;
+var STYLE_REG = /\{([a-zA-Z0-9_]+)\|([^}]*)\}/g;
+
+var DEFAULT_FONT$1 = '12px sans-serif';
+
+// Avoid assign to an exported variable, for transforming to cjs.
+var methods$1 = {};
+
+function $override$1(name, fn) {
+    methods$1[name] = fn;
+}
+
+/**
+ * @public
+ * @param {string} text
+ * @param {string} font
+ * @return {number} width
+ */
+function getWidth(text, font) {
+    font = font || DEFAULT_FONT$1;
+    var key = text + ':' + font;
+    if (textWidthCache[key]) {
+        return textWidthCache[key];
+    }
+
+    var textLines = (text + '').split('\n');
+    var width = 0;
+
+    for (var i = 0, l = textLines.length; i < l; i++) {
+        // textContain.measureText may be overrided in SVG or VML
+        width = Math.max(measureText(textLines[i], font).width, width);
+    }
+
+    if (textWidthCacheCounter > TEXT_CACHE_MAX) {
+        textWidthCacheCounter = 0;
+        textWidthCache = {};
+    }
+    textWidthCacheCounter++;
+    textWidthCache[key] = width;
+
+    return width;
+}
+
+/**
+ * @public
+ * @param {string} text
+ * @param {string} font
+ * @param {string} [textAlign='left']
+ * @param {string} [textVerticalAlign='top']
+ * @param {Array.<number>} [textPadding]
+ * @param {Object} [rich]
+ * @param {Object} [truncate]
+ * @return {Object} {x, y, width, height, lineHeight}
+ */
+function getBoundingRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, rich, truncate) {
+    return rich
+        ? getRichTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, rich, truncate)
+        : getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, truncate);
+}
+
+function getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, truncate) {
+    var contentBlock = parsePlainText(text, font, textPadding, textLineHeight, truncate);
+    var outerWidth = getWidth(text, font);
+    if (textPadding) {
+        outerWidth += textPadding[1] + textPadding[3];
+    }
+    var outerHeight = contentBlock.outerHeight;
+
+    var x = adjustTextX(0, outerWidth, textAlign);
+    var y = adjustTextY(0, outerHeight, textVerticalAlign);
+
+    var rect = new BoundingRect(x, y, outerWidth, outerHeight);
+    rect.lineHeight = contentBlock.lineHeight;
+
+    return rect;
+}
+
+function getRichTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, rich, truncate) {
+    var contentBlock = parseRichText(text, {
+        rich: rich,
+        truncate: truncate,
+        font: font,
+        textAlign: textAlign,
+        textPadding: textPadding,
+        textLineHeight: textLineHeight
+    });
+    var outerWidth = contentBlock.outerWidth;
+    var outerHeight = contentBlock.outerHeight;
+
+    var x = adjustTextX(0, outerWidth, textAlign);
+    var y = adjustTextY(0, outerHeight, textVerticalAlign);
+
+    return new BoundingRect(x, y, outerWidth, outerHeight);
+}
+
+/**
+ * @public
+ * @param {number} x
+ * @param {number} width
+ * @param {string} [textAlign='left']
+ * @return {number} Adjusted x.
+ */
+function adjustTextX(x, width, textAlign) {
+    // FIXME Right to left language
+    if (textAlign === 'right') {
+        x -= width;
+    }
+    else if (textAlign === 'center') {
+        x -= width / 2;
+    }
+    return x;
+}
+
+/**
+ * @public
+ * @param {number} y
+ * @param {number} height
+ * @param {string} [textVerticalAlign='top']
+ * @return {number} Adjusted y.
+ */
+function adjustTextY(y, height, textVerticalAlign) {
+    if (textVerticalAlign === 'middle') {
+        y -= height / 2;
+    }
+    else if (textVerticalAlign === 'bottom') {
+        y -= height;
+    }
+    return y;
+}
+
+/**
+ * @public
+ * @param {stirng} textPosition
+ * @param {Object} rect {x, y, width, height}
+ * @param {number} distance
+ * @return {Object} {x, y, textAlign, textVerticalAlign}
+ */
+function adjustTextPositionOnRect(textPosition, rect, distance) {
+
+    var x = rect.x;
+    var y = rect.y;
+
+    var height = rect.height;
+    var width = rect.width;
+    var halfHeight = height / 2;
+
+    var textAlign = 'left';
+    var textVerticalAlign = 'top';
+
+    switch (textPosition) {
+        case 'left':
+            x -= distance;
+            y += halfHeight;
+            textAlign = 'right';
+            textVerticalAlign = 'middle';
+            break;
+        case 'right':
+            x += distance + width;
+            y += halfHeight;
+            textVerticalAlign = 'middle';
+            break;
+        case 'top':
+            x += width / 2;
+            y -= distance;
+            textAlign = 'center';
+            textVerticalAlign = 'bottom';
+            break;
+        case 'bottom':
+            x += width / 2;
+            y += height + distance;
+            textAlign = 'center';
+            break;
+        case 'inside':
+            x += width / 2;
+            y += halfHeight;
+            textAlign = 'center';
+            textVerticalAlign = 'middle';
+            break;
+        case 'insideLeft':
