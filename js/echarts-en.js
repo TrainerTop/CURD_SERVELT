@@ -7634,3 +7634,270 @@ function adjustTextPositionOnRect(textPosition, rect, distance) {
             textVerticalAlign = 'middle';
             break;
         case 'insideLeft':
+            x += distance;
+            y += halfHeight;
+            textVerticalAlign = 'middle';
+            break;
+        case 'insideRight':
+            x += width - distance;
+            y += halfHeight;
+            textAlign = 'right';
+            textVerticalAlign = 'middle';
+            break;
+        case 'insideTop':
+            x += width / 2;
+            y += distance;
+            textAlign = 'center';
+            break;
+        case 'insideBottom':
+            x += width / 2;
+            y += height - distance;
+            textAlign = 'center';
+            textVerticalAlign = 'bottom';
+            break;
+        case 'insideTopLeft':
+            x += distance;
+            y += distance;
+            break;
+        case 'insideTopRight':
+            x += width - distance;
+            y += distance;
+            textAlign = 'right';
+            break;
+        case 'insideBottomLeft':
+            x += distance;
+            y += height - distance;
+            textVerticalAlign = 'bottom';
+            break;
+        case 'insideBottomRight':
+            x += width - distance;
+            y += height - distance;
+            textAlign = 'right';
+            textVerticalAlign = 'bottom';
+            break;
+    }
+
+    return {
+        x: x,
+        y: y,
+        textAlign: textAlign,
+        textVerticalAlign: textVerticalAlign
+    };
+}
+
+/**
+ * Show ellipsis if overflow.
+ *
+ * @public
+ * @param  {string} text
+ * @param  {string} containerWidth
+ * @param  {string} font
+ * @param  {number} [ellipsis='...']
+ * @param  {Object} [options]
+ * @param  {number} [options.maxIterations=3]
+ * @param  {number} [options.minChar=0] If truncate result are less
+ *                  then minChar, ellipsis will not show, which is
+ *                  better for user hint in some cases.
+ * @param  {number} [options.placeholder=''] When all truncated, use the placeholder.
+ * @return {string}
+ */
+function truncateText(text, containerWidth, font, ellipsis, options) {
+    if (!containerWidth) {
+        return '';
+    }
+
+    var textLines = (text + '').split('\n');
+    options = prepareTruncateOptions(containerWidth, font, ellipsis, options);
+
+    // FIXME
+    // It is not appropriate that every line has '...' when truncate multiple lines.
+    for (var i = 0, len = textLines.length; i < len; i++) {
+        textLines[i] = truncateSingleLine(textLines[i], options);
+    }
+
+    return textLines.join('\n');
+}
+
+function prepareTruncateOptions(containerWidth, font, ellipsis, options) {
+    options = extend({}, options);
+
+    options.font = font;
+    var ellipsis = retrieve2(ellipsis, '...');
+    options.maxIterations = retrieve2(options.maxIterations, 2);
+    var minChar = options.minChar = retrieve2(options.minChar, 0);
+    // FIXME
+    // Other languages?
+    options.cnCharWidth = getWidth('国', font);
+    // FIXME
+    // Consider proportional font?
+    var ascCharWidth = options.ascCharWidth = getWidth('a', font);
+    options.placeholder = retrieve2(options.placeholder, '');
+
+    // Example 1: minChar: 3, text: 'asdfzxcv', truncate result: 'asdf', but not: 'a...'.
+    // Example 2: minChar: 3, text: '维度', truncate result: '维', but not: '...'.
+    var contentWidth = containerWidth = Math.max(0, containerWidth - 1); // Reserve some gap.
+    for (var i = 0; i < minChar && contentWidth >= ascCharWidth; i++) {
+        contentWidth -= ascCharWidth;
+    }
+
+    var ellipsisWidth = getWidth(ellipsis, font);
+    if (ellipsisWidth > contentWidth) {
+        ellipsis = '';
+        ellipsisWidth = 0;
+    }
+
+    contentWidth = containerWidth - ellipsisWidth;
+
+    options.ellipsis = ellipsis;
+    options.ellipsisWidth = ellipsisWidth;
+    options.contentWidth = contentWidth;
+    options.containerWidth = containerWidth;
+
+    return options;
+}
+
+function truncateSingleLine(textLine, options) {
+    var containerWidth = options.containerWidth;
+    var font = options.font;
+    var contentWidth = options.contentWidth;
+
+    if (!containerWidth) {
+        return '';
+    }
+
+    var lineWidth = getWidth(textLine, font);
+
+    if (lineWidth <= containerWidth) {
+        return textLine;
+    }
+
+    for (var j = 0; ; j++) {
+        if (lineWidth <= contentWidth || j >= options.maxIterations) {
+            textLine += options.ellipsis;
+            break;
+        }
+
+        var subLength = j === 0
+            ? estimateLength(textLine, contentWidth, options.ascCharWidth, options.cnCharWidth)
+            : lineWidth > 0
+            ? Math.floor(textLine.length * contentWidth / lineWidth)
+            : 0;
+
+        textLine = textLine.substr(0, subLength);
+        lineWidth = getWidth(textLine, font);
+    }
+
+    if (textLine === '') {
+        textLine = options.placeholder;
+    }
+
+    return textLine;
+}
+
+function estimateLength(text, contentWidth, ascCharWidth, cnCharWidth) {
+    var width = 0;
+    var i = 0;
+    for (var len = text.length; i < len && width < contentWidth; i++) {
+        var charCode = text.charCodeAt(i);
+        width += (0 <= charCode && charCode <= 127) ? ascCharWidth : cnCharWidth;
+    }
+    return i;
+}
+
+/**
+ * @public
+ * @param {string} font
+ * @return {number} line height
+ */
+function getLineHeight(font) {
+    // FIXME A rough approach.
+    return getWidth('国', font);
+}
+
+/**
+ * @public
+ * @param {string} text
+ * @param {string} font
+ * @return {Object} width
+ */
+function measureText(text, font) {
+    return methods$1.measureText(text, font);
+}
+
+// Avoid assign to an exported variable, for transforming to cjs.
+methods$1.measureText = function (text, font) {
+    var ctx = getContext();
+    ctx.font = font || DEFAULT_FONT$1;
+    return ctx.measureText(text);
+};
+
+/**
+ * @public
+ * @param {string} text
+ * @param {string} font
+ * @param {Object} [truncate]
+ * @return {Object} block: {lineHeight, lines, height, outerHeight}
+ *  Notice: for performance, do not calculate outerWidth util needed.
+ */
+function parsePlainText(text, font, padding, textLineHeight, truncate) {
+    text != null && (text += '');
+
+    var lineHeight = retrieve2(textLineHeight, getLineHeight(font));
+    var lines = text ? text.split('\n') : [];
+    var height = lines.length * lineHeight;
+    var outerHeight = height;
+
+    if (padding) {
+        outerHeight += padding[0] + padding[2];
+    }
+
+    if (text && truncate) {
+        var truncOuterHeight = truncate.outerHeight;
+        var truncOuterWidth = truncate.outerWidth;
+        if (truncOuterHeight != null && outerHeight > truncOuterHeight) {
+            text = '';
+            lines = [];
+        }
+        else if (truncOuterWidth != null) {
+            var options = prepareTruncateOptions(
+                truncOuterWidth - (padding ? padding[1] + padding[3] : 0),
+                font,
+                truncate.ellipsis,
+                {minChar: truncate.minChar, placeholder: truncate.placeholder}
+            );
+
+            // FIXME
+            // It is not appropriate that every line has '...' when truncate multiple lines.
+            for (var i = 0, len = lines.length; i < len; i++) {
+                lines[i] = truncateSingleLine(lines[i], options);
+            }
+        }
+    }
+
+    return {
+        lines: lines,
+        height: height,
+        outerHeight: outerHeight,
+        lineHeight: lineHeight
+    };
+}
+
+/**
+ * For example: 'some text {a|some text}other text{b|some text}xxx{c|}xxx'
+ * Also consider 'bbbb{a|xxx\nzzz}xxxx\naaaa'.
+ *
+ * @public
+ * @param {string} text
+ * @param {Object} style
+ * @return {Object} block
+ * {
+ *      width,
+ *      height,
+ *      lines: [{
+ *          lineHeight,
+ *          width,
+ *          tokens: [[{
+ *              styleName,
+ *              text,
+ *              width,      // include textPadding
+ *              height,     // include textPadding
