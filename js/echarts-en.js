@@ -8418,3 +8418,290 @@ function renderPlainText(hostEl, ctx, text, style, rect, prevEl) {
             ctx.fillStyle = textFill;
         }
     }
+
+    // Optimize simply, in most cases only one line exists.
+    if (textLines.length === 1) {
+        // Fill after stroke so the outline will not cover the main part.
+        textStroke && ctx.strokeText(textLines[0], textX, textY);
+        textFill && ctx.fillText(textLines[0], textX, textY);
+    }
+    else {
+        for (var i = 0; i < textLines.length; i++) {
+            // Fill after stroke so the outline will not cover the main part.
+            textStroke && ctx.strokeText(textLines[i], textX, textY);
+            textFill && ctx.fillText(textLines[i], textX, textY);
+            textY += lineHeight;
+        }
+    }
+}
+
+function renderRichText(hostEl, ctx, text, style, rect, prevEl) {
+    // Do not do cache for rich text because of the complexity.
+    // But `RectText` this will be restored, do not need to clear other cache like `Style::bind`.
+    if (prevEl !== WILL_BE_RESTORED) {
+        ctx.__attrCachedBy = ContextCachedBy.NONE;
+    }
+
+    var contentBlock = hostEl.__textCotentBlock;
+
+    if (!contentBlock || hostEl.__dirtyText) {
+        contentBlock = hostEl.__textCotentBlock = parseRichText(text, style);
+    }
+
+    drawRichText(hostEl, ctx, contentBlock, style, rect);
+}
+
+function drawRichText(hostEl, ctx, contentBlock, style, rect) {
+    var contentWidth = contentBlock.width;
+    var outerWidth = contentBlock.outerWidth;
+    var outerHeight = contentBlock.outerHeight;
+    var textPadding = style.textPadding;
+
+    var boxPos = getBoxPosition(outerHeight, style, rect);
+    var baseX = boxPos.baseX;
+    var baseY = boxPos.baseY;
+    var textAlign = boxPos.textAlign;
+    var textVerticalAlign = boxPos.textVerticalAlign;
+
+    // Origin of textRotation should be the base point of text drawing.
+    applyTextRotation(ctx, style, rect, baseX, baseY);
+
+    var boxX = adjustTextX(baseX, outerWidth, textAlign);
+    var boxY = adjustTextY(baseY, outerHeight, textVerticalAlign);
+    var xLeft = boxX;
+    var lineTop = boxY;
+    if (textPadding) {
+        xLeft += textPadding[3];
+        lineTop += textPadding[0];
+    }
+    var xRight = xLeft + contentWidth;
+
+    needDrawBackground(style) && drawBackground(
+        hostEl, ctx, style, boxX, boxY, outerWidth, outerHeight
+    );
+
+    for (var i = 0; i < contentBlock.lines.length; i++) {
+        var line = contentBlock.lines[i];
+        var tokens = line.tokens;
+        var tokenCount = tokens.length;
+        var lineHeight = line.lineHeight;
+        var usedWidth = line.width;
+
+        var leftIndex = 0;
+        var lineXLeft = xLeft;
+        var lineXRight = xRight;
+        var rightIndex = tokenCount - 1;
+        var token;
+
+        while (
+            leftIndex < tokenCount
+            && (token = tokens[leftIndex], !token.textAlign || token.textAlign === 'left')
+        ) {
+            placeToken(hostEl, ctx, token, style, lineHeight, lineTop, lineXLeft, 'left');
+            usedWidth -= token.width;
+            lineXLeft += token.width;
+            leftIndex++;
+        }
+
+        while (
+            rightIndex >= 0
+            && (token = tokens[rightIndex], token.textAlign === 'right')
+        ) {
+            placeToken(hostEl, ctx, token, style, lineHeight, lineTop, lineXRight, 'right');
+            usedWidth -= token.width;
+            lineXRight -= token.width;
+            rightIndex--;
+        }
+
+        // The other tokens are placed as textAlign 'center' if there is enough space.
+        lineXLeft += (contentWidth - (lineXLeft - xLeft) - (xRight - lineXRight) - usedWidth) / 2;
+        while (leftIndex <= rightIndex) {
+            token = tokens[leftIndex];
+            // Consider width specified by user, use 'center' rather than 'left'.
+            placeToken(hostEl, ctx, token, style, lineHeight, lineTop, lineXLeft + token.width / 2, 'center');
+            lineXLeft += token.width;
+            leftIndex++;
+        }
+
+        lineTop += lineHeight;
+    }
+}
+
+function applyTextRotation(ctx, style, rect, x, y) {
+    // textRotation only apply in RectText.
+    if (rect && style.textRotation) {
+        var origin = style.textOrigin;
+        if (origin === 'center') {
+            x = rect.width / 2 + rect.x;
+            y = rect.height / 2 + rect.y;
+        }
+        else if (origin) {
+            x = origin[0] + rect.x;
+            y = origin[1] + rect.y;
+        }
+
+        ctx.translate(x, y);
+        // Positive: anticlockwise
+        ctx.rotate(-style.textRotation);
+        ctx.translate(-x, -y);
+    }
+}
+
+function placeToken(hostEl, ctx, token, style, lineHeight, lineTop, x, textAlign) {
+    var tokenStyle = style.rich[token.styleName] || {};
+    tokenStyle.text = token.text;
+
+    // 'ctx.textBaseline' is always set as 'middle', for sake of
+    // the bias of "Microsoft YaHei".
+    var textVerticalAlign = token.textVerticalAlign;
+    var y = lineTop + lineHeight / 2;
+    if (textVerticalAlign === 'top') {
+        y = lineTop + token.height / 2;
+    }
+    else if (textVerticalAlign === 'bottom') {
+        y = lineTop + lineHeight - token.height / 2;
+    }
+
+    !token.isLineHolder && needDrawBackground(tokenStyle) && drawBackground(
+        hostEl,
+        ctx,
+        tokenStyle,
+        textAlign === 'right'
+            ? x - token.width
+            : textAlign === 'center'
+            ? x - token.width / 2
+            : x,
+        y - token.height / 2,
+        token.width,
+        token.height
+    );
+
+    var textPadding = token.textPadding;
+    if (textPadding) {
+        x = getTextXForPadding(x, textAlign, textPadding);
+        y -= token.height / 2 - textPadding[2] - token.textHeight / 2;
+    }
+
+    setCtx(ctx, 'shadowBlur', retrieve3(tokenStyle.textShadowBlur, style.textShadowBlur, 0));
+    setCtx(ctx, 'shadowColor', tokenStyle.textShadowColor || style.textShadowColor || 'transparent');
+    setCtx(ctx, 'shadowOffsetX', retrieve3(tokenStyle.textShadowOffsetX, style.textShadowOffsetX, 0));
+    setCtx(ctx, 'shadowOffsetY', retrieve3(tokenStyle.textShadowOffsetY, style.textShadowOffsetY, 0));
+
+    setCtx(ctx, 'textAlign', textAlign);
+    // Force baseline to be "middle". Otherwise, if using "top", the
+    // text will offset downward a little bit in font "Microsoft YaHei".
+    setCtx(ctx, 'textBaseline', 'middle');
+
+    setCtx(ctx, 'font', token.font || DEFAULT_FONT);
+
+    var textStroke = getStroke(tokenStyle.textStroke || style.textStroke, textStrokeWidth);
+    var textFill = getFill(tokenStyle.textFill || style.textFill);
+    var textStrokeWidth = retrieve2(tokenStyle.textStrokeWidth, style.textStrokeWidth);
+
+    // Fill after stroke so the outline will not cover the main part.
+    if (textStroke) {
+        setCtx(ctx, 'lineWidth', textStrokeWidth);
+        setCtx(ctx, 'strokeStyle', textStroke);
+        ctx.strokeText(token.text, x, y);
+    }
+    if (textFill) {
+        setCtx(ctx, 'fillStyle', textFill);
+        ctx.fillText(token.text, x, y);
+    }
+}
+
+function needDrawBackground(style) {
+    return !!(
+        style.textBackgroundColor
+        || (style.textBorderWidth && style.textBorderColor)
+    );
+}
+
+// style: {textBackgroundColor, textBorderWidth, textBorderColor, textBorderRadius, text}
+// shape: {x, y, width, height}
+function drawBackground(hostEl, ctx, style, x, y, width, height) {
+    var textBackgroundColor = style.textBackgroundColor;
+    var textBorderWidth = style.textBorderWidth;
+    var textBorderColor = style.textBorderColor;
+    var isPlainBg = isString(textBackgroundColor);
+
+    setCtx(ctx, 'shadowBlur', style.textBoxShadowBlur || 0);
+    setCtx(ctx, 'shadowColor', style.textBoxShadowColor || 'transparent');
+    setCtx(ctx, 'shadowOffsetX', style.textBoxShadowOffsetX || 0);
+    setCtx(ctx, 'shadowOffsetY', style.textBoxShadowOffsetY || 0);
+
+    if (isPlainBg || (textBorderWidth && textBorderColor)) {
+        ctx.beginPath();
+        var textBorderRadius = style.textBorderRadius;
+        if (!textBorderRadius) {
+            ctx.rect(x, y, width, height);
+        }
+        else {
+            buildPath(ctx, {
+                x: x, y: y, width: width, height: height, r: textBorderRadius
+            });
+        }
+        ctx.closePath();
+    }
+
+    if (isPlainBg) {
+        setCtx(ctx, 'fillStyle', textBackgroundColor);
+
+        if (style.fillOpacity != null) {
+            var originalGlobalAlpha = ctx.globalAlpha;
+            ctx.globalAlpha = style.fillOpacity * style.opacity;
+            ctx.fill();
+            ctx.globalAlpha = originalGlobalAlpha;
+        }
+        else {
+            ctx.fill();
+        }
+    }
+    else if (isObject$1(textBackgroundColor)) {
+        var image = textBackgroundColor.image;
+
+        image = createOrUpdateImage(
+            image, null, hostEl, onBgImageLoaded, textBackgroundColor
+        );
+        if (image && isImageReady(image)) {
+            ctx.drawImage(image, x, y, width, height);
+        }
+    }
+
+    if (textBorderWidth && textBorderColor) {
+        setCtx(ctx, 'lineWidth', textBorderWidth);
+        setCtx(ctx, 'strokeStyle', textBorderColor);
+
+        if (style.strokeOpacity != null) {
+            var originalGlobalAlpha = ctx.globalAlpha;
+            ctx.globalAlpha = style.strokeOpacity * style.opacity;
+            ctx.stroke();
+            ctx.globalAlpha = originalGlobalAlpha;
+        }
+        else {
+            ctx.stroke();
+        }
+    }
+}
+
+function onBgImageLoaded(image, textBackgroundColor) {
+    // Replace image, so that `contain/text.js#parseRichText`
+    // will get correct result in next tick.
+    textBackgroundColor.image = image;
+}
+
+function getBoxPosition(blockHeiht, style, rect) {
+    var baseX = style.x || 0;
+    var baseY = style.y || 0;
+    var textAlign = style.textAlign;
+    var textVerticalAlign = style.textVerticalAlign;
+
+    // Text position represented by coord
+    if (rect) {
+        var textPosition = style.textPosition;
+        if (textPosition instanceof Array) {
+            // Percent
+            baseX = rect.x + parsePercent(textPosition[0], rect.width);
+            baseY = rect.y + parsePercent(textPosition[1], rect.height);
+        }
+        else {
