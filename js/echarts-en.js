@@ -8978,3 +8978,266 @@ Displayable.prototype = {
     cursor: 'pointer',
 
     /**
+     * If hover area is bounding rect
+     * @name module:/zrender/graphic/Displayable#rectHover
+     * @type {string}
+     */
+    rectHover: false,
+
+    /**
+     * Render the element progressively when the value >= 0,
+     * usefull for large data.
+     * @type {boolean}
+     */
+    progressive: false,
+
+    /**
+     * @type {boolean}
+     */
+    incremental: false,
+    /**
+     * Scale ratio for global scale.
+     * @type {boolean}
+     */
+    globalScaleRatio: 1,
+
+    beforeBrush: function (ctx) {},
+
+    afterBrush: function (ctx) {},
+
+    /**
+     * 图形绘制方法
+     * @param {CanvasRenderingContext2D} ctx
+     */
+    // Interface
+    brush: function (ctx, prevEl) {},
+
+    /**
+     * 获取最小包围盒
+     * @return {module:zrender/core/BoundingRect}
+     */
+    // Interface
+    getBoundingRect: function () {},
+
+    /**
+     * 判断坐标 x, y 是否在图形上
+     * If displayable element contain coord x, y
+     * @param  {number} x
+     * @param  {number} y
+     * @return {boolean}
+     */
+    contain: function (x, y) {
+        return this.rectContain(x, y);
+    },
+
+    /**
+     * @param  {Function} cb
+     * @param  {}   context
+     */
+    traverse: function (cb, context) {
+        cb.call(context, this);
+    },
+
+    /**
+     * 判断坐标 x, y 是否在图形的包围盒上
+     * If bounding rect of element contain coord x, y
+     * @param  {number} x
+     * @param  {number} y
+     * @return {boolean}
+     */
+    rectContain: function (x, y) {
+        var coord = this.transformCoordToLocal(x, y);
+        var rect = this.getBoundingRect();
+        return rect.contain(coord[0], coord[1]);
+    },
+
+    /**
+     * 标记图形元素为脏，并且在下一帧重绘
+     * Mark displayable element dirty and refresh next frame
+     */
+    dirty: function () {
+        this.__dirty = this.__dirtyText = true;
+
+        this._rect = null;
+
+        this.__zr && this.__zr.refresh();
+    },
+
+    /**
+     * 图形是否会触发事件
+     * If displayable object binded any event
+     * @return {boolean}
+     */
+    // TODO, 通过 bind 绑定的事件
+    // isSilent: function () {
+    //     return !(
+    //         this.hoverable || this.draggable
+    //         || this.onmousemove || this.onmouseover || this.onmouseout
+    //         || this.onmousedown || this.onmouseup || this.onclick
+    //         || this.ondragenter || this.ondragover || this.ondragleave
+    //         || this.ondrop
+    //     );
+    // },
+    /**
+     * Alias for animate('style')
+     * @param {boolean} loop
+     */
+    animateStyle: function (loop) {
+        return this.animate('style', loop);
+    },
+
+    attrKV: function (key, value) {
+        if (key !== 'style') {
+            Element.prototype.attrKV.call(this, key, value);
+        }
+        else {
+            this.style.set(value);
+        }
+    },
+
+    /**
+     * @param {Object|string} key
+     * @param {*} value
+     */
+    setStyle: function (key, value) {
+        this.style.set(key, value);
+        this.dirty(false);
+        return this;
+    },
+
+    /**
+     * Use given style object
+     * @param  {Object} obj
+     */
+    useStyle: function (obj) {
+        this.style = new Style(obj, this);
+        this.dirty(false);
+        return this;
+    }
+};
+
+inherits(Displayable, Element);
+
+mixin(Displayable, RectText);
+
+/**
+ * @alias zrender/graphic/Image
+ * @extends module:zrender/graphic/Displayable
+ * @constructor
+ * @param {Object} opts
+ */
+function ZImage(opts) {
+    Displayable.call(this, opts);
+}
+
+ZImage.prototype = {
+
+    constructor: ZImage,
+
+    type: 'image',
+
+    brush: function (ctx, prevEl) {
+        var style = this.style;
+        var src = style.image;
+
+        // Must bind each time
+        style.bind(ctx, this, prevEl);
+
+        var image = this._image = createOrUpdateImage(
+            src,
+            this._image,
+            this,
+            this.onload
+        );
+
+        if (!image || !isImageReady(image)) {
+            return;
+        }
+
+        // 图片已经加载完成
+        // if (image.nodeName.toUpperCase() == 'IMG') {
+        //     if (!image.complete) {
+        //         return;
+        //     }
+        // }
+        // Else is canvas
+
+        var x = style.x || 0;
+        var y = style.y || 0;
+        var width = style.width;
+        var height = style.height;
+        var aspect = image.width / image.height;
+        if (width == null && height != null) {
+            // Keep image/height ratio
+            width = height * aspect;
+        }
+        else if (height == null && width != null) {
+            height = width / aspect;
+        }
+        else if (width == null && height == null) {
+            width = image.width;
+            height = image.height;
+        }
+
+        // 设置transform
+        this.setTransform(ctx);
+
+        if (style.sWidth && style.sHeight) {
+            var sx = style.sx || 0;
+            var sy = style.sy || 0;
+            ctx.drawImage(
+                image,
+                sx, sy, style.sWidth, style.sHeight,
+                x, y, width, height
+            );
+        }
+        else if (style.sx && style.sy) {
+            var sx = style.sx;
+            var sy = style.sy;
+            var sWidth = width - sx;
+            var sHeight = height - sy;
+            ctx.drawImage(
+                image,
+                sx, sy, sWidth, sHeight,
+                x, y, width, height
+            );
+        }
+        else {
+            ctx.drawImage(image, x, y, width, height);
+        }
+
+        // Draw rect text
+        if (style.text != null) {
+            // Only restore transform when needs draw text.
+            this.restoreTransform(ctx);
+            this.drawRectText(ctx, this.getBoundingRect());
+        }
+    },
+
+    getBoundingRect: function () {
+        var style = this.style;
+        if (!this._rect) {
+            this._rect = new BoundingRect(
+                style.x || 0, style.y || 0, style.width || 0, style.height || 0
+            );
+        }
+        return this._rect;
+    }
+};
+
+inherits(ZImage, Displayable);
+
+var HOVER_LAYER_ZLEVEL = 1e5;
+var CANVAS_ZLEVEL = 314159;
+
+var EL_AFTER_INCREMENTAL_INC = 0.01;
+var INCREMENTAL_INC = 0.001;
+
+function parseInt10(val) {
+    return parseInt(val, 10);
+}
+
+function isLayerValid(layer) {
+    if (!layer) {
+        return false;
+    }
