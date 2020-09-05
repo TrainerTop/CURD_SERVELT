@@ -8705,3 +8705,276 @@ function getBoxPosition(blockHeiht, style, rect) {
             baseY = rect.y + parsePercent(textPosition[1], rect.height);
         }
         else {
+            var res = adjustTextPositionOnRect(
+                textPosition, rect, style.textDistance
+            );
+            baseX = res.x;
+            baseY = res.y;
+            // Default align and baseline when has textPosition
+            textAlign = textAlign || res.textAlign;
+            textVerticalAlign = textVerticalAlign || res.textVerticalAlign;
+        }
+
+        // textOffset is only support in RectText, otherwise
+        // we have to adjust boundingRect for textOffset.
+        var textOffset = style.textOffset;
+        if (textOffset) {
+            baseX += textOffset[0];
+            baseY += textOffset[1];
+        }
+    }
+
+    return {
+        baseX: baseX,
+        baseY: baseY,
+        textAlign: textAlign,
+        textVerticalAlign: textVerticalAlign
+    };
+}
+
+function setCtx(ctx, prop, value) {
+    ctx[prop] = fixShadow(ctx, prop, value);
+    return ctx[prop];
+}
+
+/**
+ * @param {string} [stroke] If specified, do not check style.textStroke.
+ * @param {string} [lineWidth] If specified, do not check style.textStroke.
+ * @param {number} style
+ */
+function getStroke(stroke, lineWidth) {
+    return (stroke == null || lineWidth <= 0 || stroke === 'transparent' || stroke === 'none')
+        ? null
+        // TODO pattern and gradient?
+        : (stroke.image || stroke.colorStops)
+        ? '#000'
+        : stroke;
+}
+
+function getFill(fill) {
+    return (fill == null || fill === 'none')
+        ? null
+        // TODO pattern and gradient?
+        : (fill.image || fill.colorStops)
+        ? '#000'
+        : fill;
+}
+
+function parsePercent(value, maxValue) {
+    if (typeof value === 'string') {
+        if (value.lastIndexOf('%') >= 0) {
+            return parseFloat(value) / 100 * maxValue;
+        }
+        return parseFloat(value);
+    }
+    return value;
+}
+
+function getTextXForPadding(x, textAlign, textPadding) {
+    return textAlign === 'right'
+        ? (x - textPadding[1])
+        : textAlign === 'center'
+        ? (x + textPadding[3] / 2 - textPadding[1] / 2)
+        : (x + textPadding[3]);
+}
+
+/**
+ * @param {string} text
+ * @param {module:zrender/Style} style
+ * @return {boolean}
+ */
+function needDrawText(text, style) {
+    return text != null
+        && (text
+            || style.textBackgroundColor
+            || (style.textBorderWidth && style.textBorderColor)
+            || style.textPadding
+        );
+}
+
+/**
+ * Mixin for drawing text in a element bounding rect
+ * @module zrender/mixin/RectText
+ */
+
+var tmpRect$1 = new BoundingRect();
+
+var RectText = function () {};
+
+RectText.prototype = {
+
+    constructor: RectText,
+
+    /**
+     * Draw text in a rect with specified position.
+     * @param  {CanvasRenderingContext2D} ctx
+     * @param  {Object} rect Displayable rect
+     */
+    drawRectText: function (ctx, rect) {
+        var style = this.style;
+
+        rect = style.textRect || rect;
+
+        // Optimize, avoid normalize every time.
+        this.__dirty && normalizeTextStyle(style, true);
+
+        var text = style.text;
+
+        // Convert to string
+        text != null && (text += '');
+
+        if (!needDrawText(text, style)) {
+            return;
+        }
+
+        // FIXME
+        // Do not provide prevEl to `textHelper.renderText` for ctx prop cache,
+        // but use `ctx.save()` and `ctx.restore()`. Because the cache for rect
+        // text propably break the cache for its host elements.
+        ctx.save();
+
+        // Transform rect to view space
+        var transform = this.transform;
+        if (!style.transformText) {
+            if (transform) {
+                tmpRect$1.copy(rect);
+                tmpRect$1.applyTransform(transform);
+                rect = tmpRect$1;
+            }
+        }
+        else {
+            this.setTransform(ctx);
+        }
+
+        // transformText and textRotation can not be used at the same time.
+        renderText(this, ctx, text, style, rect, WILL_BE_RESTORED);
+
+        ctx.restore();
+    }
+};
+
+/**
+ * 可绘制的图形基类
+ * Base class of all displayable graphic objects
+ * @module zrender/graphic/Displayable
+ */
+
+
+/**
+ * @alias module:zrender/graphic/Displayable
+ * @extends module:zrender/Element
+ * @extends module:zrender/graphic/mixin/RectText
+ */
+function Displayable(opts) {
+
+    opts = opts || {};
+
+    Element.call(this, opts);
+
+    // Extend properties
+    for (var name in opts) {
+        if (
+            opts.hasOwnProperty(name)
+                && name !== 'style'
+        ) {
+            this[name] = opts[name];
+        }
+    }
+
+    /**
+     * @type {module:zrender/graphic/Style}
+     */
+    this.style = new Style(opts.style, this);
+
+    this._rect = null;
+    // Shapes for cascade clipping.
+    this.__clipPaths = [];
+
+    // FIXME Stateful must be mixined after style is setted
+    // Stateful.call(this, opts);
+}
+
+Displayable.prototype = {
+
+    constructor: Displayable,
+
+    type: 'displayable',
+
+    /**
+     * Displayable 是否为脏，Painter 中会根据该标记判断是否需要是否需要重新绘制
+     * Dirty flag. From which painter will determine if this displayable object needs brush
+     * @name module:zrender/graphic/Displayable#__dirty
+     * @type {boolean}
+     */
+    __dirty: true,
+
+    /**
+     * 图形是否可见，为true时不绘制图形，但是仍能触发鼠标事件
+     * If ignore drawing of the displayable object. Mouse event will still be triggered
+     * @name module:/zrender/graphic/Displayable#invisible
+     * @type {boolean}
+     * @default false
+     */
+    invisible: false,
+
+    /**
+     * @name module:/zrender/graphic/Displayable#z
+     * @type {number}
+     * @default 0
+     */
+    z: 0,
+
+    /**
+     * @name module:/zrender/graphic/Displayable#z
+     * @type {number}
+     * @default 0
+     */
+    z2: 0,
+
+    /**
+     * z层level，决定绘画在哪层canvas中
+     * @name module:/zrender/graphic/Displayable#zlevel
+     * @type {number}
+     * @default 0
+     */
+    zlevel: 0,
+
+    /**
+     * 是否可拖拽
+     * @name module:/zrender/graphic/Displayable#draggable
+     * @type {boolean}
+     * @default false
+     */
+    draggable: false,
+
+    /**
+     * 是否正在拖拽
+     * @name module:/zrender/graphic/Displayable#draggable
+     * @type {boolean}
+     * @default false
+     */
+    dragging: false,
+
+    /**
+     * 是否相应鼠标事件
+     * @name module:/zrender/graphic/Displayable#silent
+     * @type {boolean}
+     * @default false
+     */
+    silent: false,
+
+    /**
+     * If enable culling
+     * @type {boolean}
+     * @default false
+     */
+    culling: false,
+
+    /**
+     * Mouse cursor when hovered
+     * @name module:/zrender/graphic/Displayable#cursor
+     * @type {string}
+     */
+    cursor: 'pointer',
+
+    /**
