@@ -9241,3 +9241,268 @@ function isLayerValid(layer) {
     if (!layer) {
         return false;
     }
+
+    if (layer.__builtin__) {
+        return true;
+    }
+
+    if (typeof (layer.resize) !== 'function'
+        || typeof (layer.refresh) !== 'function'
+    ) {
+        return false;
+    }
+
+    return true;
+}
+
+var tmpRect = new BoundingRect(0, 0, 0, 0);
+var viewRect = new BoundingRect(0, 0, 0, 0);
+function isDisplayableCulled(el, width, height) {
+    tmpRect.copy(el.getBoundingRect());
+    if (el.transform) {
+        tmpRect.applyTransform(el.transform);
+    }
+    viewRect.width = width;
+    viewRect.height = height;
+    return !tmpRect.intersect(viewRect);
+}
+
+function isClipPathChanged(clipPaths, prevClipPaths) {
+    if (clipPaths === prevClipPaths) { // Can both be null or undefined
+        return false;
+    }
+
+    if (!clipPaths || !prevClipPaths || (clipPaths.length !== prevClipPaths.length)) {
+        return true;
+    }
+    for (var i = 0; i < clipPaths.length; i++) {
+        if (clipPaths[i] !== prevClipPaths[i]) {
+            return true;
+        }
+    }
+}
+
+function doClip(clipPaths, ctx) {
+    for (var i = 0; i < clipPaths.length; i++) {
+        var clipPath = clipPaths[i];
+
+        clipPath.setTransform(ctx);
+        ctx.beginPath();
+        clipPath.buildPath(ctx, clipPath.shape);
+        ctx.clip();
+        // Transform back
+        clipPath.restoreTransform(ctx);
+    }
+}
+
+function createRoot(width, height) {
+    var domRoot = document.createElement('div');
+
+    // domRoot.onselectstart = returnFalse; // 避免页面选中的尴尬
+    domRoot.style.cssText = [
+        'position:relative',
+        'overflow:hidden',
+        'width:' + width + 'px',
+        'height:' + height + 'px',
+        'padding:0',
+        'margin:0',
+        'border-width:0'
+    ].join(';') + ';';
+
+    return domRoot;
+}
+
+
+/**
+ * @alias module:zrender/Painter
+ * @constructor
+ * @param {HTMLElement} root 绘图容器
+ * @param {module:zrender/Storage} storage
+ * @param {Object} opts
+ */
+var Painter = function (root, storage, opts) {
+
+    this.type = 'canvas';
+
+    // In node environment using node-canvas
+    var singleCanvas = !root.nodeName // In node ?
+        || root.nodeName.toUpperCase() === 'CANVAS';
+
+    this._opts = opts = extend({}, opts || {});
+
+    /**
+     * @type {number}
+     */
+    this.dpr = opts.devicePixelRatio || devicePixelRatio;
+    /**
+     * @type {boolean}
+     * @private
+     */
+    this._singleCanvas = singleCanvas;
+    /**
+     * 绘图容器
+     * @type {HTMLElement}
+     */
+    this.root = root;
+
+    var rootStyle = root.style;
+
+    if (rootStyle) {
+        rootStyle['-webkit-tap-highlight-color'] = 'transparent';
+        rootStyle['-webkit-user-select'] =
+        rootStyle['user-select'] =
+        rootStyle['-webkit-touch-callout'] = 'none';
+
+        root.innerHTML = '';
+    }
+
+    /**
+     * @type {module:zrender/Storage}
+     */
+    this.storage = storage;
+
+    /**
+     * @type {Array.<number>}
+     * @private
+     */
+    var zlevelList = this._zlevelList = [];
+
+    /**
+     * @type {Object.<string, module:zrender/Layer>}
+     * @private
+     */
+    var layers = this._layers = {};
+
+    /**
+     * @type {Object.<string, Object>}
+     * @private
+     */
+    this._layerConfig = {};
+
+    /**
+     * zrender will do compositing when root is a canvas and have multiple zlevels.
+     */
+    this._needsManuallyCompositing = false;
+
+    if (!singleCanvas) {
+        this._width = this._getSize(0);
+        this._height = this._getSize(1);
+
+        var domRoot = this._domRoot = createRoot(
+            this._width, this._height
+        );
+        root.appendChild(domRoot);
+    }
+    else {
+        var width = root.width;
+        var height = root.height;
+
+        if (opts.width != null) {
+            width = opts.width;
+        }
+        if (opts.height != null) {
+            height = opts.height;
+        }
+        this.dpr = opts.devicePixelRatio || 1;
+
+        // Use canvas width and height directly
+        root.width = width * this.dpr;
+        root.height = height * this.dpr;
+
+        this._width = width;
+        this._height = height;
+
+        // Create layer if only one given canvas
+        // Device can be specified to create a high dpi image.
+        var mainLayer = new Layer(root, this, this.dpr);
+        mainLayer.__builtin__ = true;
+        mainLayer.initContext();
+        // FIXME Use canvas width and height
+        // mainLayer.resize(width, height);
+        layers[CANVAS_ZLEVEL] = mainLayer;
+        mainLayer.zlevel = CANVAS_ZLEVEL;
+        // Not use common zlevel.
+        zlevelList.push(CANVAS_ZLEVEL);
+
+        this._domRoot = root;
+    }
+
+    /**
+     * @type {module:zrender/Layer}
+     * @private
+     */
+    this._hoverlayer = null;
+
+    this._hoverElements = [];
+};
+
+Painter.prototype = {
+
+    constructor: Painter,
+
+    getType: function () {
+        return 'canvas';
+    },
+
+    /**
+     * If painter use a single canvas
+     * @return {boolean}
+     */
+    isSingleCanvas: function () {
+        return this._singleCanvas;
+    },
+    /**
+     * @return {HTMLDivElement}
+     */
+    getViewportRoot: function () {
+        return this._domRoot;
+    },
+
+    getViewportRootOffset: function () {
+        var viewportRoot = this.getViewportRoot();
+        if (viewportRoot) {
+            return {
+                offsetLeft: viewportRoot.offsetLeft || 0,
+                offsetTop: viewportRoot.offsetTop || 0
+            };
+        }
+    },
+
+    /**
+     * 刷新
+     * @param {boolean} [paintAll=false] 强制绘制所有displayable
+     */
+    refresh: function (paintAll) {
+
+        var list = this.storage.getDisplayList(true);
+
+        var zlevelList = this._zlevelList;
+
+        this._redrawId = Math.random();
+
+        this._paintList(list, paintAll, this._redrawId);
+
+        // Paint custum layers
+        for (var i = 0; i < zlevelList.length; i++) {
+            var z = zlevelList[i];
+            var layer = this._layers[z];
+            if (!layer.__builtin__ && layer.refresh) {
+                var clearColor = i === 0 ? this._backgroundColor : null;
+                layer.refresh(clearColor);
+            }
+        }
+
+        this.refreshHover();
+
+        return this;
+    },
+
+    addHover: function (el, hoverStyle) {
+        if (el.__hoverMir) {
+            return;
+        }
+        var elMirror = new el.constructor({
+            style: el.style,
+            shape: el.shape,
+            z: el.z,
+            z2: el.z2,
