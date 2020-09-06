@@ -10012,3 +10012,267 @@ Painter.prototype = {
      *                 在开启动态模糊的时候使用，与上一帧混合的alpha值，值越大尾迹越明显
      */
     configLayer: function (zlevel, config) {
+        if (config) {
+            var layerConfig = this._layerConfig;
+            if (!layerConfig[zlevel]) {
+                layerConfig[zlevel] = config;
+            }
+            else {
+                merge(layerConfig[zlevel], config, true);
+            }
+
+            for (var i = 0; i < this._zlevelList.length; i++) {
+                var _zlevel = this._zlevelList[i];
+                if (_zlevel === zlevel || _zlevel === zlevel + EL_AFTER_INCREMENTAL_INC) {
+                    var layer = this._layers[_zlevel];
+                    merge(layer, layerConfig[zlevel], true);
+                }
+            }
+        }
+    },
+
+    /**
+     * 删除指定层
+     * @param {number} zlevel 层所在的zlevel
+     */
+    delLayer: function (zlevel) {
+        var layers = this._layers;
+        var zlevelList = this._zlevelList;
+        var layer = layers[zlevel];
+        if (!layer) {
+            return;
+        }
+        layer.dom.parentNode.removeChild(layer.dom);
+        delete layers[zlevel];
+
+        zlevelList.splice(indexOf(zlevelList, zlevel), 1);
+    },
+
+    /**
+     * 区域大小变化后重绘
+     */
+    resize: function (width, height) {
+        if (!this._domRoot.style) { // Maybe in node or worker
+            if (width == null || height == null) {
+                return;
+            }
+            this._width = width;
+            this._height = height;
+
+            this.getLayer(CANVAS_ZLEVEL).resize(width, height);
+        }
+        else {
+            var domRoot = this._domRoot;
+            // FIXME Why ?
+            domRoot.style.display = 'none';
+
+            // Save input w/h
+            var opts = this._opts;
+            width != null && (opts.width = width);
+            height != null && (opts.height = height);
+
+            width = this._getSize(0);
+            height = this._getSize(1);
+
+            domRoot.style.display = '';
+
+            // 优化没有实际改变的resize
+            if (this._width !== width || height !== this._height) {
+                domRoot.style.width = width + 'px';
+                domRoot.style.height = height + 'px';
+
+                for (var id in this._layers) {
+                    if (this._layers.hasOwnProperty(id)) {
+                        this._layers[id].resize(width, height);
+                    }
+                }
+                each$1(this._progressiveLayers, function (layer) {
+                    layer.resize(width, height);
+                });
+
+                this.refresh(true);
+            }
+
+            this._width = width;
+            this._height = height;
+
+        }
+        return this;
+    },
+
+    /**
+     * 清除单独的一个层
+     * @param {number} zlevel
+     */
+    clearLayer: function (zlevel) {
+        var layer = this._layers[zlevel];
+        if (layer) {
+            layer.clear();
+        }
+    },
+
+    /**
+     * 释放
+     */
+    dispose: function () {
+        this.root.innerHTML = '';
+
+        this.root =
+        this.storage =
+
+        this._domRoot =
+        this._layers = null;
+    },
+
+    /**
+     * Get canvas which has all thing rendered
+     * @param {Object} opts
+     * @param {string} [opts.backgroundColor]
+     * @param {number} [opts.pixelRatio]
+     */
+    getRenderedCanvas: function (opts) {
+        opts = opts || {};
+        if (this._singleCanvas && !this._compositeManually) {
+            return this._layers[CANVAS_ZLEVEL].dom;
+        }
+
+        var imageLayer = new Layer('image', this, opts.pixelRatio || this.dpr);
+        imageLayer.initContext();
+        imageLayer.clear(false, opts.backgroundColor || this._backgroundColor);
+
+        if (opts.pixelRatio <= this.dpr) {
+            this.refresh();
+
+            var width = imageLayer.dom.width;
+            var height = imageLayer.dom.height;
+            var ctx = imageLayer.ctx;
+            this.eachLayer(function (layer) {
+                if (layer.__builtin__) {
+                    ctx.drawImage(layer.dom, 0, 0, width, height);
+                }
+                else if (layer.renderToCanvas) {
+                    imageLayer.ctx.save();
+                    layer.renderToCanvas(imageLayer.ctx);
+                    imageLayer.ctx.restore();
+                }
+            });
+        }
+        else {
+            // PENDING, echarts-gl and incremental rendering.
+            var scope = {};
+            var displayList = this.storage.getDisplayList(true);
+            for (var i = 0; i < displayList.length; i++) {
+                var el = displayList[i];
+                this._doPaintEl(el, imageLayer, true, scope);
+            }
+        }
+
+        return imageLayer.dom;
+    },
+    /**
+     * 获取绘图区域宽度
+     */
+    getWidth: function () {
+        return this._width;
+    },
+
+    /**
+     * 获取绘图区域高度
+     */
+    getHeight: function () {
+        return this._height;
+    },
+
+    _getSize: function (whIdx) {
+        var opts = this._opts;
+        var wh = ['width', 'height'][whIdx];
+        var cwh = ['clientWidth', 'clientHeight'][whIdx];
+        var plt = ['paddingLeft', 'paddingTop'][whIdx];
+        var prb = ['paddingRight', 'paddingBottom'][whIdx];
+
+        if (opts[wh] != null && opts[wh] !== 'auto') {
+            return parseFloat(opts[wh]);
+        }
+
+        var root = this.root;
+        // IE8 does not support getComputedStyle, but it use VML.
+        var stl = document.defaultView.getComputedStyle(root);
+
+        return (
+            (root[cwh] || parseInt10(stl[wh]) || parseInt10(root.style[wh]))
+            - (parseInt10(stl[plt]) || 0)
+            - (parseInt10(stl[prb]) || 0)
+        ) | 0;
+    },
+
+    pathToImage: function (path, dpr) {
+        dpr = dpr || this.dpr;
+
+        var canvas = document.createElement('canvas');
+        var ctx = canvas.getContext('2d');
+        var rect = path.getBoundingRect();
+        var style = path.style;
+        var shadowBlurSize = style.shadowBlur * dpr;
+        var shadowOffsetX = style.shadowOffsetX * dpr;
+        var shadowOffsetY = style.shadowOffsetY * dpr;
+        var lineWidth = style.hasStroke() ? style.lineWidth : 0;
+
+        var leftMargin = Math.max(lineWidth / 2, -shadowOffsetX + shadowBlurSize);
+        var rightMargin = Math.max(lineWidth / 2, shadowOffsetX + shadowBlurSize);
+        var topMargin = Math.max(lineWidth / 2, -shadowOffsetY + shadowBlurSize);
+        var bottomMargin = Math.max(lineWidth / 2, shadowOffsetY + shadowBlurSize);
+        var width = rect.width + leftMargin + rightMargin;
+        var height = rect.height + topMargin + bottomMargin;
+
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+
+        ctx.scale(dpr, dpr);
+        ctx.clearRect(0, 0, width, height);
+        ctx.dpr = dpr;
+
+        var pathTransform = {
+            position: path.position,
+            rotation: path.rotation,
+            scale: path.scale
+        };
+        path.position = [leftMargin - rect.x, topMargin - rect.y];
+        path.rotation = 0;
+        path.scale = [1, 1];
+        path.updateTransform();
+        if (path) {
+            path.brush(ctx);
+        }
+
+        var ImageShape = ZImage;
+        var imgShape = new ImageShape({
+            style: {
+                x: 0,
+                y: 0,
+                image: canvas
+            }
+        });
+
+        if (pathTransform.position != null) {
+            imgShape.position = path.position = pathTransform.position;
+        }
+
+        if (pathTransform.rotation != null) {
+            imgShape.rotation = path.rotation = pathTransform.rotation;
+        }
+
+        if (pathTransform.scale != null) {
+            imgShape.scale = path.scale = pathTransform.scale;
+        }
+
+        return imgShape;
+    }
+};
+
+/**
+ * 动画主类, 调度和管理所有动画控制器
+ *
+ * @module zrender/animation/Animation
+ * @author pissang(https://github.com/pissang)
+ */
+// TODO Additive animation
