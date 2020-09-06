@@ -9746,3 +9746,269 @@ Painter.prototype = {
                 }
             }
             el.beforeBrush && el.beforeBrush(ctx);
+
+            el.brush(ctx, scope.prevEl || null);
+            scope.prevEl = el;
+
+            el.afterBrush && el.afterBrush(ctx);
+        }
+    },
+
+    /**
+     * 获取 zlevel 所在层，如果不存在则会创建一个新的层
+     * @param {number} zlevel
+     * @param {boolean} virtual Virtual layer will not be inserted into dom.
+     * @return {module:zrender/Layer}
+     */
+    getLayer: function (zlevel, virtual) {
+        if (this._singleCanvas && !this._needsManuallyCompositing) {
+            zlevel = CANVAS_ZLEVEL;
+        }
+        var layer = this._layers[zlevel];
+        if (!layer) {
+            // Create a new layer
+            layer = new Layer('zr_' + zlevel, this, this.dpr);
+            layer.zlevel = zlevel;
+            layer.__builtin__ = true;
+
+            if (this._layerConfig[zlevel]) {
+                merge(layer, this._layerConfig[zlevel], true);
+            }
+
+            if (virtual) {
+                layer.virtual = virtual;
+            }
+
+            this.insertLayer(zlevel, layer);
+
+            // Context is created after dom inserted to document
+            // Or excanvas will get 0px clientWidth and clientHeight
+            layer.initContext();
+        }
+
+        return layer;
+    },
+
+    insertLayer: function (zlevel, layer) {
+
+        var layersMap = this._layers;
+        var zlevelList = this._zlevelList;
+        var len = zlevelList.length;
+        var prevLayer = null;
+        var i = -1;
+        var domRoot = this._domRoot;
+
+        if (layersMap[zlevel]) {
+            zrLog('ZLevel ' + zlevel + ' has been used already');
+            return;
+        }
+        // Check if is a valid layer
+        if (!isLayerValid(layer)) {
+            zrLog('Layer of zlevel ' + zlevel + ' is not valid');
+            return;
+        }
+
+        if (len > 0 && zlevel > zlevelList[0]) {
+            for (i = 0; i < len - 1; i++) {
+                if (
+                    zlevelList[i] < zlevel
+                    && zlevelList[i + 1] > zlevel
+                ) {
+                    break;
+                }
+            }
+            prevLayer = layersMap[zlevelList[i]];
+        }
+        zlevelList.splice(i + 1, 0, zlevel);
+
+        layersMap[zlevel] = layer;
+
+        // Vitual layer will not directly show on the screen.
+        // (It can be a WebGL layer and assigned to a ZImage element)
+        // But it still under management of zrender.
+        if (!layer.virtual) {
+            if (prevLayer) {
+                var prevDom = prevLayer.dom;
+                if (prevDom.nextSibling) {
+                    domRoot.insertBefore(
+                        layer.dom,
+                        prevDom.nextSibling
+                    );
+                }
+                else {
+                    domRoot.appendChild(layer.dom);
+                }
+            }
+            else {
+                if (domRoot.firstChild) {
+                    domRoot.insertBefore(layer.dom, domRoot.firstChild);
+                }
+                else {
+                    domRoot.appendChild(layer.dom);
+                }
+            }
+        }
+    },
+
+    // Iterate each layer
+    eachLayer: function (cb, context) {
+        var zlevelList = this._zlevelList;
+        var z;
+        var i;
+        for (i = 0; i < zlevelList.length; i++) {
+            z = zlevelList[i];
+            cb.call(context, this._layers[z], z);
+        }
+    },
+
+    // Iterate each buildin layer
+    eachBuiltinLayer: function (cb, context) {
+        var zlevelList = this._zlevelList;
+        var layer;
+        var z;
+        var i;
+        for (i = 0; i < zlevelList.length; i++) {
+            z = zlevelList[i];
+            layer = this._layers[z];
+            if (layer.__builtin__) {
+                cb.call(context, layer, z);
+            }
+        }
+    },
+
+    // Iterate each other layer except buildin layer
+    eachOtherLayer: function (cb, context) {
+        var zlevelList = this._zlevelList;
+        var layer;
+        var z;
+        var i;
+        for (i = 0; i < zlevelList.length; i++) {
+            z = zlevelList[i];
+            layer = this._layers[z];
+            if (!layer.__builtin__) {
+                cb.call(context, layer, z);
+            }
+        }
+    },
+
+    /**
+     * 获取所有已创建的层
+     * @param {Array.<module:zrender/Layer>} [prevLayer]
+     */
+    getLayers: function () {
+        return this._layers;
+    },
+
+    _updateLayerStatus: function (list) {
+
+        this.eachBuiltinLayer(function (layer, z) {
+            layer.__dirty = layer.__used = false;
+        });
+
+        function updatePrevLayer(idx) {
+            if (prevLayer) {
+                if (prevLayer.__endIndex !== idx) {
+                    prevLayer.__dirty = true;
+                }
+                prevLayer.__endIndex = idx;
+            }
+        }
+
+        if (this._singleCanvas) {
+            for (var i = 1; i < list.length; i++) {
+                var el = list[i];
+                if (el.zlevel !== list[i - 1].zlevel || el.incremental) {
+                    this._needsManuallyCompositing = true;
+                    break;
+                }
+            }
+        }
+
+        var prevLayer = null;
+        var incrementalLayerCount = 0;
+        for (var i = 0; i < list.length; i++) {
+            var el = list[i];
+            var zlevel = el.zlevel;
+            var layer;
+            // PENDING If change one incremental element style ?
+            // TODO Where there are non-incremental elements between incremental elements.
+            if (el.incremental) {
+                layer = this.getLayer(zlevel + INCREMENTAL_INC, this._needsManuallyCompositing);
+                layer.incremental = true;
+                incrementalLayerCount = 1;
+            }
+            else {
+                layer = this.getLayer(zlevel + (incrementalLayerCount > 0 ? EL_AFTER_INCREMENTAL_INC : 0), this._needsManuallyCompositing);
+            }
+
+            if (!layer.__builtin__) {
+                zrLog('ZLevel ' + zlevel + ' has been used by unkown layer ' + layer.id);
+            }
+
+            if (layer !== prevLayer) {
+                layer.__used = true;
+                if (layer.__startIndex !== i) {
+                    layer.__dirty = true;
+                }
+                layer.__startIndex = i;
+                if (!layer.incremental) {
+                    layer.__drawIndex = i;
+                }
+                else {
+                    // Mark layer draw index needs to update.
+                    layer.__drawIndex = -1;
+                }
+                updatePrevLayer(i);
+                prevLayer = layer;
+            }
+            if (el.__dirty) {
+                layer.__dirty = true;
+                if (layer.incremental && layer.__drawIndex < 0) {
+                    // Start draw from the first dirty element.
+                    layer.__drawIndex = i;
+                }
+            }
+        }
+
+        updatePrevLayer(i);
+
+        this.eachBuiltinLayer(function (layer, z) {
+            // Used in last frame but not in this frame. Needs clear
+            if (!layer.__used && layer.getElementCount() > 0) {
+                layer.__dirty = true;
+                layer.__startIndex = layer.__endIndex = layer.__drawIndex = 0;
+            }
+            // For incremental layer. In case start index changed and no elements are dirty.
+            if (layer.__dirty && layer.__drawIndex < 0) {
+                layer.__drawIndex = layer.__startIndex;
+            }
+        });
+    },
+
+    /**
+     * 清除hover层外所有内容
+     */
+    clear: function () {
+        this.eachBuiltinLayer(this._clearLayer);
+        return this;
+    },
+
+    _clearLayer: function (layer) {
+        layer.clear();
+    },
+
+    setBackgroundColor: function (backgroundColor) {
+        this._backgroundColor = backgroundColor;
+    },
+
+    /**
+     * 修改指定zlevel的绘制参数
+     *
+     * @param {string} zlevel
+     * @param {Object} config 配置对象
+     * @param {string} [config.clearColor=0] 每次清空画布的颜色
+     * @param {string} [config.motionBlur=false] 是否开启动态模糊
+     * @param {number} [config.lastFrameAlpha=0.7]
+     *                 在开启动态模糊的时候使用，与上一帧混合的alpha值，值越大尾迹越明显
+     */
+    configLayer: function (zlevel, config) {
