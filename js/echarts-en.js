@@ -9506,3 +9506,243 @@ Painter.prototype = {
             shape: el.shape,
             z: el.z,
             z2: el.z2,
+            silent: el.silent
+        });
+        elMirror.__from = el;
+        el.__hoverMir = elMirror;
+        hoverStyle && elMirror.setStyle(hoverStyle);
+        this._hoverElements.push(elMirror);
+
+        return elMirror;
+    },
+
+    removeHover: function (el) {
+        var elMirror = el.__hoverMir;
+        var hoverElements = this._hoverElements;
+        var idx = indexOf(hoverElements, elMirror);
+        if (idx >= 0) {
+            hoverElements.splice(idx, 1);
+        }
+        el.__hoverMir = null;
+    },
+
+    clearHover: function (el) {
+        var hoverElements = this._hoverElements;
+        for (var i = 0; i < hoverElements.length; i++) {
+            var from = hoverElements[i].__from;
+            if (from) {
+                from.__hoverMir = null;
+            }
+        }
+        hoverElements.length = 0;
+    },
+
+    refreshHover: function () {
+        var hoverElements = this._hoverElements;
+        var len = hoverElements.length;
+        var hoverLayer = this._hoverlayer;
+        hoverLayer && hoverLayer.clear();
+
+        if (!len) {
+            return;
+        }
+        sort(hoverElements, this.storage.displayableSortFunc);
+
+        // Use a extream large zlevel
+        // FIXME?
+        if (!hoverLayer) {
+            hoverLayer = this._hoverlayer = this.getLayer(HOVER_LAYER_ZLEVEL);
+        }
+
+        var scope = {};
+        hoverLayer.ctx.save();
+        for (var i = 0; i < len;) {
+            var el = hoverElements[i];
+            var originalEl = el.__from;
+            // Original el is removed
+            // PENDING
+            if (!(originalEl && originalEl.__zr)) {
+                hoverElements.splice(i, 1);
+                originalEl.__hoverMir = null;
+                len--;
+                continue;
+            }
+            i++;
+
+            // Use transform
+            // FIXME style and shape ?
+            if (!originalEl.invisible) {
+                el.transform = originalEl.transform;
+                el.invTransform = originalEl.invTransform;
+                el.__clipPaths = originalEl.__clipPaths;
+                // el.
+                this._doPaintEl(el, hoverLayer, true, scope);
+            }
+        }
+
+        hoverLayer.ctx.restore();
+    },
+
+    getHoverLayer: function () {
+        return this.getLayer(HOVER_LAYER_ZLEVEL);
+    },
+
+    _paintList: function (list, paintAll, redrawId) {
+        if (this._redrawId !== redrawId) {
+            return;
+        }
+
+        paintAll = paintAll || false;
+
+        this._updateLayerStatus(list);
+
+        var finished = this._doPaintList(list, paintAll);
+
+        if (this._needsManuallyCompositing) {
+            this._compositeManually();
+        }
+
+        if (!finished) {
+            var self = this;
+            requestAnimationFrame(function () {
+                self._paintList(list, paintAll, redrawId);
+            });
+        }
+    },
+
+    _compositeManually: function () {
+        var ctx = this.getLayer(CANVAS_ZLEVEL).ctx;
+        var width = this._domRoot.width;
+        var height = this._domRoot.height;
+        ctx.clearRect(0, 0, width, height);
+        // PENDING, If only builtin layer?
+        this.eachBuiltinLayer(function (layer) {
+            if (layer.virtual) {
+                ctx.drawImage(layer.dom, 0, 0, width, height);
+            }
+        });
+    },
+
+    _doPaintList: function (list, paintAll) {
+        var layerList = [];
+        for (var zi = 0; zi < this._zlevelList.length; zi++) {
+            var zlevel = this._zlevelList[zi];
+            var layer = this._layers[zlevel];
+            if (layer.__builtin__
+                && layer !== this._hoverlayer
+                && (layer.__dirty || paintAll)
+            ) {
+                layerList.push(layer);
+            }
+        }
+
+        var finished = true;
+
+        for (var k = 0; k < layerList.length; k++) {
+            var layer = layerList[k];
+            var ctx = layer.ctx;
+            var scope = {};
+            ctx.save();
+
+            var start = paintAll ? layer.__startIndex : layer.__drawIndex;
+
+            var useTimer = !paintAll && layer.incremental && Date.now;
+            var startTime = useTimer && Date.now();
+
+            var clearColor = layer.zlevel === this._zlevelList[0]
+                ? this._backgroundColor : null;
+            // All elements in this layer are cleared.
+            if (layer.__startIndex === layer.__endIndex) {
+                layer.clear(false, clearColor);
+            }
+            else if (start === layer.__startIndex) {
+                var firstEl = list[start];
+                if (!firstEl.incremental || !firstEl.notClear || paintAll) {
+                    layer.clear(false, clearColor);
+                }
+            }
+            if (start === -1) {
+                console.error('For some unknown reason. drawIndex is -1');
+                start = layer.__startIndex;
+            }
+            for (var i = start; i < layer.__endIndex; i++) {
+                var el = list[i];
+                this._doPaintEl(el, layer, paintAll, scope);
+                el.__dirty = el.__dirtyText = false;
+
+                if (useTimer) {
+                    // Date.now can be executed in 13,025,305 ops/second.
+                    var dTime = Date.now() - startTime;
+                    // Give 15 millisecond to draw.
+                    // The rest elements will be drawn in the next frame.
+                    if (dTime > 15) {
+                        break;
+                    }
+                }
+            }
+
+            layer.__drawIndex = i;
+
+            if (layer.__drawIndex < layer.__endIndex) {
+                finished = false;
+            }
+
+            if (scope.prevElClipPaths) {
+                // Needs restore the state. If last drawn element is in the clipping area.
+                ctx.restore();
+            }
+
+            ctx.restore();
+        }
+
+        if (env$1.wxa) {
+            // Flush for weixin application
+            each$1(this._layers, function (layer) {
+                if (layer && layer.ctx && layer.ctx.draw) {
+                    layer.ctx.draw();
+                }
+            });
+        }
+
+        return finished;
+    },
+
+    _doPaintEl: function (el, currentLayer, forcePaint, scope) {
+        var ctx = currentLayer.ctx;
+        var m = el.transform;
+        if (
+            (currentLayer.__dirty || forcePaint)
+            // Ignore invisible element
+            && !el.invisible
+            // Ignore transparent element
+            && el.style.opacity !== 0
+            // Ignore scale 0 element, in some environment like node-canvas
+            // Draw a scale 0 element can cause all following draw wrong
+            // And setTransform with scale 0 will cause set back transform failed.
+            && !(m && !m[0] && !m[3])
+            // Ignore culled element
+            && !(el.culling && isDisplayableCulled(el, this._width, this._height))
+        ) {
+
+            var clipPaths = el.__clipPaths;
+
+            // Optimize when clipping on group with several elements
+            if (!scope.prevElClipPaths
+                || isClipPathChanged(clipPaths, scope.prevElClipPaths)
+            ) {
+                // If has previous clipping state, restore from it
+                if (scope.prevElClipPaths) {
+                    currentLayer.ctx.restore();
+                    scope.prevElClipPaths = null;
+
+                    // Reset prevEl since context has been restored
+                    scope.prevEl = null;
+                }
+                // New clipping state
+                if (clipPaths) {
+                    ctx.save();
+                    doClip(clipPaths, ctx);
+                    scope.prevElClipPaths = clipPaths;
+                }
+            }
+            el.beforeBrush && el.beforeBrush(ctx);
