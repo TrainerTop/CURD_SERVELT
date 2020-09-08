@@ -10276,3 +10276,283 @@ Painter.prototype = {
  * @author pissang(https://github.com/pissang)
  */
 // TODO Additive animation
+// http://iosoteric.com/additive-animations-animatewithduration-in-ios-8/
+// https://developer.apple.com/videos/wwdc2014/#236
+
+/**
+ * @typedef {Object} IZRenderStage
+ * @property {Function} update
+ */
+
+/**
+ * @alias module:zrender/animation/Animation
+ * @constructor
+ * @param {Object} [options]
+ * @param {Function} [options.onframe]
+ * @param {IZRenderStage} [options.stage]
+ * @example
+ *     var animation = new Animation();
+ *     var obj = {
+ *         x: 100,
+ *         y: 100
+ *     };
+ *     animation.animate(node.position)
+ *         .when(1000, {
+ *             x: 500,
+ *             y: 500
+ *         })
+ *         .when(2000, {
+ *             x: 100,
+ *             y: 100
+ *         })
+ *         .start('spline');
+ */
+var Animation = function (options) {
+
+    options = options || {};
+
+    this.stage = options.stage || {};
+
+    this.onframe = options.onframe || function () {};
+
+    // private properties
+    this._clips = [];
+
+    this._running = false;
+
+    this._time;
+
+    this._pausedTime;
+
+    this._pauseStart;
+
+    this._paused = false;
+
+    Eventful.call(this);
+};
+
+Animation.prototype = {
+
+    constructor: Animation,
+    /**
+     * 添加 clip
+     * @param {module:zrender/animation/Clip} clip
+     */
+    addClip: function (clip) {
+        this._clips.push(clip);
+    },
+    /**
+     * 添加 animator
+     * @param {module:zrender/animation/Animator} animator
+     */
+    addAnimator: function (animator) {
+        animator.animation = this;
+        var clips = animator.getClips();
+        for (var i = 0; i < clips.length; i++) {
+            this.addClip(clips[i]);
+        }
+    },
+    /**
+     * 删除动画片段
+     * @param {module:zrender/animation/Clip} clip
+     */
+    removeClip: function (clip) {
+        var idx = indexOf(this._clips, clip);
+        if (idx >= 0) {
+            this._clips.splice(idx, 1);
+        }
+    },
+
+    /**
+     * 删除动画片段
+     * @param {module:zrender/animation/Animator} animator
+     */
+    removeAnimator: function (animator) {
+        var clips = animator.getClips();
+        for (var i = 0; i < clips.length; i++) {
+            this.removeClip(clips[i]);
+        }
+        animator.animation = null;
+    },
+
+    _update: function () {
+        var time = new Date().getTime() - this._pausedTime;
+        var delta = time - this._time;
+        var clips = this._clips;
+        var len = clips.length;
+
+        var deferredEvents = [];
+        var deferredClips = [];
+        for (var i = 0; i < len; i++) {
+            var clip = clips[i];
+            var e = clip.step(time, delta);
+            // Throw out the events need to be called after
+            // stage.update, like destroy
+            if (e) {
+                deferredEvents.push(e);
+                deferredClips.push(clip);
+            }
+        }
+
+        // Remove the finished clip
+        for (var i = 0; i < len;) {
+            if (clips[i]._needsRemove) {
+                clips[i] = clips[len - 1];
+                clips.pop();
+                len--;
+            }
+            else {
+                i++;
+            }
+        }
+
+        len = deferredEvents.length;
+        for (var i = 0; i < len; i++) {
+            deferredClips[i].fire(deferredEvents[i]);
+        }
+
+        this._time = time;
+
+        this.onframe(delta);
+
+        // 'frame' should be triggered before stage, because upper application
+        // depends on the sequence (e.g., echarts-stream and finish
+        // event judge)
+        this.trigger('frame', delta);
+
+        if (this.stage.update) {
+            this.stage.update();
+        }
+    },
+
+    _startLoop: function () {
+        var self = this;
+
+        this._running = true;
+
+        function step() {
+            if (self._running) {
+
+                requestAnimationFrame(step);
+
+                !self._paused && self._update();
+            }
+        }
+
+        requestAnimationFrame(step);
+    },
+
+    /**
+     * Start animation.
+     */
+    start: function () {
+
+        this._time = new Date().getTime();
+        this._pausedTime = 0;
+
+        this._startLoop();
+    },
+
+    /**
+     * Stop animation.
+     */
+    stop: function () {
+        this._running = false;
+    },
+
+    /**
+     * Pause animation.
+     */
+    pause: function () {
+        if (!this._paused) {
+            this._pauseStart = new Date().getTime();
+            this._paused = true;
+        }
+    },
+
+    /**
+     * Resume animation.
+     */
+    resume: function () {
+        if (this._paused) {
+            this._pausedTime += (new Date().getTime()) - this._pauseStart;
+            this._paused = false;
+        }
+    },
+
+    /**
+     * Clear animation.
+     */
+    clear: function () {
+        this._clips = [];
+    },
+
+    /**
+     * Whether animation finished.
+     */
+    isFinished: function () {
+        return !this._clips.length;
+    },
+
+    /**
+     * Creat animator for a target, whose props can be animated.
+     *
+     * @param  {Object} target
+     * @param  {Object} options
+     * @param  {boolean} [options.loop=false] Whether loop animation.
+     * @param  {Function} [options.getter=null] Get value from target.
+     * @param  {Function} [options.setter=null] Set value to target.
+     * @return {module:zrender/animation/Animation~Animator}
+     */
+    // TODO Gap
+    animate: function (target, options) {
+        options = options || {};
+
+        var animator = new Animator(
+            target,
+            options.loop,
+            options.getter,
+            options.setter
+        );
+
+        this.addAnimator(animator);
+
+        return animator;
+    }
+};
+
+mixin(Animation, Eventful);
+
+var TOUCH_CLICK_DELAY = 300;
+
+var mouseHandlerNames = [
+    'click', 'dblclick', 'mousewheel', 'mouseout',
+    'mouseup', 'mousedown', 'mousemove', 'contextmenu'
+];
+
+var touchHandlerNames = [
+    'touchstart', 'touchend', 'touchmove'
+];
+
+var pointerEventNames = {
+    pointerdown: 1, pointerup: 1, pointermove: 1, pointerout: 1
+};
+
+var pointerHandlerNames = map(mouseHandlerNames, function (name) {
+    var nm = name.replace('mouse', 'pointer');
+    return pointerEventNames[nm] ? nm : name;
+});
+
+function eventNameFix(name) {
+    return (name === 'mousewheel' && env$1.browser.firefox) ? 'DOMMouseScroll' : name;
+}
+
+// function onMSGestureChange(proxy, event) {
+//     if (event.translationX || event.translationY) {
+//         // mousemove is carried by MSGesture to reduce the sensitivity.
+//         proxy.handler.dispatchToElement(event.target, 'mousemove', event);
+//     }
+//     if (event.scale !== 1) {
+//         event.pinchX = event.offsetX;
+//         event.pinchY = event.offsetY;
+//         event.pinchScale = event.scale;
