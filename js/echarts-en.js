@@ -11096,3 +11096,278 @@ ZRender.prototype = {
     },
 
     /**
+     * Mark and repaint the canvas in the next frame of browser
+     */
+    refresh: function () {
+        this._needsRefresh = true;
+    },
+
+    /**
+     * Perform all refresh
+     */
+    flush: function () {
+        var triggerRendered;
+
+        if (this._needsRefresh) {
+            triggerRendered = true;
+            this.refreshImmediately();
+        }
+        if (this._needsRefreshHover) {
+            triggerRendered = true;
+            this.refreshHoverImmediately();
+        }
+
+        triggerRendered && this.trigger('rendered');
+    },
+
+    /**
+     * Add element to hover layer
+     * @param  {module:zrender/Element} el
+     * @param {Object} style
+     */
+    addHover: function (el, style) {
+        if (this.painter.addHover) {
+            var elMirror = this.painter.addHover(el, style);
+            this.refreshHover();
+            return elMirror;
+        }
+    },
+
+    /**
+     * Add element from hover layer
+     * @param  {module:zrender/Element} el
+     */
+    removeHover: function (el) {
+        if (this.painter.removeHover) {
+            this.painter.removeHover(el);
+            this.refreshHover();
+        }
+    },
+
+    /**
+     * Clear all hover elements in hover layer
+     * @param  {module:zrender/Element} el
+     */
+    clearHover: function () {
+        if (this.painter.clearHover) {
+            this.painter.clearHover();
+            this.refreshHover();
+        }
+    },
+
+    /**
+     * Refresh hover in next frame
+     */
+    refreshHover: function () {
+        this._needsRefreshHover = true;
+    },
+
+    /**
+     * Refresh hover immediately
+     */
+    refreshHoverImmediately: function () {
+        this._needsRefreshHover = false;
+        this.painter.refreshHover && this.painter.refreshHover();
+    },
+
+    /**
+     * Resize the canvas.
+     * Should be invoked when container size is changed
+     * @param {Object} [opts]
+     * @param {number|string} [opts.width] Can be 'auto' (the same as null/undefined)
+     * @param {number|string} [opts.height] Can be 'auto' (the same as null/undefined)
+     */
+    resize: function (opts) {
+        opts = opts || {};
+        this.painter.resize(opts.width, opts.height);
+        this.handler.resize();
+    },
+
+    /**
+     * Stop and clear all animation immediately
+     */
+    clearAnimation: function () {
+        this.animation.clear();
+    },
+
+    /**
+     * Get container width
+     */
+    getWidth: function () {
+        return this.painter.getWidth();
+    },
+
+    /**
+     * Get container height
+     */
+    getHeight: function () {
+        return this.painter.getHeight();
+    },
+
+    /**
+     * Export the canvas as Base64 URL
+     * @param {string} type
+     * @param {string} [backgroundColor='#fff']
+     * @return {string} Base64 URL
+     */
+    // toDataURL: function(type, backgroundColor) {
+    //     return this.painter.getRenderedCanvas({
+    //         backgroundColor: backgroundColor
+    //     }).toDataURL(type);
+    // },
+
+    /**
+     * Converting a path to image.
+     * It has much better performance of drawing image rather than drawing a vector path.
+     * @param {module:zrender/graphic/Path} e
+     * @param {number} width
+     * @param {number} height
+     */
+    pathToImage: function (e, dpr) {
+        return this.painter.pathToImage(e, dpr);
+    },
+
+    /**
+     * Set default cursor
+     * @param {string} [cursorStyle='default'] 例如 crosshair
+     */
+    setCursorStyle: function (cursorStyle) {
+        this.handler.setCursorStyle(cursorStyle);
+    },
+
+    /**
+     * Find hovered element
+     * @param {number} x
+     * @param {number} y
+     * @return {Object} {target, topTarget}
+     */
+    findHover: function (x, y) {
+        return this.handler.findHover(x, y);
+    },
+
+    /**
+     * Bind event
+     *
+     * @param {string} eventName Event name
+     * @param {Function} eventHandler Handler function
+     * @param {Object} [context] Context object
+     */
+    on: function (eventName, eventHandler, context) {
+        this.handler.on(eventName, eventHandler, context);
+    },
+
+    /**
+     * Unbind event
+     * @param {string} eventName Event name
+     * @param {Function} [eventHandler] Handler function
+     */
+    off: function (eventName, eventHandler) {
+        this.handler.off(eventName, eventHandler);
+    },
+
+    /**
+     * Trigger event manually
+     *
+     * @param {string} eventName Event name
+     * @param {event=} event Event object
+     */
+    trigger: function (eventName, event) {
+        this.handler.trigger(eventName, event);
+    },
+
+
+    /**
+     * Clear all objects and the canvas.
+     */
+    clear: function () {
+        this.storage.delRoot();
+        this.painter.clear();
+    },
+
+    /**
+     * Dispose self.
+     */
+    dispose: function () {
+        this.animation.stop();
+
+        this.clear();
+        this.storage.dispose();
+        this.painter.dispose();
+        this.handler.dispose();
+
+        this.animation =
+        this.storage =
+        this.painter =
+        this.handler = null;
+
+        delInstance(this.id);
+    }
+};
+
+
+
+var zrender = (Object.freeze || Object)({
+	version: version$1,
+	init: init$1,
+	dispose: dispose$1,
+	getInstance: getInstance,
+	registerPainter: registerPainter
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var each$2 = each$1;
+var isObject$2 = isObject$1;
+var isArray$1 = isArray;
+
+/**
+ * Make the name displayable. But we should
+ * make sure it is not duplicated with user
+ * specified name, so use '\0';
+ */
+var DUMMY_COMPONENT_NAME_PREFIX = 'series\0';
+
+/**
+ * If value is not array, then translate it to array.
+ * @param  {*} value
+ * @return {Array} [value] or value
+ */
+function normalizeToArray(value) {
+    return value instanceof Array
+        ? value
+        : value == null
+        ? []
+        : [value];
+}
+
+/**
+ * Sync default option between normal and emphasis like `position` and `show`
+ * In case some one will write code like
+ *     label: {
+ *          show: false,
+ *          position: 'outside',
+ *          fontSize: 18
+ *     },
+ *     emphasis: {
+ *          label: { show: true }
+ *     }
+ * @param {Object} opt
+ * @param {string} key
+ * @param {Array.<string>} subOpts
