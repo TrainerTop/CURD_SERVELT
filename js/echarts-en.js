@@ -10820,3 +10820,279 @@ function HandlerDomProxy(dom) {
         // if (typeof MSGesture === 'function') {
         //     (this._msGesture = new MSGesture()).target = dom; // jshint ignore:line
         //     dom.addEventListener('MSGestureChange', onMSGestureChange);
+        // }
+    }
+    else {
+        if (env$1.touchEventsSupported) {
+            mountHandlers(touchHandlerNames, this);
+            // Handler of 'mouseout' event is needed in touch mode, which will be mounted below.
+            // addEventListener(root, 'mouseout', this._mouseoutHandler);
+        }
+
+        // 1. Considering some devices that both enable touch and mouse event (like on MS Surface
+        // and lenovo X240, @see #2350), we make mouse event be always listened, otherwise
+        // mouse event can not be handle in those devices.
+        // 2. On MS Surface, Chrome will trigger both touch event and mouse event. How to prevent
+        // mouseevent after touch event triggered, see `setTouchTimer`.
+        mountHandlers(mouseHandlerNames, this);
+    }
+
+    function mountHandlers(handlerNames, instance) {
+        each$1(handlerNames, function (name) {
+            addEventListener(dom, eventNameFix(name), instance._handlers[name]);
+        }, instance);
+    }
+}
+
+var handlerDomProxyProto = HandlerDomProxy.prototype;
+handlerDomProxyProto.dispose = function () {
+    var handlerNames = mouseHandlerNames.concat(touchHandlerNames);
+
+    for (var i = 0; i < handlerNames.length; i++) {
+        var name = handlerNames[i];
+        removeEventListener(this.dom, eventNameFix(name), this._handlers[name]);
+    }
+};
+
+handlerDomProxyProto.setCursor = function (cursorStyle) {
+    this.dom.style && (this.dom.style.cursor = cursorStyle || 'default');
+};
+
+mixin(HandlerDomProxy, Eventful);
+
+/*!
+* ZRender, a high performance 2d drawing library.
+*
+* Copyright (c) 2013, Baidu Inc.
+* All rights reserved.
+*
+* LICENSE
+* https://github.com/ecomfe/zrender/blob/master/LICENSE.txt
+*/
+
+var useVML = !env$1.canvasSupported;
+
+var painterCtors = {
+    canvas: Painter
+};
+
+var instances$1 = {};    // ZRender实例map索引
+
+/**
+ * @type {string}
+ */
+var version$1 = '4.0.7';
+
+/**
+ * Initializing a zrender instance
+ * @param {HTMLElement} dom
+ * @param {Object} [opts]
+ * @param {string} [opts.renderer='canvas'] 'canvas' or 'svg'
+ * @param {number} [opts.devicePixelRatio]
+ * @param {number|string} [opts.width] Can be 'auto' (the same as null/undefined)
+ * @param {number|string} [opts.height] Can be 'auto' (the same as null/undefined)
+ * @return {module:zrender/ZRender}
+ */
+function init$1(dom, opts) {
+    var zr = new ZRender(guid(), dom, opts);
+    instances$1[zr.id] = zr;
+    return zr;
+}
+
+/**
+ * Dispose zrender instance
+ * @param {module:zrender/ZRender} zr
+ */
+function dispose$1(zr) {
+    if (zr) {
+        zr.dispose();
+    }
+    else {
+        for (var key in instances$1) {
+            if (instances$1.hasOwnProperty(key)) {
+                instances$1[key].dispose();
+            }
+        }
+        instances$1 = {};
+    }
+
+    return this;
+}
+
+/**
+ * Get zrender instance by id
+ * @param {string} id zrender instance id
+ * @return {module:zrender/ZRender}
+ */
+function getInstance(id) {
+    return instances$1[id];
+}
+
+function registerPainter(name, Ctor) {
+    painterCtors[name] = Ctor;
+}
+
+function delInstance(id) {
+    delete instances$1[id];
+}
+
+/**
+ * @module zrender/ZRender
+ */
+/**
+ * @constructor
+ * @alias module:zrender/ZRender
+ * @param {string} id
+ * @param {HTMLElement} dom
+ * @param {Object} opts
+ * @param {string} [opts.renderer='canvas'] 'canvas' or 'svg'
+ * @param {number} [opts.devicePixelRatio]
+ * @param {number} [opts.width] Can be 'auto' (the same as null/undefined)
+ * @param {number} [opts.height] Can be 'auto' (the same as null/undefined)
+ */
+var ZRender = function (id, dom, opts) {
+
+    opts = opts || {};
+
+    /**
+     * @type {HTMLDomElement}
+     */
+    this.dom = dom;
+
+    /**
+     * @type {string}
+     */
+    this.id = id;
+
+    var self = this;
+    var storage = new Storage();
+
+    var rendererType = opts.renderer;
+    // TODO WebGL
+    if (useVML) {
+        if (!painterCtors.vml) {
+            throw new Error('You need to require \'zrender/vml/vml\' to support IE8');
+        }
+        rendererType = 'vml';
+    }
+    else if (!rendererType || !painterCtors[rendererType]) {
+        rendererType = 'canvas';
+    }
+    var painter = new painterCtors[rendererType](dom, storage, opts, id);
+
+    this.storage = storage;
+    this.painter = painter;
+
+    var handerProxy = (!env$1.node && !env$1.worker) ? new HandlerDomProxy(painter.getViewportRoot()) : null;
+    this.handler = new Handler(storage, painter, handerProxy, painter.root);
+
+    /**
+     * @type {module:zrender/animation/Animation}
+     */
+    this.animation = new Animation({
+        stage: {
+            update: bind(this.flush, this)
+        }
+    });
+    this.animation.start();
+
+    /**
+     * @type {boolean}
+     * @private
+     */
+    this._needsRefresh;
+
+    // 修改 storage.delFromStorage, 每次删除元素之前删除动画
+    // FIXME 有点ugly
+    var oldDelFromStorage = storage.delFromStorage;
+    var oldAddToStorage = storage.addToStorage;
+
+    storage.delFromStorage = function (el) {
+        oldDelFromStorage.call(storage, el);
+
+        el && el.removeSelfFromZr(self);
+    };
+
+    storage.addToStorage = function (el) {
+        oldAddToStorage.call(storage, el);
+
+        el.addSelfToZr(self);
+    };
+};
+
+ZRender.prototype = {
+
+    constructor: ZRender,
+    /**
+     * 获取实例唯一标识
+     * @return {string}
+     */
+    getId: function () {
+        return this.id;
+    },
+
+    /**
+     * 添加元素
+     * @param  {module:zrender/Element} el
+     */
+    add: function (el) {
+        this.storage.addRoot(el);
+        this._needsRefresh = true;
+    },
+
+    /**
+     * 删除元素
+     * @param  {module:zrender/Element} el
+     */
+    remove: function (el) {
+        this.storage.delRoot(el);
+        this._needsRefresh = true;
+    },
+
+    /**
+     * Change configuration of layer
+     * @param {string} zLevel
+     * @param {Object} config
+     * @param {string} [config.clearColor=0] Clear color
+     * @param {string} [config.motionBlur=false] If enable motion blur
+     * @param {number} [config.lastFrameAlpha=0.7] Motion blur factor. Larger value cause longer trailer
+    */
+    configLayer: function (zLevel, config) {
+        if (this.painter.configLayer) {
+            this.painter.configLayer(zLevel, config);
+        }
+        this._needsRefresh = true;
+    },
+
+    /**
+     * Set background color
+     * @param {string} backgroundColor
+     */
+    setBackgroundColor: function (backgroundColor) {
+        if (this.painter.setBackgroundColor) {
+            this.painter.setBackgroundColor(backgroundColor);
+        }
+        this._needsRefresh = true;
+    },
+
+    /**
+     * Repaint the canvas immediately
+     */
+    refreshImmediately: function () {
+        // var start = new Date();
+        // Clear needsRefresh ahead to avoid something wrong happens in refresh
+        // Or it will cause zrender refreshes again and again.
+        this._needsRefresh = false;
+        this.painter.refresh();
+        /**
+         * Avoid trigger zr.refresh in Element#beforeUpdate hook
+         */
+        this._needsRefresh = false;
+        // var end = new Date();
+        // var log = document.getElementById('log');
+        // if (log) {
+        //     log.innerHTML = log.innerHTML + '<br>' + (end - start);
+        // }
+    },
+
+    /**
