@@ -11371,3 +11371,287 @@ function normalizeToArray(value) {
  * @param {Object} opt
  * @param {string} key
  * @param {Array.<string>} subOpts
+ */
+function defaultEmphasis(opt, key, subOpts) {
+    // Caution: performance sensitive.
+    if (opt) {
+        opt[key] = opt[key] || {};
+        opt.emphasis = opt.emphasis || {};
+        opt.emphasis[key] = opt.emphasis[key] || {};
+
+        // Default emphasis option from normal
+        for (var i = 0, len = subOpts.length; i < len; i++) {
+            var subOptName = subOpts[i];
+            if (!opt.emphasis[key].hasOwnProperty(subOptName)
+                && opt[key].hasOwnProperty(subOptName)
+            ) {
+                opt.emphasis[key][subOptName] = opt[key][subOptName];
+            }
+        }
+    }
+}
+
+var TEXT_STYLE_OPTIONS = [
+    'fontStyle', 'fontWeight', 'fontSize', 'fontFamily',
+    'rich', 'tag', 'color', 'textBorderColor', 'textBorderWidth',
+    'width', 'height', 'lineHeight', 'align', 'verticalAlign', 'baseline',
+    'shadowColor', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY',
+    'textShadowColor', 'textShadowBlur', 'textShadowOffsetX', 'textShadowOffsetY',
+    'backgroundColor', 'borderColor', 'borderWidth', 'borderRadius', 'padding'
+];
+
+// modelUtil.LABEL_OPTIONS = modelUtil.TEXT_STYLE_OPTIONS.concat([
+//     'position', 'offset', 'rotate', 'origin', 'show', 'distance', 'formatter',
+//     'fontStyle', 'fontWeight', 'fontSize', 'fontFamily',
+//     // FIXME: deprecated, check and remove it.
+//     'textStyle'
+// ]);
+
+/**
+ * The method do not ensure performance.
+ * data could be [12, 2323, {value: 223}, [1221, 23], {value: [2, 23]}]
+ * This helper method retieves value from data.
+ * @param {string|number|Date|Array|Object} dataItem
+ * @return {number|string|Date|Array.<number|string|Date>}
+ */
+function getDataItemValue(dataItem) {
+    return (isObject$2(dataItem) && !isArray$1(dataItem) && !(dataItem instanceof Date))
+        ? dataItem.value : dataItem;
+}
+
+/**
+ * data could be [12, 2323, {value: 223}, [1221, 23], {value: [2, 23]}]
+ * This helper method determine if dataItem has extra option besides value
+ * @param {string|number|Date|Array|Object} dataItem
+ */
+function isDataItemOption(dataItem) {
+    return isObject$2(dataItem)
+        && !(dataItem instanceof Array);
+        // // markLine data can be array
+        // && !(dataItem[0] && isObject(dataItem[0]) && !(dataItem[0] instanceof Array));
+}
+
+/**
+ * Mapping to exists for merge.
+ *
+ * @public
+ * @param {Array.<Object>|Array.<module:echarts/model/Component>} exists
+ * @param {Object|Array.<Object>} newCptOptions
+ * @return {Array.<Object>} Result, like [{exist: ..., option: ...}, {}],
+ *                          index of which is the same as exists.
+ */
+function mappingToExists(exists, newCptOptions) {
+    // Mapping by the order by original option (but not order of
+    // new option) in merge mode. Because we should ensure
+    // some specified index (like xAxisIndex) is consistent with
+    // original option, which is easy to understand, espatially in
+    // media query. And in most case, merge option is used to
+    // update partial option but not be expected to change order.
+    newCptOptions = (newCptOptions || []).slice();
+
+    var result = map(exists || [], function (obj, index) {
+        return {exist: obj};
+    });
+
+    // Mapping by id or name if specified.
+    each$2(newCptOptions, function (cptOption, index) {
+        if (!isObject$2(cptOption)) {
+            return;
+        }
+
+        // id has highest priority.
+        for (var i = 0; i < result.length; i++) {
+            if (!result[i].option // Consider name: two map to one.
+                && cptOption.id != null
+                && result[i].exist.id === cptOption.id + ''
+            ) {
+                result[i].option = cptOption;
+                newCptOptions[index] = null;
+                return;
+            }
+        }
+
+        for (var i = 0; i < result.length; i++) {
+            var exist = result[i].exist;
+            if (!result[i].option // Consider name: two map to one.
+                // Can not match when both ids exist but different.
+                && (exist.id == null || cptOption.id == null)
+                && cptOption.name != null
+                && !isIdInner(cptOption)
+                && !isIdInner(exist)
+                && exist.name === cptOption.name + ''
+            ) {
+                result[i].option = cptOption;
+                newCptOptions[index] = null;
+                return;
+            }
+        }
+    });
+
+    // Otherwise mapping by index.
+    each$2(newCptOptions, function (cptOption, index) {
+        if (!isObject$2(cptOption)) {
+            return;
+        }
+
+        var i = 0;
+        for (; i < result.length; i++) {
+            var exist = result[i].exist;
+            if (!result[i].option
+                // Existing model that already has id should be able to
+                // mapped to (because after mapping performed model may
+                // be assigned with a id, whish should not affect next
+                // mapping), except those has inner id.
+                && !isIdInner(exist)
+                // Caution:
+                // Do not overwrite id. But name can be overwritten,
+                // because axis use name as 'show label text'.
+                // 'exist' always has id and name and we dont
+                // need to check it.
+                && cptOption.id == null
+            ) {
+                result[i].option = cptOption;
+                break;
+            }
+        }
+
+        if (i >= result.length) {
+            result.push({option: cptOption});
+        }
+    });
+
+    return result;
+}
+
+/**
+ * Make id and name for mapping result (result of mappingToExists)
+ * into `keyInfo` field.
+ *
+ * @public
+ * @param {Array.<Object>} Result, like [{exist: ..., option: ...}, {}],
+ *                          which order is the same as exists.
+ * @return {Array.<Object>} The input.
+ */
+function makeIdAndName(mapResult) {
+    // We use this id to hash component models and view instances
+    // in echarts. id can be specified by user, or auto generated.
+
+    // The id generation rule ensures new view instance are able
+    // to mapped to old instance when setOption are called in
+    // no-merge mode. So we generate model id by name and plus
+    // type in view id.
+
+    // name can be duplicated among components, which is convenient
+    // to specify multi components (like series) by one name.
+
+    // Ensure that each id is distinct.
+    var idMap = createHashMap();
+
+    each$2(mapResult, function (item, index) {
+        var existCpt = item.exist;
+        existCpt && idMap.set(existCpt.id, item);
+    });
+
+    each$2(mapResult, function (item, index) {
+        var opt = item.option;
+
+        assert$1(
+            !opt || opt.id == null || !idMap.get(opt.id) || idMap.get(opt.id) === item,
+            'id duplicates: ' + (opt && opt.id)
+        );
+
+        opt && opt.id != null && idMap.set(opt.id, item);
+        !item.keyInfo && (item.keyInfo = {});
+    });
+
+    // Make name and id.
+    each$2(mapResult, function (item, index) {
+        var existCpt = item.exist;
+        var opt = item.option;
+        var keyInfo = item.keyInfo;
+
+        if (!isObject$2(opt)) {
+            return;
+        }
+
+        // name can be overwitten. Consider case: axis.name = '20km'.
+        // But id generated by name will not be changed, which affect
+        // only in that case: setOption with 'not merge mode' and view
+        // instance will be recreated, which can be accepted.
+        keyInfo.name = opt.name != null
+            ? opt.name + ''
+            : existCpt
+            ? existCpt.name
+            // Avoid diffferent series has the same name,
+            // because name may be used like in color pallet.
+            : DUMMY_COMPONENT_NAME_PREFIX + index;
+
+        if (existCpt) {
+            keyInfo.id = existCpt.id;
+        }
+        else if (opt.id != null) {
+            keyInfo.id = opt.id + '';
+        }
+        else {
+            // Consider this situatoin:
+            //  optionA: [{name: 'a'}, {name: 'a'}, {..}]
+            //  optionB [{..}, {name: 'a'}, {name: 'a'}]
+            // Series with the same name between optionA and optionB
+            // should be mapped.
+            var idNum = 0;
+            do {
+                keyInfo.id = '\0' + keyInfo.name + '\0' + idNum++;
+            }
+            while (idMap.get(keyInfo.id));
+        }
+
+        idMap.set(keyInfo.id, item);
+    });
+}
+
+function isNameSpecified(componentModel) {
+    var name = componentModel.name;
+    // Is specified when `indexOf` get -1 or > 0.
+    return !!(name && name.indexOf(DUMMY_COMPONENT_NAME_PREFIX));
+}
+
+/**
+ * @public
+ * @param {Object} cptOption
+ * @return {boolean}
+ */
+function isIdInner(cptOption) {
+    return isObject$2(cptOption)
+        && cptOption.id
+        && (cptOption.id + '').indexOf('\0_ec_\0') === 0;
+}
+
+/**
+ * A helper for removing duplicate items between batchA and batchB,
+ * and in themselves, and categorize by series.
+ *
+ * @param {Array.<Object>} batchA Like: [{seriesId: 2, dataIndex: [32, 4, 5]}, ...]
+ * @param {Array.<Object>} batchB Like: [{seriesId: 2, dataIndex: [32, 4, 5]}, ...]
+ * @return {Array.<Array.<Object>, Array.<Object>>} result: [resultBatchA, resultBatchB]
+ */
+function compressBatches(batchA, batchB) {
+    var mapA = {};
+    var mapB = {};
+
+    makeMap(batchA || [], mapA);
+    makeMap(batchB || [], mapB, mapA);
+
+    return [mapToArray(mapA), mapToArray(mapB)];
+
+    function makeMap(sourceBatch, map$$1, otherMap) {
+        for (var i = 0, len = sourceBatch.length; i < len; i++) {
+            var seriesId = sourceBatch[i].seriesId;
+            var dataIndices = normalizeToArray(sourceBatch[i].dataIndex);
+            var otherDataIndices = otherMap && otherMap[seriesId];
+
+            for (var j = 0, lenj = dataIndices.length; j < lenj; j++) {
+                var dataIndex = dataIndices[j];
+
+                if (otherDataIndices && otherDataIndices[dataIndex]) {
+                    otherDataIndices[dataIndex] = null;
+                }
