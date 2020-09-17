@@ -11655,3 +11655,284 @@ function compressBatches(batchA, batchB) {
                 if (otherDataIndices && otherDataIndices[dataIndex]) {
                     otherDataIndices[dataIndex] = null;
                 }
+                else {
+                    (map$$1[seriesId] || (map$$1[seriesId] = {}))[dataIndex] = 1;
+                }
+            }
+        }
+    }
+
+    function mapToArray(map$$1, isData) {
+        var result = [];
+        for (var i in map$$1) {
+            if (map$$1.hasOwnProperty(i) && map$$1[i] != null) {
+                if (isData) {
+                    result.push(+i);
+                }
+                else {
+                    var dataIndices = mapToArray(map$$1[i], true);
+                    dataIndices.length && result.push({seriesId: i, dataIndex: dataIndices});
+                }
+            }
+        }
+        return result;
+    }
+}
+
+/**
+ * @param {module:echarts/data/List} data
+ * @param {Object} payload Contains dataIndex (means rawIndex) / dataIndexInside / name
+ *                         each of which can be Array or primary type.
+ * @return {number|Array.<number>} dataIndex If not found, return undefined/null.
+ */
+function queryDataIndex(data, payload) {
+    if (payload.dataIndexInside != null) {
+        return payload.dataIndexInside;
+    }
+    else if (payload.dataIndex != null) {
+        return isArray(payload.dataIndex)
+            ? map(payload.dataIndex, function (value) {
+                return data.indexOfRawIndex(value);
+            })
+            : data.indexOfRawIndex(payload.dataIndex);
+    }
+    else if (payload.name != null) {
+        return isArray(payload.name)
+            ? map(payload.name, function (value) {
+                return data.indexOfName(value);
+            })
+            : data.indexOfName(payload.name);
+    }
+}
+
+/**
+ * Enable property storage to any host object.
+ * Notice: Serialization is not supported.
+ *
+ * For example:
+ * var inner = zrUitl.makeInner();
+ *
+ * function some1(hostObj) {
+ *      inner(hostObj).someProperty = 1212;
+ *      ...
+ * }
+ * function some2() {
+ *      var fields = inner(this);
+ *      fields.someProperty1 = 1212;
+ *      fields.someProperty2 = 'xx';
+ *      ...
+ * }
+ *
+ * @return {Function}
+ */
+function makeInner() {
+    // Consider different scope by es module import.
+    var key = '__\0ec_inner_' + innerUniqueIndex++ + '_' + Math.random().toFixed(5);
+    return function (hostObj) {
+        return hostObj[key] || (hostObj[key] = {});
+    };
+}
+var innerUniqueIndex = 0;
+
+/**
+ * @param {module:echarts/model/Global} ecModel
+ * @param {string|Object} finder
+ *        If string, e.g., 'geo', means {geoIndex: 0}.
+ *        If Object, could contain some of these properties below:
+ *        {
+ *            seriesIndex, seriesId, seriesName,
+ *            geoIndex, geoId, geoName,
+ *            bmapIndex, bmapId, bmapName,
+ *            xAxisIndex, xAxisId, xAxisName,
+ *            yAxisIndex, yAxisId, yAxisName,
+ *            gridIndex, gridId, gridName,
+ *            ... (can be extended)
+ *        }
+ *        Each properties can be number|string|Array.<number>|Array.<string>
+ *        For example, a finder could be
+ *        {
+ *            seriesIndex: 3,
+ *            geoId: ['aa', 'cc'],
+ *            gridName: ['xx', 'rr']
+ *        }
+ *        xxxIndex can be set as 'all' (means all xxx) or 'none' (means not specify)
+ *        If nothing or null/undefined specified, return nothing.
+ * @param {Object} [opt]
+ * @param {string} [opt.defaultMainType]
+ * @param {Array.<string>} [opt.includeMainTypes]
+ * @return {Object} result like:
+ *        {
+ *            seriesModels: [seriesModel1, seriesModel2],
+ *            seriesModel: seriesModel1, // The first model
+ *            geoModels: [geoModel1, geoModel2],
+ *            geoModel: geoModel1, // The first model
+ *            ...
+ *        }
+ */
+function parseFinder(ecModel, finder, opt) {
+    if (isString(finder)) {
+        var obj = {};
+        obj[finder + 'Index'] = 0;
+        finder = obj;
+    }
+
+    var defaultMainType = opt && opt.defaultMainType;
+    if (defaultMainType
+        && !has(finder, defaultMainType + 'Index')
+        && !has(finder, defaultMainType + 'Id')
+        && !has(finder, defaultMainType + 'Name')
+    ) {
+        finder[defaultMainType + 'Index'] = 0;
+    }
+
+    var result = {};
+
+    each$2(finder, function (value, key) {
+        var value = finder[key];
+
+        // Exclude 'dataIndex' and other illgal keys.
+        if (key === 'dataIndex' || key === 'dataIndexInside') {
+            result[key] = value;
+            return;
+        }
+
+        var parsedKey = key.match(/^(\w+)(Index|Id|Name)$/) || [];
+        var mainType = parsedKey[1];
+        var queryType = (parsedKey[2] || '').toLowerCase();
+
+        if (!mainType
+            || !queryType
+            || value == null
+            || (queryType === 'index' && value === 'none')
+            || (opt && opt.includeMainTypes && indexOf(opt.includeMainTypes, mainType) < 0)
+        ) {
+            return;
+        }
+
+        var queryParam = {mainType: mainType};
+        if (queryType !== 'index' || value !== 'all') {
+            queryParam[queryType] = value;
+        }
+
+        var models = ecModel.queryComponents(queryParam);
+        result[mainType + 'Models'] = models;
+        result[mainType + 'Model'] = models[0];
+    });
+
+    return result;
+}
+
+function has(obj, prop) {
+    return obj && obj.hasOwnProperty(prop);
+}
+
+function setAttribute(dom, key, value) {
+    dom.setAttribute
+        ? dom.setAttribute(key, value)
+        : (dom[key] = value);
+}
+
+function getAttribute(dom, key) {
+    return dom.getAttribute
+        ? dom.getAttribute(key)
+        : dom[key];
+}
+
+function getTooltipRenderMode(renderModeOption) {
+    if (renderModeOption === 'auto') {
+        // Using html when `document` exists, use richText otherwise
+        return env$1.domSupported ? 'html' : 'richText';
+    }
+    else {
+        return renderModeOption || 'html';
+    }
+}
+
+/**
+ * Group a list by key.
+ *
+ * @param {Array} array
+ * @param {Function} getKey
+ *        param {*} Array item
+ *        return {string} key
+ * @return {Object} Result
+ *        {Array}: keys,
+ *        {module:zrender/core/util/HashMap} buckets: {key -> Array}
+ */
+function groupData(array, getKey) {
+    var buckets = createHashMap();
+    var keys = [];
+
+    each$1(array, function (item) {
+        var key = getKey(item);
+        (buckets.get(key)
+            || (keys.push(key), buckets.set(key, []))
+        ).push(item);
+    });
+
+    return {keys: keys, buckets: buckets};
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var TYPE_DELIMITER = '.';
+var IS_CONTAINER = '___EC__COMPONENT__CONTAINER___';
+
+/**
+ * Notice, parseClassType('') should returns {main: '', sub: ''}
+ * @public
+ */
+function parseClassType$1(componentType) {
+    var ret = {main: '', sub: ''};
+    if (componentType) {
+        componentType = componentType.split(TYPE_DELIMITER);
+        ret.main = componentType[0] || '';
+        ret.sub = componentType[1] || '';
+    }
+    return ret;
+}
+
+/**
+ * @public
+ */
+function checkClassType(componentType) {
+    assert$1(
+        /^[a-zA-Z0-9_]+([.][a-zA-Z0-9_]+)?$/.test(componentType),
+        'componentType "' + componentType + '" illegal'
+    );
+}
+
+/**
+ * @public
+ */
+function enableClassExtend(RootClass, mandatoryMethods) {
+
+    RootClass.$constructor = RootClass;
+    RootClass.extend = function (proto) {
+
+        if (__DEV__) {
+            each$1(mandatoryMethods, function (method) {
+                if (!proto[method]) {
+                    console.warn(
+                        'Method `' + method + '` should be implemented'
+                        + (proto.type ? ' in ' + proto.type : '') + '.'
+                    );
+                }
+            });
