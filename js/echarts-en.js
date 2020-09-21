@@ -12756,3 +12756,277 @@ function quadraticProjectPoint(
             }
             else {
                 interval *= 0.5;
+            }
+        }
+    }
+    // t
+    if (out) {
+        out[0] = quadraticAt(x0, x1, x2, t);
+        out[1] = quadraticAt(y0, y1, y2, t);
+    }
+    // console.log(interval, i);
+    return mathSqrt$2(d);
+}
+
+/**
+ * @author Yi Shen(https://github.com/pissang)
+ */
+
+var mathMin$3 = Math.min;
+var mathMax$3 = Math.max;
+var mathSin$2 = Math.sin;
+var mathCos$2 = Math.cos;
+var PI2 = Math.PI * 2;
+
+var start = create();
+var end = create();
+var extremity = create();
+
+/**
+ * 从顶点数组中计算出最小包围盒，写入`min`和`max`中
+ * @module zrender/core/bbox
+ * @param {Array<Object>} points 顶点数组
+ * @param {number} min
+ * @param {number} max
+ */
+function fromPoints(points, min$$1, max$$1) {
+    if (points.length === 0) {
+        return;
+    }
+    var p = points[0];
+    var left = p[0];
+    var right = p[0];
+    var top = p[1];
+    var bottom = p[1];
+    var i;
+
+    for (i = 1; i < points.length; i++) {
+        p = points[i];
+        left = mathMin$3(left, p[0]);
+        right = mathMax$3(right, p[0]);
+        top = mathMin$3(top, p[1]);
+        bottom = mathMax$3(bottom, p[1]);
+    }
+
+    min$$1[0] = left;
+    min$$1[1] = top;
+    max$$1[0] = right;
+    max$$1[1] = bottom;
+}
+
+/**
+ * @memberOf module:zrender/core/bbox
+ * @param {number} x0
+ * @param {number} y0
+ * @param {number} x1
+ * @param {number} y1
+ * @param {Array.<number>} min
+ * @param {Array.<number>} max
+ */
+function fromLine(x0, y0, x1, y1, min$$1, max$$1) {
+    min$$1[0] = mathMin$3(x0, x1);
+    min$$1[1] = mathMin$3(y0, y1);
+    max$$1[0] = mathMax$3(x0, x1);
+    max$$1[1] = mathMax$3(y0, y1);
+}
+
+var xDim = [];
+var yDim = [];
+/**
+ * 从三阶贝塞尔曲线(p0, p1, p2, p3)中计算出最小包围盒，写入`min`和`max`中
+ * @memberOf module:zrender/core/bbox
+ * @param {number} x0
+ * @param {number} y0
+ * @param {number} x1
+ * @param {number} y1
+ * @param {number} x2
+ * @param {number} y2
+ * @param {number} x3
+ * @param {number} y3
+ * @param {Array.<number>} min
+ * @param {Array.<number>} max
+ */
+function fromCubic(
+    x0, y0, x1, y1, x2, y2, x3, y3, min$$1, max$$1
+) {
+    var cubicExtrema$$1 = cubicExtrema;
+    var cubicAt$$1 = cubicAt;
+    var i;
+    var n = cubicExtrema$$1(x0, x1, x2, x3, xDim);
+    min$$1[0] = Infinity;
+    min$$1[1] = Infinity;
+    max$$1[0] = -Infinity;
+    max$$1[1] = -Infinity;
+
+    for (i = 0; i < n; i++) {
+        var x = cubicAt$$1(x0, x1, x2, x3, xDim[i]);
+        min$$1[0] = mathMin$3(x, min$$1[0]);
+        max$$1[0] = mathMax$3(x, max$$1[0]);
+    }
+    n = cubicExtrema$$1(y0, y1, y2, y3, yDim);
+    for (i = 0; i < n; i++) {
+        var y = cubicAt$$1(y0, y1, y2, y3, yDim[i]);
+        min$$1[1] = mathMin$3(y, min$$1[1]);
+        max$$1[1] = mathMax$3(y, max$$1[1]);
+    }
+
+    min$$1[0] = mathMin$3(x0, min$$1[0]);
+    max$$1[0] = mathMax$3(x0, max$$1[0]);
+    min$$1[0] = mathMin$3(x3, min$$1[0]);
+    max$$1[0] = mathMax$3(x3, max$$1[0]);
+
+    min$$1[1] = mathMin$3(y0, min$$1[1]);
+    max$$1[1] = mathMax$3(y0, max$$1[1]);
+    min$$1[1] = mathMin$3(y3, min$$1[1]);
+    max$$1[1] = mathMax$3(y3, max$$1[1]);
+}
+
+/**
+ * 从二阶贝塞尔曲线(p0, p1, p2)中计算出最小包围盒，写入`min`和`max`中
+ * @memberOf module:zrender/core/bbox
+ * @param {number} x0
+ * @param {number} y0
+ * @param {number} x1
+ * @param {number} y1
+ * @param {number} x2
+ * @param {number} y2
+ * @param {Array.<number>} min
+ * @param {Array.<number>} max
+ */
+function fromQuadratic(x0, y0, x1, y1, x2, y2, min$$1, max$$1) {
+    var quadraticExtremum$$1 = quadraticExtremum;
+    var quadraticAt$$1 = quadraticAt;
+    // Find extremities, where derivative in x dim or y dim is zero
+    var tx =
+        mathMax$3(
+            mathMin$3(quadraticExtremum$$1(x0, x1, x2), 1), 0
+        );
+    var ty =
+        mathMax$3(
+            mathMin$3(quadraticExtremum$$1(y0, y1, y2), 1), 0
+        );
+
+    var x = quadraticAt$$1(x0, x1, x2, tx);
+    var y = quadraticAt$$1(y0, y1, y2, ty);
+
+    min$$1[0] = mathMin$3(x0, x2, x);
+    min$$1[1] = mathMin$3(y0, y2, y);
+    max$$1[0] = mathMax$3(x0, x2, x);
+    max$$1[1] = mathMax$3(y0, y2, y);
+}
+
+/**
+ * 从圆弧中计算出最小包围盒，写入`min`和`max`中
+ * @method
+ * @memberOf module:zrender/core/bbox
+ * @param {number} x
+ * @param {number} y
+ * @param {number} rx
+ * @param {number} ry
+ * @param {number} startAngle
+ * @param {number} endAngle
+ * @param {number} anticlockwise
+ * @param {Array.<number>} min
+ * @param {Array.<number>} max
+ */
+function fromArc(
+    x, y, rx, ry, startAngle, endAngle, anticlockwise, min$$1, max$$1
+) {
+    var vec2Min = min;
+    var vec2Max = max;
+
+    var diff = Math.abs(startAngle - endAngle);
+
+
+    if (diff % PI2 < 1e-4 && diff > 1e-4) {
+        // Is a circle
+        min$$1[0] = x - rx;
+        min$$1[1] = y - ry;
+        max$$1[0] = x + rx;
+        max$$1[1] = y + ry;
+        return;
+    }
+
+    start[0] = mathCos$2(startAngle) * rx + x;
+    start[1] = mathSin$2(startAngle) * ry + y;
+
+    end[0] = mathCos$2(endAngle) * rx + x;
+    end[1] = mathSin$2(endAngle) * ry + y;
+
+    vec2Min(min$$1, start, end);
+    vec2Max(max$$1, start, end);
+
+    // Thresh to [0, Math.PI * 2]
+    startAngle = startAngle % (PI2);
+    if (startAngle < 0) {
+        startAngle = startAngle + PI2;
+    }
+    endAngle = endAngle % (PI2);
+    if (endAngle < 0) {
+        endAngle = endAngle + PI2;
+    }
+
+    if (startAngle > endAngle && !anticlockwise) {
+        endAngle += PI2;
+    }
+    else if (startAngle < endAngle && anticlockwise) {
+        startAngle += PI2;
+    }
+    if (anticlockwise) {
+        var tmp = endAngle;
+        endAngle = startAngle;
+        startAngle = tmp;
+    }
+
+    // var number = 0;
+    // var step = (anticlockwise ? -Math.PI : Math.PI) / 2;
+    for (var angle = 0; angle < endAngle; angle += Math.PI / 2) {
+        if (angle > startAngle) {
+            extremity[0] = mathCos$2(angle) * rx + x;
+            extremity[1] = mathSin$2(angle) * ry + y;
+
+            vec2Min(min$$1, extremity, min$$1);
+            vec2Max(max$$1, extremity, max$$1);
+        }
+    }
+}
+
+/**
+ * Path 代理，可以在`buildPath`中用于替代`ctx`, 会保存每个path操作的命令到pathCommands属性中
+ * 可以用于 isInsidePath 判断以及获取boundingRect
+ *
+ * @module zrender/core/PathProxy
+ * @author Yi Shen (http://www.github.com/pissang)
+ */
+
+// TODO getTotalLength, getPointAtLength
+
+var CMD = {
+    M: 1,
+    L: 2,
+    C: 3,
+    Q: 4,
+    A: 5,
+    Z: 6,
+    // Rect
+    R: 7
+};
+
+// var CMD_MEM_SIZE = {
+//     M: 3,
+//     L: 3,
+//     C: 7,
+//     Q: 5,
+//     A: 9,
+//     R: 5,
+//     Z: 1
+// };
+
+var min$1 = [];
+var max$1 = [];
+var min2 = [];
+var max2 = [];
+var mathMin$2 = Math.min;
+var mathMax$2 = Math.max;
+var mathCos$1 = Math.cos;
+var mathSin$1 = Math.sin;
