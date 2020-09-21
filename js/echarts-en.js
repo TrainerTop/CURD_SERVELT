@@ -12487,3 +12487,272 @@ function cubicSubdivide(p0, p1, p2, p3, t, out) {
     out[6] = p23;
     out[7] = p3;
 }
+
+/**
+ * 投射点到三次贝塞尔曲线上，返回投射距离。
+ * 投射点有可能会有一个或者多个，这里只返回其中距离最短的一个。
+ * @param {number} x0
+ * @param {number} y0
+ * @param {number} x1
+ * @param {number} y1
+ * @param {number} x2
+ * @param {number} y2
+ * @param {number} x3
+ * @param {number} y3
+ * @param {number} x
+ * @param {number} y
+ * @param {Array.<number>} [out] 投射点
+ * @return {number}
+ */
+function cubicProjectPoint(
+    x0, y0, x1, y1, x2, y2, x3, y3,
+    x, y, out
+) {
+    // http://pomax.github.io/bezierinfo/#projections
+    var t;
+    var interval = 0.005;
+    var d = Infinity;
+    var prev;
+    var next;
+    var d1;
+    var d2;
+
+    _v0[0] = x;
+    _v0[1] = y;
+
+    // 先粗略估计一下可能的最小距离的 t 值
+    // PENDING
+    for (var _t = 0; _t < 1; _t += 0.05) {
+        _v1[0] = cubicAt(x0, x1, x2, x3, _t);
+        _v1[1] = cubicAt(y0, y1, y2, y3, _t);
+        d1 = distSquare(_v0, _v1);
+        if (d1 < d) {
+            t = _t;
+            d = d1;
+        }
+    }
+    d = Infinity;
+
+    // At most 32 iteration
+    for (var i = 0; i < 32; i++) {
+        if (interval < EPSILON_NUMERIC) {
+            break;
+        }
+        prev = t - interval;
+        next = t + interval;
+        // t - interval
+        _v1[0] = cubicAt(x0, x1, x2, x3, prev);
+        _v1[1] = cubicAt(y0, y1, y2, y3, prev);
+
+        d1 = distSquare(_v1, _v0);
+
+        if (prev >= 0 && d1 < d) {
+            t = prev;
+            d = d1;
+        }
+        else {
+            // t + interval
+            _v2[0] = cubicAt(x0, x1, x2, x3, next);
+            _v2[1] = cubicAt(y0, y1, y2, y3, next);
+            d2 = distSquare(_v2, _v0);
+
+            if (next <= 1 && d2 < d) {
+                t = next;
+                d = d2;
+            }
+            else {
+                interval *= 0.5;
+            }
+        }
+    }
+    // t
+    if (out) {
+        out[0] = cubicAt(x0, x1, x2, x3, t);
+        out[1] = cubicAt(y0, y1, y2, y3, t);
+    }
+    // console.log(interval, i);
+    return mathSqrt$2(d);
+}
+
+/**
+ * 计算二次方贝塞尔值
+ * @param  {number} p0
+ * @param  {number} p1
+ * @param  {number} p2
+ * @param  {number} t
+ * @return {number}
+ */
+function quadraticAt(p0, p1, p2, t) {
+    var onet = 1 - t;
+    return onet * (onet * p0 + 2 * t * p1) + t * t * p2;
+}
+
+/**
+ * 计算二次方贝塞尔导数值
+ * @param  {number} p0
+ * @param  {number} p1
+ * @param  {number} p2
+ * @param  {number} t
+ * @return {number}
+ */
+function quadraticDerivativeAt(p0, p1, p2, t) {
+    return 2 * ((1 - t) * (p1 - p0) + t * (p2 - p1));
+}
+
+/**
+ * 计算二次方贝塞尔方程根
+ * @param  {number} p0
+ * @param  {number} p1
+ * @param  {number} p2
+ * @param  {number} t
+ * @param  {Array.<number>} roots
+ * @return {number} 有效根数目
+ */
+function quadraticRootAt(p0, p1, p2, val, roots) {
+    var a = p0 - 2 * p1 + p2;
+    var b = 2 * (p1 - p0);
+    var c = p0 - val;
+
+    var n = 0;
+    if (isAroundZero(a)) {
+        if (isNotAroundZero$1(b)) {
+            var t1 = -c / b;
+            if (t1 >= 0 && t1 <= 1) {
+                roots[n++] = t1;
+            }
+        }
+    }
+    else {
+        var disc = b * b - 4 * a * c;
+        if (isAroundZero(disc)) {
+            var t1 = -b / (2 * a);
+            if (t1 >= 0 && t1 <= 1) {
+                roots[n++] = t1;
+            }
+        }
+        else if (disc > 0) {
+            var discSqrt = mathSqrt$2(disc);
+            var t1 = (-b + discSqrt) / (2 * a);
+            var t2 = (-b - discSqrt) / (2 * a);
+            if (t1 >= 0 && t1 <= 1) {
+                roots[n++] = t1;
+            }
+            if (t2 >= 0 && t2 <= 1) {
+                roots[n++] = t2;
+            }
+        }
+    }
+    return n;
+}
+
+/**
+ * 计算二次贝塞尔方程极限值
+ * @memberOf module:zrender/core/curve
+ * @param  {number} p0
+ * @param  {number} p1
+ * @param  {number} p2
+ * @return {number}
+ */
+function quadraticExtremum(p0, p1, p2) {
+    var divider = p0 + p2 - 2 * p1;
+    if (divider === 0) {
+        // p1 is center of p0 and p2
+        return 0.5;
+    }
+    else {
+        return (p0 - p1) / divider;
+    }
+}
+
+/**
+ * 细分二次贝塞尔曲线
+ * @memberOf module:zrender/core/curve
+ * @param  {number} p0
+ * @param  {number} p1
+ * @param  {number} p2
+ * @param  {number} t
+ * @param  {Array.<number>} out
+ */
+function quadraticSubdivide(p0, p1, p2, t, out) {
+    var p01 = (p1 - p0) * t + p0;
+    var p12 = (p2 - p1) * t + p1;
+    var p012 = (p12 - p01) * t + p01;
+
+    // Seg0
+    out[0] = p0;
+    out[1] = p01;
+    out[2] = p012;
+
+    // Seg1
+    out[3] = p012;
+    out[4] = p12;
+    out[5] = p2;
+}
+
+/**
+ * 投射点到二次贝塞尔曲线上，返回投射距离。
+ * 投射点有可能会有一个或者多个，这里只返回其中距离最短的一个。
+ * @param {number} x0
+ * @param {number} y0
+ * @param {number} x1
+ * @param {number} y1
+ * @param {number} x2
+ * @param {number} y2
+ * @param {number} x
+ * @param {number} y
+ * @param {Array.<number>} out 投射点
+ * @return {number}
+ */
+function quadraticProjectPoint(
+    x0, y0, x1, y1, x2, y2,
+    x, y, out
+) {
+    // http://pomax.github.io/bezierinfo/#projections
+    var t;
+    var interval = 0.005;
+    var d = Infinity;
+
+    _v0[0] = x;
+    _v0[1] = y;
+
+    // 先粗略估计一下可能的最小距离的 t 值
+    // PENDING
+    for (var _t = 0; _t < 1; _t += 0.05) {
+        _v1[0] = quadraticAt(x0, x1, x2, _t);
+        _v1[1] = quadraticAt(y0, y1, y2, _t);
+        var d1 = distSquare(_v0, _v1);
+        if (d1 < d) {
+            t = _t;
+            d = d1;
+        }
+    }
+    d = Infinity;
+
+    // At most 32 iteration
+    for (var i = 0; i < 32; i++) {
+        if (interval < EPSILON_NUMERIC) {
+            break;
+        }
+        var prev = t - interval;
+        var next = t + interval;
+        // t - interval
+        _v1[0] = quadraticAt(x0, x1, x2, prev);
+        _v1[1] = quadraticAt(y0, y1, y2, prev);
+
+        var d1 = distSquare(_v1, _v0);
+
+        if (prev >= 0 && d1 < d) {
+            t = prev;
+            d = d1;
+        }
+        else {
+            // t + interval
+            _v2[0] = quadraticAt(x0, x1, x2, next);
+            _v2[1] = quadraticAt(y0, y1, y2, next);
+            var d2 = distSquare(_v2, _v0);
+            if (next <= 1 && d2 < d) {
+                t = next;
+                d = d2;
+            }
+            else {
+                interval *= 0.5;
