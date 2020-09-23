@@ -13030,3 +13030,265 @@ var mathMin$2 = Math.min;
 var mathMax$2 = Math.max;
 var mathCos$1 = Math.cos;
 var mathSin$1 = Math.sin;
+var mathSqrt$1 = Math.sqrt;
+var mathAbs = Math.abs;
+
+var hasTypedArray = typeof Float32Array !== 'undefined';
+
+/**
+ * @alias module:zrender/core/PathProxy
+ * @constructor
+ */
+var PathProxy = function (notSaveData) {
+
+    this._saveData = !(notSaveData || false);
+
+    if (this._saveData) {
+        /**
+         * Path data. Stored as flat array
+         * @type {Array.<Object>}
+         */
+        this.data = [];
+    }
+
+    this._ctx = null;
+};
+
+/**
+ * 快速计算Path包围盒（并不是最小包围盒）
+ * @return {Object}
+ */
+PathProxy.prototype = {
+
+    constructor: PathProxy,
+
+    _xi: 0,
+    _yi: 0,
+
+    _x0: 0,
+    _y0: 0,
+    // Unit x, Unit y. Provide for avoiding drawing that too short line segment
+    _ux: 0,
+    _uy: 0,
+
+    _len: 0,
+
+    _lineDash: null,
+
+    _dashOffset: 0,
+
+    _dashIdx: 0,
+
+    _dashSum: 0,
+
+    /**
+     * @readOnly
+     */
+    setScale: function (sx, sy) {
+        this._ux = mathAbs(1 / devicePixelRatio / sx) || 0;
+        this._uy = mathAbs(1 / devicePixelRatio / sy) || 0;
+    },
+
+    getContext: function () {
+        return this._ctx;
+    },
+
+    /**
+     * @param  {CanvasRenderingContext2D} ctx
+     * @return {module:zrender/core/PathProxy}
+     */
+    beginPath: function (ctx) {
+
+        this._ctx = ctx;
+
+        ctx && ctx.beginPath();
+
+        ctx && (this.dpr = ctx.dpr);
+
+        // Reset
+        if (this._saveData) {
+            this._len = 0;
+        }
+
+        if (this._lineDash) {
+            this._lineDash = null;
+
+            this._dashOffset = 0;
+        }
+
+        return this;
+    },
+
+    /**
+     * @param  {number} x
+     * @param  {number} y
+     * @return {module:zrender/core/PathProxy}
+     */
+    moveTo: function (x, y) {
+        this.addData(CMD.M, x, y);
+        this._ctx && this._ctx.moveTo(x, y);
+
+        // x0, y0, xi, yi 是记录在 _dashedXXXXTo 方法中使用
+        // xi, yi 记录当前点, x0, y0 在 closePath 的时候回到起始点。
+        // 有可能在 beginPath 之后直接调用 lineTo，这时候 x0, y0 需要
+        // 在 lineTo 方法中记录，这里先不考虑这种情况，dashed line 也只在 IE10- 中不支持
+        this._x0 = x;
+        this._y0 = y;
+
+        this._xi = x;
+        this._yi = y;
+
+        return this;
+    },
+
+    /**
+     * @param  {number} x
+     * @param  {number} y
+     * @return {module:zrender/core/PathProxy}
+     */
+    lineTo: function (x, y) {
+        var exceedUnit = mathAbs(x - this._xi) > this._ux
+            || mathAbs(y - this._yi) > this._uy
+            // Force draw the first segment
+            || this._len < 5;
+
+        this.addData(CMD.L, x, y);
+
+        if (this._ctx && exceedUnit) {
+            this._needsDash() ? this._dashedLineTo(x, y)
+                : this._ctx.lineTo(x, y);
+        }
+        if (exceedUnit) {
+            this._xi = x;
+            this._yi = y;
+        }
+
+        return this;
+    },
+
+    /**
+     * @param  {number} x1
+     * @param  {number} y1
+     * @param  {number} x2
+     * @param  {number} y2
+     * @param  {number} x3
+     * @param  {number} y3
+     * @return {module:zrender/core/PathProxy}
+     */
+    bezierCurveTo: function (x1, y1, x2, y2, x3, y3) {
+        this.addData(CMD.C, x1, y1, x2, y2, x3, y3);
+        if (this._ctx) {
+            this._needsDash() ? this._dashedBezierTo(x1, y1, x2, y2, x3, y3)
+                : this._ctx.bezierCurveTo(x1, y1, x2, y2, x3, y3);
+        }
+        this._xi = x3;
+        this._yi = y3;
+        return this;
+    },
+
+    /**
+     * @param  {number} x1
+     * @param  {number} y1
+     * @param  {number} x2
+     * @param  {number} y2
+     * @return {module:zrender/core/PathProxy}
+     */
+    quadraticCurveTo: function (x1, y1, x2, y2) {
+        this.addData(CMD.Q, x1, y1, x2, y2);
+        if (this._ctx) {
+            this._needsDash() ? this._dashedQuadraticTo(x1, y1, x2, y2)
+                : this._ctx.quadraticCurveTo(x1, y1, x2, y2);
+        }
+        this._xi = x2;
+        this._yi = y2;
+        return this;
+    },
+
+    /**
+     * @param  {number} cx
+     * @param  {number} cy
+     * @param  {number} r
+     * @param  {number} startAngle
+     * @param  {number} endAngle
+     * @param  {boolean} anticlockwise
+     * @return {module:zrender/core/PathProxy}
+     */
+    arc: function (cx, cy, r, startAngle, endAngle, anticlockwise) {
+        this.addData(
+            CMD.A, cx, cy, r, r, startAngle, endAngle - startAngle, 0, anticlockwise ? 0 : 1
+        );
+        this._ctx && this._ctx.arc(cx, cy, r, startAngle, endAngle, anticlockwise);
+
+        this._xi = mathCos$1(endAngle) * r + cx;
+        this._yi = mathSin$1(endAngle) * r + cy;
+        return this;
+    },
+
+    // TODO
+    arcTo: function (x1, y1, x2, y2, radius) {
+        if (this._ctx) {
+            this._ctx.arcTo(x1, y1, x2, y2, radius);
+        }
+        return this;
+    },
+
+    // TODO
+    rect: function (x, y, w, h) {
+        this._ctx && this._ctx.rect(x, y, w, h);
+        this.addData(CMD.R, x, y, w, h);
+        return this;
+    },
+
+    /**
+     * @return {module:zrender/core/PathProxy}
+     */
+    closePath: function () {
+        this.addData(CMD.Z);
+
+        var ctx = this._ctx;
+        var x0 = this._x0;
+        var y0 = this._y0;
+        if (ctx) {
+            this._needsDash() && this._dashedLineTo(x0, y0);
+            ctx.closePath();
+        }
+
+        this._xi = x0;
+        this._yi = y0;
+        return this;
+    },
+
+    /**
+     * Context 从外部传入，因为有可能是 rebuildPath 完之后再 fill。
+     * stroke 同样
+     * @param {CanvasRenderingContext2D} ctx
+     * @return {module:zrender/core/PathProxy}
+     */
+    fill: function (ctx) {
+        ctx && ctx.fill();
+        this.toStatic();
+    },
+
+    /**
+     * @param {CanvasRenderingContext2D} ctx
+     * @return {module:zrender/core/PathProxy}
+     */
+    stroke: function (ctx) {
+        ctx && ctx.stroke();
+        this.toStatic();
+    },
+
+    /**
+     * 必须在其它绘制命令前调用
+     * Must be invoked before all other path drawing methods
+     * @return {module:zrender/core/PathProxy}
+     */
+    setLineDash: function (lineDash) {
+        if (lineDash instanceof Array) {
+            this._lineDash = lineDash;
+
+            this._dashIdx = 0;
+
+            var lineDashSum = 0;
+            for (var i = 0; i < lineDash.length; i++) {
+                lineDashSum += lineDash[i];
