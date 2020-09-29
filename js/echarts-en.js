@@ -13292,3 +13292,257 @@ PathProxy.prototype = {
             var lineDashSum = 0;
             for (var i = 0; i < lineDash.length; i++) {
                 lineDashSum += lineDash[i];
+            }
+            this._dashSum = lineDashSum;
+        }
+        return this;
+    },
+
+    /**
+     * 必须在其它绘制命令前调用
+     * Must be invoked before all other path drawing methods
+     * @return {module:zrender/core/PathProxy}
+     */
+    setLineDashOffset: function (offset) {
+        this._dashOffset = offset;
+        return this;
+    },
+
+    /**
+     *
+     * @return {boolean}
+     */
+    len: function () {
+        return this._len;
+    },
+
+    /**
+     * 直接设置 Path 数据
+     */
+    setData: function (data) {
+
+        var len$$1 = data.length;
+
+        if (!(this.data && this.data.length === len$$1) && hasTypedArray) {
+            this.data = new Float32Array(len$$1);
+        }
+
+        for (var i = 0; i < len$$1; i++) {
+            this.data[i] = data[i];
+        }
+
+        this._len = len$$1;
+    },
+
+    /**
+     * 添加子路径
+     * @param {module:zrender/core/PathProxy|Array.<module:zrender/core/PathProxy>} path
+     */
+    appendPath: function (path) {
+        if (!(path instanceof Array)) {
+            path = [path];
+        }
+        var len$$1 = path.length;
+        var appendSize = 0;
+        var offset = this._len;
+        for (var i = 0; i < len$$1; i++) {
+            appendSize += path[i].len();
+        }
+        if (hasTypedArray && (this.data instanceof Float32Array)) {
+            this.data = new Float32Array(offset + appendSize);
+        }
+        for (var i = 0; i < len$$1; i++) {
+            var appendPathData = path[i].data;
+            for (var k = 0; k < appendPathData.length; k++) {
+                this.data[offset++] = appendPathData[k];
+            }
+        }
+        this._len = offset;
+    },
+
+    /**
+     * 填充 Path 数据。
+     * 尽量复用而不申明新的数组。大部分图形重绘的指令数据长度都是不变的。
+     */
+    addData: function (cmd) {
+        if (!this._saveData) {
+            return;
+        }
+
+        var data = this.data;
+        if (this._len + arguments.length > data.length) {
+            // 因为之前的数组已经转换成静态的 Float32Array
+            // 所以不够用时需要扩展一个新的动态数组
+            this._expandData();
+            data = this.data;
+        }
+        for (var i = 0; i < arguments.length; i++) {
+            data[this._len++] = arguments[i];
+        }
+
+        this._prevCmd = cmd;
+    },
+
+    _expandData: function () {
+        // Only if data is Float32Array
+        if (!(this.data instanceof Array)) {
+            var newData = [];
+            for (var i = 0; i < this._len; i++) {
+                newData[i] = this.data[i];
+            }
+            this.data = newData;
+        }
+    },
+
+    /**
+     * If needs js implemented dashed line
+     * @return {boolean}
+     * @private
+     */
+    _needsDash: function () {
+        return this._lineDash;
+    },
+
+    _dashedLineTo: function (x1, y1) {
+        var dashSum = this._dashSum;
+        var offset = this._dashOffset;
+        var lineDash = this._lineDash;
+        var ctx = this._ctx;
+
+        var x0 = this._xi;
+        var y0 = this._yi;
+        var dx = x1 - x0;
+        var dy = y1 - y0;
+        var dist$$1 = mathSqrt$1(dx * dx + dy * dy);
+        var x = x0;
+        var y = y0;
+        var dash;
+        var nDash = lineDash.length;
+        var idx;
+        dx /= dist$$1;
+        dy /= dist$$1;
+
+        if (offset < 0) {
+            // Convert to positive offset
+            offset = dashSum + offset;
+        }
+        offset %= dashSum;
+        x -= offset * dx;
+        y -= offset * dy;
+
+        while ((dx > 0 && x <= x1) || (dx < 0 && x >= x1)
+        || (dx === 0 && ((dy > 0 && y <= y1) || (dy < 0 && y >= y1)))) {
+            idx = this._dashIdx;
+            dash = lineDash[idx];
+            x += dx * dash;
+            y += dy * dash;
+            this._dashIdx = (idx + 1) % nDash;
+            // Skip positive offset
+            if ((dx > 0 && x < x0) || (dx < 0 && x > x0) || (dy > 0 && y < y0) || (dy < 0 && y > y0)) {
+                continue;
+            }
+            ctx[idx % 2 ? 'moveTo' : 'lineTo'](
+                dx >= 0 ? mathMin$2(x, x1) : mathMax$2(x, x1),
+                dy >= 0 ? mathMin$2(y, y1) : mathMax$2(y, y1)
+            );
+        }
+        // Offset for next lineTo
+        dx = x - x1;
+        dy = y - y1;
+        this._dashOffset = -mathSqrt$1(dx * dx + dy * dy);
+    },
+
+    // Not accurate dashed line to
+    _dashedBezierTo: function (x1, y1, x2, y2, x3, y3) {
+        var dashSum = this._dashSum;
+        var offset = this._dashOffset;
+        var lineDash = this._lineDash;
+        var ctx = this._ctx;
+
+        var x0 = this._xi;
+        var y0 = this._yi;
+        var t;
+        var dx;
+        var dy;
+        var cubicAt$$1 = cubicAt;
+        var bezierLen = 0;
+        var idx = this._dashIdx;
+        var nDash = lineDash.length;
+
+        var x;
+        var y;
+
+        var tmpLen = 0;
+
+        if (offset < 0) {
+            // Convert to positive offset
+            offset = dashSum + offset;
+        }
+        offset %= dashSum;
+        // Bezier approx length
+        for (t = 0; t < 1; t += 0.1) {
+            dx = cubicAt$$1(x0, x1, x2, x3, t + 0.1)
+                - cubicAt$$1(x0, x1, x2, x3, t);
+            dy = cubicAt$$1(y0, y1, y2, y3, t + 0.1)
+                - cubicAt$$1(y0, y1, y2, y3, t);
+            bezierLen += mathSqrt$1(dx * dx + dy * dy);
+        }
+
+        // Find idx after add offset
+        for (; idx < nDash; idx++) {
+            tmpLen += lineDash[idx];
+            if (tmpLen > offset) {
+                break;
+            }
+        }
+        t = (tmpLen - offset) / bezierLen;
+
+        while (t <= 1) {
+
+            x = cubicAt$$1(x0, x1, x2, x3, t);
+            y = cubicAt$$1(y0, y1, y2, y3, t);
+
+            // Use line to approximate dashed bezier
+            // Bad result if dash is long
+            idx % 2 ? ctx.moveTo(x, y)
+                : ctx.lineTo(x, y);
+
+            t += lineDash[idx] / bezierLen;
+
+            idx = (idx + 1) % nDash;
+        }
+
+        // Finish the last segment and calculate the new offset
+        (idx % 2 !== 0) && ctx.lineTo(x3, y3);
+        dx = x3 - x;
+        dy = y3 - y;
+        this._dashOffset = -mathSqrt$1(dx * dx + dy * dy);
+    },
+
+    _dashedQuadraticTo: function (x1, y1, x2, y2) {
+        // Convert quadratic to cubic using degree elevation
+        var x3 = x2;
+        var y3 = y2;
+        x2 = (x2 + 2 * x1) / 3;
+        y2 = (y2 + 2 * y1) / 3;
+        x1 = (this._xi + 2 * x1) / 3;
+        y1 = (this._yi + 2 * y1) / 3;
+
+        this._dashedBezierTo(x1, y1, x2, y2, x3, y3);
+    },
+
+    /**
+     * 转成静态的 Float32Array 减少堆内存占用
+     * Convert dynamic array to static Float32Array
+     */
+    toStatic: function () {
+        var data = this.data;
+        if (data instanceof Array) {
+            data.length = this._len;
+            if (hasTypedArray) {
+                this.data = new Float32Array(data);
+            }
+        }
+    },
+
+    /**
