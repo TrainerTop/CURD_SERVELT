@@ -13814,3 +13814,265 @@ function containStroke$1(x0, y0, x1, y1, lineWidth, x, y) {
  * 三次贝塞尔曲线描边包含判断
  * @param  {number}  x0
  * @param  {number}  y0
+ * @param  {number}  x1
+ * @param  {number}  y1
+ * @param  {number}  x2
+ * @param  {number}  y2
+ * @param  {number}  x3
+ * @param  {number}  y3
+ * @param  {number}  lineWidth
+ * @param  {number}  x
+ * @param  {number}  y
+ * @return {boolean}
+ */
+function containStroke$2(x0, y0, x1, y1, x2, y2, x3, y3, lineWidth, x, y) {
+    if (lineWidth === 0) {
+        return false;
+    }
+    var _l = lineWidth;
+    // Quick reject
+    if (
+        (y > y0 + _l && y > y1 + _l && y > y2 + _l && y > y3 + _l)
+        || (y < y0 - _l && y < y1 - _l && y < y2 - _l && y < y3 - _l)
+        || (x > x0 + _l && x > x1 + _l && x > x2 + _l && x > x3 + _l)
+        || (x < x0 - _l && x < x1 - _l && x < x2 - _l && x < x3 - _l)
+    ) {
+        return false;
+    }
+    var d = cubicProjectPoint(
+        x0, y0, x1, y1, x2, y2, x3, y3,
+        x, y, null
+    );
+    return d <= _l / 2;
+}
+
+/**
+ * 二次贝塞尔曲线描边包含判断
+ * @param  {number}  x0
+ * @param  {number}  y0
+ * @param  {number}  x1
+ * @param  {number}  y1
+ * @param  {number}  x2
+ * @param  {number}  y2
+ * @param  {number}  lineWidth
+ * @param  {number}  x
+ * @param  {number}  y
+ * @return {boolean}
+ */
+function containStroke$3(x0, y0, x1, y1, x2, y2, lineWidth, x, y) {
+    if (lineWidth === 0) {
+        return false;
+    }
+    var _l = lineWidth;
+    // Quick reject
+    if (
+        (y > y0 + _l && y > y1 + _l && y > y2 + _l)
+        || (y < y0 - _l && y < y1 - _l && y < y2 - _l)
+        || (x > x0 + _l && x > x1 + _l && x > x2 + _l)
+        || (x < x0 - _l && x < x1 - _l && x < x2 - _l)
+    ) {
+        return false;
+    }
+    var d = quadraticProjectPoint(
+        x0, y0, x1, y1, x2, y2,
+        x, y, null
+    );
+    return d <= _l / 2;
+}
+
+var PI2$3 = Math.PI * 2;
+
+function normalizeRadian(angle) {
+    angle %= PI2$3;
+    if (angle < 0) {
+        angle += PI2$3;
+    }
+    return angle;
+}
+
+var PI2$2 = Math.PI * 2;
+
+/**
+ * 圆弧描边包含判断
+ * @param  {number}  cx
+ * @param  {number}  cy
+ * @param  {number}  r
+ * @param  {number}  startAngle
+ * @param  {number}  endAngle
+ * @param  {boolean}  anticlockwise
+ * @param  {number} lineWidth
+ * @param  {number}  x
+ * @param  {number}  y
+ * @return {Boolean}
+ */
+function containStroke$4(
+    cx, cy, r, startAngle, endAngle, anticlockwise,
+    lineWidth, x, y
+) {
+
+    if (lineWidth === 0) {
+        return false;
+    }
+    var _l = lineWidth;
+
+    x -= cx;
+    y -= cy;
+    var d = Math.sqrt(x * x + y * y);
+
+    if ((d - _l > r) || (d + _l < r)) {
+        return false;
+    }
+    if (Math.abs(startAngle - endAngle) % PI2$2 < 1e-4) {
+        // Is a circle
+        return true;
+    }
+    if (anticlockwise) {
+        var tmp = startAngle;
+        startAngle = normalizeRadian(endAngle);
+        endAngle = normalizeRadian(tmp);
+    }
+    else {
+        startAngle = normalizeRadian(startAngle);
+        endAngle = normalizeRadian(endAngle);
+    }
+    if (startAngle > endAngle) {
+        endAngle += PI2$2;
+    }
+
+    var angle = Math.atan2(y, x);
+    if (angle < 0) {
+        angle += PI2$2;
+    }
+    return (angle >= startAngle && angle <= endAngle)
+        || (angle + PI2$2 >= startAngle && angle + PI2$2 <= endAngle);
+}
+
+function windingLine(x0, y0, x1, y1, x, y) {
+    if ((y > y0 && y > y1) || (y < y0 && y < y1)) {
+        return 0;
+    }
+    // Ignore horizontal line
+    if (y1 === y0) {
+        return 0;
+    }
+    var dir = y1 < y0 ? 1 : -1;
+    var t = (y - y0) / (y1 - y0);
+
+    // Avoid winding error when intersection point is the connect point of two line of polygon
+    if (t === 1 || t === 0) {
+        dir = y1 < y0 ? 0.5 : -0.5;
+    }
+
+    var x_ = t * (x1 - x0) + x0;
+
+    // If (x, y) on the line, considered as "contain".
+    return x_ === x ? Infinity : x_ > x ? dir : 0;
+}
+
+var CMD$1 = PathProxy.CMD;
+var PI2$1 = Math.PI * 2;
+
+var EPSILON$2 = 1e-4;
+
+function isAroundEqual(a, b) {
+    return Math.abs(a - b) < EPSILON$2;
+}
+
+// 临时数组
+var roots = [-1, -1, -1];
+var extrema = [-1, -1];
+
+function swapExtrema() {
+    var tmp = extrema[0];
+    extrema[0] = extrema[1];
+    extrema[1] = tmp;
+}
+
+function windingCubic(x0, y0, x1, y1, x2, y2, x3, y3, x, y) {
+    // Quick reject
+    if (
+        (y > y0 && y > y1 && y > y2 && y > y3)
+        || (y < y0 && y < y1 && y < y2 && y < y3)
+    ) {
+        return 0;
+    }
+    var nRoots = cubicRootAt(y0, y1, y2, y3, y, roots);
+    if (nRoots === 0) {
+        return 0;
+    }
+    else {
+        var w = 0;
+        var nExtrema = -1;
+        var y0_;
+        var y1_;
+        for (var i = 0; i < nRoots; i++) {
+            var t = roots[i];
+
+            // Avoid winding error when intersection point is the connect point of two line of polygon
+            var unit = (t === 0 || t === 1) ? 0.5 : 1;
+
+            var x_ = cubicAt(x0, x1, x2, x3, t);
+            if (x_ < x) { // Quick reject
+                continue;
+            }
+            if (nExtrema < 0) {
+                nExtrema = cubicExtrema(y0, y1, y2, y3, extrema);
+                if (extrema[1] < extrema[0] && nExtrema > 1) {
+                    swapExtrema();
+                }
+                y0_ = cubicAt(y0, y1, y2, y3, extrema[0]);
+                if (nExtrema > 1) {
+                    y1_ = cubicAt(y0, y1, y2, y3, extrema[1]);
+                }
+            }
+            if (nExtrema === 2) {
+                // 分成三段单调函数
+                if (t < extrema[0]) {
+                    w += y0_ < y0 ? unit : -unit;
+                }
+                else if (t < extrema[1]) {
+                    w += y1_ < y0_ ? unit : -unit;
+                }
+                else {
+                    w += y3 < y1_ ? unit : -unit;
+                }
+            }
+            else {
+                // 分成两段单调函数
+                if (t < extrema[0]) {
+                    w += y0_ < y0 ? unit : -unit;
+                }
+                else {
+                    w += y3 < y0_ ? unit : -unit;
+                }
+            }
+        }
+        return w;
+    }
+}
+
+function windingQuadratic(x0, y0, x1, y1, x2, y2, x, y) {
+    // Quick reject
+    if (
+        (y > y0 && y > y1 && y > y2)
+        || (y < y0 && y < y1 && y < y2)
+    ) {
+        return 0;
+    }
+    var nRoots = quadraticRootAt(y0, y1, y2, y, roots);
+    if (nRoots === 0) {
+        return 0;
+    }
+    else {
+        var t = quadraticExtremum(y0, y1, y2);
+        if (t >= 0 && t <= 1) {
+            var w = 0;
+            var y_ = quadraticAt(y0, y1, y2, t);
+            for (var i = 0; i < nRoots; i++) {
+                // Remove one endpoint.
+                var unit = (roots[i] === 0 || roots[i] === 1) ? 0.5 : 1;
+
+                var x_ = quadraticAt(x0, x1, x2, roots[i]);
+                if (x_ < x) {   // Quick reject
+                    continue;
+                }
