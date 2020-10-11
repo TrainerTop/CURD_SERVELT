@@ -13546,3 +13546,271 @@ PathProxy.prototype = {
     },
 
     /**
+     * @return {module:zrender/core/BoundingRect}
+     */
+    getBoundingRect: function () {
+        min$1[0] = min$1[1] = min2[0] = min2[1] = Number.MAX_VALUE;
+        max$1[0] = max$1[1] = max2[0] = max2[1] = -Number.MAX_VALUE;
+
+        var data = this.data;
+        var xi = 0;
+        var yi = 0;
+        var x0 = 0;
+        var y0 = 0;
+
+        for (var i = 0; i < data.length;) {
+            var cmd = data[i++];
+
+            if (i === 1) {
+                // 如果第一个命令是 L, C, Q
+                // 则 previous point 同绘制命令的第一个 point
+                //
+                // 第一个命令为 Arc 的情况下会在后面特殊处理
+                xi = data[i];
+                yi = data[i + 1];
+
+                x0 = xi;
+                y0 = yi;
+            }
+
+            switch (cmd) {
+                case CMD.M:
+                    // moveTo 命令重新创建一个新的 subpath, 并且更新新的起点
+                    // 在 closePath 的时候使用
+                    x0 = data[i++];
+                    y0 = data[i++];
+                    xi = x0;
+                    yi = y0;
+                    min2[0] = x0;
+                    min2[1] = y0;
+                    max2[0] = x0;
+                    max2[1] = y0;
+                    break;
+                case CMD.L:
+                    fromLine(xi, yi, data[i], data[i + 1], min2, max2);
+                    xi = data[i++];
+                    yi = data[i++];
+                    break;
+                case CMD.C:
+                    fromCubic(
+                        xi, yi, data[i++], data[i++], data[i++], data[i++], data[i], data[i + 1],
+                        min2, max2
+                    );
+                    xi = data[i++];
+                    yi = data[i++];
+                    break;
+                case CMD.Q:
+                    fromQuadratic(
+                        xi, yi, data[i++], data[i++], data[i], data[i + 1],
+                        min2, max2
+                    );
+                    xi = data[i++];
+                    yi = data[i++];
+                    break;
+                case CMD.A:
+                    // TODO Arc 判断的开销比较大
+                    var cx = data[i++];
+                    var cy = data[i++];
+                    var rx = data[i++];
+                    var ry = data[i++];
+                    var startAngle = data[i++];
+                    var endAngle = data[i++] + startAngle;
+                    // TODO Arc 旋转
+                    i += 1;
+                    var anticlockwise = 1 - data[i++];
+
+                    if (i === 1) {
+                        // 直接使用 arc 命令
+                        // 第一个命令起点还未定义
+                        x0 = mathCos$1(startAngle) * rx + cx;
+                        y0 = mathSin$1(startAngle) * ry + cy;
+                    }
+
+                    fromArc(
+                        cx, cy, rx, ry, startAngle, endAngle,
+                        anticlockwise, min2, max2
+                    );
+
+                    xi = mathCos$1(endAngle) * rx + cx;
+                    yi = mathSin$1(endAngle) * ry + cy;
+                    break;
+                case CMD.R:
+                    x0 = xi = data[i++];
+                    y0 = yi = data[i++];
+                    var width = data[i++];
+                    var height = data[i++];
+                    // Use fromLine
+                    fromLine(x0, y0, x0 + width, y0 + height, min2, max2);
+                    break;
+                case CMD.Z:
+                    xi = x0;
+                    yi = y0;
+                    break;
+            }
+
+            // Union
+            min(min$1, min$1, min2);
+            max(max$1, max$1, max2);
+        }
+
+        // No data
+        if (i === 0) {
+            min$1[0] = min$1[1] = max$1[0] = max$1[1] = 0;
+        }
+
+        return new BoundingRect(
+            min$1[0], min$1[1], max$1[0] - min$1[0], max$1[1] - min$1[1]
+        );
+    },
+
+    /**
+     * Rebuild path from current data
+     * Rebuild path will not consider javascript implemented line dash.
+     * @param {CanvasRenderingContext2D} ctx
+     */
+    rebuildPath: function (ctx) {
+        var d = this.data;
+        var x0, y0;
+        var xi, yi;
+        var x, y;
+        var ux = this._ux;
+        var uy = this._uy;
+        var len$$1 = this._len;
+        for (var i = 0; i < len$$1;) {
+            var cmd = d[i++];
+
+            if (i === 1) {
+                // 如果第一个命令是 L, C, Q
+                // 则 previous point 同绘制命令的第一个 point
+                //
+                // 第一个命令为 Arc 的情况下会在后面特殊处理
+                xi = d[i];
+                yi = d[i + 1];
+
+                x0 = xi;
+                y0 = yi;
+            }
+            switch (cmd) {
+                case CMD.M:
+                    x0 = xi = d[i++];
+                    y0 = yi = d[i++];
+                    ctx.moveTo(xi, yi);
+                    break;
+                case CMD.L:
+                    x = d[i++];
+                    y = d[i++];
+                    // Not draw too small seg between
+                    if (mathAbs(x - xi) > ux || mathAbs(y - yi) > uy || i === len$$1 - 1) {
+                        ctx.lineTo(x, y);
+                        xi = x;
+                        yi = y;
+                    }
+                    break;
+                case CMD.C:
+                    ctx.bezierCurveTo(
+                        d[i++], d[i++], d[i++], d[i++], d[i++], d[i++]
+                    );
+                    xi = d[i - 2];
+                    yi = d[i - 1];
+                    break;
+                case CMD.Q:
+                    ctx.quadraticCurveTo(d[i++], d[i++], d[i++], d[i++]);
+                    xi = d[i - 2];
+                    yi = d[i - 1];
+                    break;
+                case CMD.A:
+                    var cx = d[i++];
+                    var cy = d[i++];
+                    var rx = d[i++];
+                    var ry = d[i++];
+                    var theta = d[i++];
+                    var dTheta = d[i++];
+                    var psi = d[i++];
+                    var fs = d[i++];
+                    var r = (rx > ry) ? rx : ry;
+                    var scaleX = (rx > ry) ? 1 : rx / ry;
+                    var scaleY = (rx > ry) ? ry / rx : 1;
+                    var isEllipse = Math.abs(rx - ry) > 1e-3;
+                    var endAngle = theta + dTheta;
+                    if (isEllipse) {
+                        ctx.translate(cx, cy);
+                        ctx.rotate(psi);
+                        ctx.scale(scaleX, scaleY);
+                        ctx.arc(0, 0, r, theta, endAngle, 1 - fs);
+                        ctx.scale(1 / scaleX, 1 / scaleY);
+                        ctx.rotate(-psi);
+                        ctx.translate(-cx, -cy);
+                    }
+                    else {
+                        ctx.arc(cx, cy, r, theta, endAngle, 1 - fs);
+                    }
+
+                    if (i === 1) {
+                        // 直接使用 arc 命令
+                        // 第一个命令起点还未定义
+                        x0 = mathCos$1(theta) * rx + cx;
+                        y0 = mathSin$1(theta) * ry + cy;
+                    }
+                    xi = mathCos$1(endAngle) * rx + cx;
+                    yi = mathSin$1(endAngle) * ry + cy;
+                    break;
+                case CMD.R:
+                    x0 = xi = d[i];
+                    y0 = yi = d[i + 1];
+                    ctx.rect(d[i++], d[i++], d[i++], d[i++]);
+                    break;
+                case CMD.Z:
+                    ctx.closePath();
+                    xi = x0;
+                    yi = y0;
+            }
+        }
+    }
+};
+
+PathProxy.CMD = CMD;
+
+/**
+ * 线段包含判断
+ * @param  {number}  x0
+ * @param  {number}  y0
+ * @param  {number}  x1
+ * @param  {number}  y1
+ * @param  {number}  lineWidth
+ * @param  {number}  x
+ * @param  {number}  y
+ * @return {boolean}
+ */
+function containStroke$1(x0, y0, x1, y1, lineWidth, x, y) {
+    if (lineWidth === 0) {
+        return false;
+    }
+    var _l = lineWidth;
+    var _a = 0;
+    var _b = x0;
+    // Quick reject
+    if (
+        (y > y0 + _l && y > y1 + _l)
+        || (y < y0 - _l && y < y1 - _l)
+        || (x > x0 + _l && x > x1 + _l)
+        || (x < x0 - _l && x < x1 - _l)
+    ) {
+        return false;
+    }
+
+    if (x0 !== x1) {
+        _a = (y0 - y1) / (x0 - x1);
+        _b = (x0 * y1 - x1 * y0) / (x0 - x1);
+    }
+    else {
+        return Math.abs(x - x0) <= _l / 2;
+    }
+    var tmp = _a * x - y + _b;
+    var _s = tmp * tmp / (_a * _a + 1);
+    return _s <= _l / 2 * _l / 2;
+}
+
+/**
+ * 三次贝塞尔曲线描边包含判断
+ * @param  {number}  x0
+ * @param  {number}  y0
