@@ -14626,3 +14626,265 @@ Path.prototype = {
 
         // Used as a clipping path
         if (this.__clipTarget) {
+            this.__clipTarget.dirty();
+        }
+    },
+
+    /**
+     * Alias for animate('shape')
+     * @param {boolean} loop
+     */
+    animateShape: function (loop) {
+        return this.animate('shape', loop);
+    },
+
+    // Overwrite attrKV
+    attrKV: function (key, value) {
+        // FIXME
+        if (key === 'shape') {
+            this.setShape(value);
+            this.__dirtyPath = true;
+            this._rect = null;
+        }
+        else {
+            Displayable.prototype.attrKV.call(this, key, value);
+        }
+    },
+
+    /**
+     * @param {Object|string} key
+     * @param {*} value
+     */
+    setShape: function (key, value) {
+        var shape = this.shape;
+        // Path from string may not have shape
+        if (shape) {
+            if (isObject$1(key)) {
+                for (var name in key) {
+                    if (key.hasOwnProperty(name)) {
+                        shape[name] = key[name];
+                    }
+                }
+            }
+            else {
+                shape[key] = value;
+            }
+            this.dirty(true);
+        }
+        return this;
+    },
+
+    getLineScale: function () {
+        var m = this.transform;
+        // Get the line scale.
+        // Determinant of `m` means how much the area is enlarged by the
+        // transformation. So its square root can be used as a scale factor
+        // for width.
+        return m && abs(m[0] - 1) > 1e-10 && abs(m[3] - 1) > 1e-10
+            ? Math.sqrt(abs(m[0] * m[3] - m[2] * m[1]))
+            : 1;
+    }
+};
+
+/**
+ * 扩展一个 Path element, 比如星形，圆等。
+ * Extend a path element
+ * @param {Object} props
+ * @param {string} props.type Path type
+ * @param {Function} props.init Initialize
+ * @param {Function} props.buildPath Overwrite buildPath method
+ * @param {Object} [props.style] Extended default style config
+ * @param {Object} [props.shape] Extended default shape config
+ */
+Path.extend = function (defaults$$1) {
+    var Sub = function (opts) {
+        Path.call(this, opts);
+
+        if (defaults$$1.style) {
+            // Extend default style
+            this.style.extendFrom(defaults$$1.style, false);
+        }
+
+        // Extend default shape
+        var defaultShape = defaults$$1.shape;
+        if (defaultShape) {
+            this.shape = this.shape || {};
+            var thisShape = this.shape;
+            for (var name in defaultShape) {
+                if (
+                    !thisShape.hasOwnProperty(name)
+                    && defaultShape.hasOwnProperty(name)
+                ) {
+                    thisShape[name] = defaultShape[name];
+                }
+            }
+        }
+
+        defaults$$1.init && defaults$$1.init.call(this, opts);
+    };
+
+    inherits(Sub, Path);
+
+    // FIXME 不能 extend position, rotation 等引用对象
+    for (var name in defaults$$1) {
+        // Extending prototype values and methods
+        if (name !== 'style' && name !== 'shape') {
+            Sub.prototype[name] = defaults$$1[name];
+        }
+    }
+
+    return Sub;
+};
+
+inherits(Path, Displayable);
+
+var CMD$2 = PathProxy.CMD;
+
+var points = [[], [], []];
+var mathSqrt$3 = Math.sqrt;
+var mathAtan2 = Math.atan2;
+
+var transformPath = function (path, m) {
+    var data = path.data;
+    var cmd;
+    var nPoint;
+    var i;
+    var j;
+    var k;
+    var p;
+
+    var M = CMD$2.M;
+    var C = CMD$2.C;
+    var L = CMD$2.L;
+    var R = CMD$2.R;
+    var A = CMD$2.A;
+    var Q = CMD$2.Q;
+
+    for (i = 0, j = 0; i < data.length;) {
+        cmd = data[i++];
+        j = i;
+        nPoint = 0;
+
+        switch (cmd) {
+            case M:
+                nPoint = 1;
+                break;
+            case L:
+                nPoint = 1;
+                break;
+            case C:
+                nPoint = 3;
+                break;
+            case Q:
+                nPoint = 2;
+                break;
+            case A:
+                var x = m[4];
+                var y = m[5];
+                var sx = mathSqrt$3(m[0] * m[0] + m[1] * m[1]);
+                var sy = mathSqrt$3(m[2] * m[2] + m[3] * m[3]);
+                var angle = mathAtan2(-m[1] / sy, m[0] / sx);
+                // cx
+                data[i] *= sx;
+                data[i++] += x;
+                // cy
+                data[i] *= sy;
+                data[i++] += y;
+                // Scale rx and ry
+                // FIXME Assume psi is 0 here
+                data[i++] *= sx;
+                data[i++] *= sy;
+
+                // Start angle
+                data[i++] += angle;
+                // end angle
+                data[i++] += angle;
+                // FIXME psi
+                i += 2;
+                j = i;
+                break;
+            case R:
+                // x0, y0
+                p[0] = data[i++];
+                p[1] = data[i++];
+                applyTransform(p, p, m);
+                data[j++] = p[0];
+                data[j++] = p[1];
+                // x1, y1
+                p[0] += data[i++];
+                p[1] += data[i++];
+                applyTransform(p, p, m);
+                data[j++] = p[0];
+                data[j++] = p[1];
+        }
+
+        for (k = 0; k < nPoint; k++) {
+            var p = points[k];
+            p[0] = data[i++];
+            p[1] = data[i++];
+
+            applyTransform(p, p, m);
+            // Write back
+            data[j++] = p[0];
+            data[j++] = p[1];
+        }
+    }
+};
+
+// command chars
+// var cc = [
+//     'm', 'M', 'l', 'L', 'v', 'V', 'h', 'H', 'z', 'Z',
+//     'c', 'C', 'q', 'Q', 't', 'T', 's', 'S', 'a', 'A'
+// ];
+
+var mathSqrt = Math.sqrt;
+var mathSin = Math.sin;
+var mathCos = Math.cos;
+var PI = Math.PI;
+
+var vMag = function (v) {
+    return Math.sqrt(v[0] * v[0] + v[1] * v[1]);
+};
+var vRatio = function (u, v) {
+    return (u[0] * v[0] + u[1] * v[1]) / (vMag(u) * vMag(v));
+};
+var vAngle = function (u, v) {
+    return (u[0] * v[1] < u[1] * v[0] ? -1 : 1)
+            * Math.acos(vRatio(u, v));
+};
+
+function processArc(x1, y1, x2, y2, fa, fs, rx, ry, psiDeg, cmd, path) {
+    var psi = psiDeg * (PI / 180.0);
+    var xp = mathCos(psi) * (x1 - x2) / 2.0
+                + mathSin(psi) * (y1 - y2) / 2.0;
+    var yp = -1 * mathSin(psi) * (x1 - x2) / 2.0
+                + mathCos(psi) * (y1 - y2) / 2.0;
+
+    var lambda = (xp * xp) / (rx * rx) + (yp * yp) / (ry * ry);
+
+    if (lambda > 1) {
+        rx *= mathSqrt(lambda);
+        ry *= mathSqrt(lambda);
+    }
+
+    var f = (fa === fs ? -1 : 1)
+        * mathSqrt((((rx * rx) * (ry * ry))
+                - ((rx * rx) * (yp * yp))
+                - ((ry * ry) * (xp * xp))) / ((rx * rx) * (yp * yp)
+                + (ry * ry) * (xp * xp))
+            ) || 0;
+
+    var cxp = f * rx * yp / ry;
+    var cyp = f * -ry * xp / rx;
+
+    var cx = (x1 + x2) / 2.0
+                + mathCos(psi) * cxp
+                - mathSin(psi) * cyp;
+    var cy = (y1 + y2) / 2.0
+            + mathSin(psi) * cxp
+            + mathCos(psi) * cyp;
+
+    var theta = vAngle([ 1, 0 ], [ (xp - cxp) / rx, (yp - cyp) / ry ]);
+    var u = [ (xp - cxp) / rx, (yp - cyp) / ry ];
+    var v = [ (-1 * xp - cxp) / rx, (-1 * yp - cyp) / ry ];
+    var dTheta = vAngle(u, v);
