@@ -14351,3 +14351,278 @@ function containPath(data, lineWidth, isStroke, x, y) {
 function contain(pathData, x, y) {
     return containPath(pathData, 0, false, x, y);
 }
+
+function containStroke(pathData, lineWidth, x, y) {
+    return containPath(pathData, lineWidth, true, x, y);
+}
+
+var getCanvasPattern = Pattern.prototype.getCanvasPattern;
+
+var abs = Math.abs;
+
+var pathProxyForDraw = new PathProxy(true);
+/**
+ * @alias module:zrender/graphic/Path
+ * @extends module:zrender/graphic/Displayable
+ * @constructor
+ * @param {Object} opts
+ */
+function Path(opts) {
+    Displayable.call(this, opts);
+
+    /**
+     * @type {module:zrender/core/PathProxy}
+     * @readOnly
+     */
+    this.path = null;
+}
+
+Path.prototype = {
+
+    constructor: Path,
+
+    type: 'path',
+
+    __dirtyPath: true,
+
+    strokeContainThreshold: 5,
+
+    /**
+     * See `module:zrender/src/graphic/helper/subPixelOptimize`.
+     * @type {boolean}
+     */
+    subPixelOptimize: false,
+
+    brush: function (ctx, prevEl) {
+        var style = this.style;
+        var path = this.path || pathProxyForDraw;
+        var hasStroke = style.hasStroke();
+        var hasFill = style.hasFill();
+        var fill = style.fill;
+        var stroke = style.stroke;
+        var hasFillGradient = hasFill && !!(fill.colorStops);
+        var hasStrokeGradient = hasStroke && !!(stroke.colorStops);
+        var hasFillPattern = hasFill && !!(fill.image);
+        var hasStrokePattern = hasStroke && !!(stroke.image);
+
+        style.bind(ctx, this, prevEl);
+        this.setTransform(ctx);
+
+        if (this.__dirty) {
+            var rect;
+            // Update gradient because bounding rect may changed
+            if (hasFillGradient) {
+                rect = rect || this.getBoundingRect();
+                this._fillGradient = style.getGradient(ctx, fill, rect);
+            }
+            if (hasStrokeGradient) {
+                rect = rect || this.getBoundingRect();
+                this._strokeGradient = style.getGradient(ctx, stroke, rect);
+            }
+        }
+        // Use the gradient or pattern
+        if (hasFillGradient) {
+            // PENDING If may have affect the state
+            ctx.fillStyle = this._fillGradient;
+        }
+        else if (hasFillPattern) {
+            ctx.fillStyle = getCanvasPattern.call(fill, ctx);
+        }
+        if (hasStrokeGradient) {
+            ctx.strokeStyle = this._strokeGradient;
+        }
+        else if (hasStrokePattern) {
+            ctx.strokeStyle = getCanvasPattern.call(stroke, ctx);
+        }
+
+        var lineDash = style.lineDash;
+        var lineDashOffset = style.lineDashOffset;
+
+        var ctxLineDash = !!ctx.setLineDash;
+
+        // Update path sx, sy
+        var scale = this.getGlobalScale();
+        path.setScale(scale[0], scale[1]);
+
+        // Proxy context
+        // Rebuild path in following 2 cases
+        // 1. Path is dirty
+        // 2. Path needs javascript implemented lineDash stroking.
+        //    In this case, lineDash information will not be saved in PathProxy
+        if (this.__dirtyPath
+            || (lineDash && !ctxLineDash && hasStroke)
+        ) {
+            path.beginPath(ctx);
+
+            // Setting line dash before build path
+            if (lineDash && !ctxLineDash) {
+                path.setLineDash(lineDash);
+                path.setLineDashOffset(lineDashOffset);
+            }
+
+            this.buildPath(path, this.shape, false);
+
+            // Clear path dirty flag
+            if (this.path) {
+                this.__dirtyPath = false;
+            }
+        }
+        else {
+            // Replay path building
+            ctx.beginPath();
+            this.path.rebuildPath(ctx);
+        }
+
+        if (hasFill) {
+            if (style.fillOpacity != null) {
+                var originalGlobalAlpha = ctx.globalAlpha;
+                ctx.globalAlpha = style.fillOpacity * style.opacity;
+                path.fill(ctx);
+                ctx.globalAlpha = originalGlobalAlpha;
+            }
+            else {
+                path.fill(ctx);
+            }
+        }
+
+        if (lineDash && ctxLineDash) {
+            ctx.setLineDash(lineDash);
+            ctx.lineDashOffset = lineDashOffset;
+        }
+
+        if (hasStroke) {
+            if (style.strokeOpacity != null) {
+                var originalGlobalAlpha = ctx.globalAlpha;
+                ctx.globalAlpha = style.strokeOpacity * style.opacity;
+                path.stroke(ctx);
+                ctx.globalAlpha = originalGlobalAlpha;
+            }
+            else {
+                path.stroke(ctx);
+            }
+        }
+
+        if (lineDash && ctxLineDash) {
+            // PENDING
+            // Remove lineDash
+            ctx.setLineDash([]);
+        }
+
+        // Draw rect text
+        if (style.text != null) {
+            // Only restore transform when needs draw text.
+            this.restoreTransform(ctx);
+            this.drawRectText(ctx, this.getBoundingRect());
+        }
+    },
+
+    // When bundling path, some shape may decide if use moveTo to begin a new subpath or closePath
+    // Like in circle
+    buildPath: function (ctx, shapeCfg, inBundle) {},
+
+    createPathProxy: function () {
+        this.path = new PathProxy();
+    },
+
+    getBoundingRect: function () {
+        var rect = this._rect;
+        var style = this.style;
+        var needsUpdateRect = !rect;
+        if (needsUpdateRect) {
+            var path = this.path;
+            if (!path) {
+                // Create path on demand.
+                path = this.path = new PathProxy();
+            }
+            if (this.__dirtyPath) {
+                path.beginPath();
+                this.buildPath(path, this.shape, false);
+            }
+            rect = path.getBoundingRect();
+        }
+        this._rect = rect;
+
+        if (style.hasStroke()) {
+            // Needs update rect with stroke lineWidth when
+            // 1. Element changes scale or lineWidth
+            // 2. Shape is changed
+            var rectWithStroke = this._rectWithStroke || (this._rectWithStroke = rect.clone());
+            if (this.__dirty || needsUpdateRect) {
+                rectWithStroke.copy(rect);
+                // FIXME Must after updateTransform
+                var w = style.lineWidth;
+                // PENDING, Min line width is needed when line is horizontal or vertical
+                var lineScale = style.strokeNoScale ? this.getLineScale() : 1;
+
+                // Only add extra hover lineWidth when there are no fill
+                if (!style.hasFill()) {
+                    w = Math.max(w, this.strokeContainThreshold || 4);
+                }
+                // Consider line width
+                // Line scale can't be 0;
+                if (lineScale > 1e-10) {
+                    rectWithStroke.width += w / lineScale;
+                    rectWithStroke.height += w / lineScale;
+                    rectWithStroke.x -= w / lineScale / 2;
+                    rectWithStroke.y -= w / lineScale / 2;
+                }
+            }
+
+            // Return rect with stroke
+            return rectWithStroke;
+        }
+
+        return rect;
+    },
+
+    contain: function (x, y) {
+        var localPos = this.transformCoordToLocal(x, y);
+        var rect = this.getBoundingRect();
+        var style = this.style;
+        x = localPos[0];
+        y = localPos[1];
+
+        if (rect.contain(x, y)) {
+            var pathData = this.path.data;
+            if (style.hasStroke()) {
+                var lineWidth = style.lineWidth;
+                var lineScale = style.strokeNoScale ? this.getLineScale() : 1;
+                // Line scale can't be 0;
+                if (lineScale > 1e-10) {
+                    // Only add extra hover lineWidth when there are no fill
+                    if (!style.hasFill()) {
+                        lineWidth = Math.max(lineWidth, this.strokeContainThreshold);
+                    }
+                    if (containStroke(
+                        pathData, lineWidth / lineScale, x, y
+                    )) {
+                        return true;
+                    }
+                }
+            }
+            if (style.hasFill()) {
+                return contain(pathData, x, y);
+            }
+        }
+        return false;
+    },
+
+    /**
+     * @param  {boolean} dirtyPath
+     */
+    dirty: function (dirtyPath) {
+        if (dirtyPath == null) {
+            dirtyPath = true;
+        }
+        // Only mark dirty, not mark clean
+        if (dirtyPath) {
+            this.__dirtyPath = dirtyPath;
+            this._rect = null;
+        }
+
+        this.__dirty = this.__dirtyText = true;
+
+        this.__zr && this.__zr.refresh();
+
+        // Used as a clipping path
+        if (this.__clipTarget) {
