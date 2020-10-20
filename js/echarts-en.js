@@ -15169,3 +15169,253 @@ function createPathProxyFromString(data) {
         }
 
         if (cmdStr === 'z' || cmdStr === 'Z') {
+            cmd = CMD.Z;
+            path.addData(cmd);
+            // z may be in the middle of the path.
+            cpx = subpathX;
+            cpy = subpathY;
+        }
+
+        prevCmd = cmd;
+    }
+
+    path.toStatic();
+
+    return path;
+}
+
+// TODO Optimize double memory cost problem
+function createPathOptions(str, opts) {
+    var pathProxy = createPathProxyFromString(str);
+    opts = opts || {};
+    opts.buildPath = function (path) {
+        if (path.setData) {
+            path.setData(pathProxy.data);
+            // Svg and vml renderer don't have context
+            var ctx = path.getContext();
+            if (ctx) {
+                path.rebuildPath(ctx);
+            }
+        }
+        else {
+            var ctx = path;
+            pathProxy.rebuildPath(ctx);
+        }
+    };
+
+    opts.applyTransform = function (m) {
+        transformPath(pathProxy, m);
+        this.dirty(true);
+    };
+
+    return opts;
+}
+
+/**
+ * Create a Path object from path string data
+ * http://www.w3.org/TR/SVG/paths.html#PathData
+ * @param  {Object} opts Other options
+ */
+function createFromString(str, opts) {
+    return new Path(createPathOptions(str, opts));
+}
+
+/**
+ * Create a Path class from path string data
+ * @param  {string} str
+ * @param  {Object} opts Other options
+ */
+function extendFromString(str, opts) {
+    return Path.extend(createPathOptions(str, opts));
+}
+
+/**
+ * Merge multiple paths
+ */
+// TODO Apply transform
+// TODO stroke dash
+// TODO Optimize double memory cost problem
+function mergePath$1(pathEls, opts) {
+    var pathList = [];
+    var len = pathEls.length;
+    for (var i = 0; i < len; i++) {
+        var pathEl = pathEls[i];
+        if (!pathEl.path) {
+            pathEl.createPathProxy();
+        }
+        if (pathEl.__dirtyPath) {
+            pathEl.buildPath(pathEl.path, pathEl.shape, true);
+        }
+        pathList.push(pathEl.path);
+    }
+
+    var pathBundle = new Path(opts);
+    // Need path proxy.
+    pathBundle.createPathProxy();
+    pathBundle.buildPath = function (path) {
+        path.appendPath(pathList);
+        // Svg and vml renderer don't have context
+        var ctx = path.getContext();
+        if (ctx) {
+            path.rebuildPath(ctx);
+        }
+    };
+
+    return pathBundle;
+}
+
+/**
+ * @alias zrender/graphic/Text
+ * @extends module:zrender/graphic/Displayable
+ * @constructor
+ * @param {Object} opts
+ */
+var Text = function (opts) { // jshint ignore:line
+    Displayable.call(this, opts);
+};
+
+Text.prototype = {
+
+    constructor: Text,
+
+    type: 'text',
+
+    brush: function (ctx, prevEl) {
+        var style = this.style;
+
+        // Optimize, avoid normalize every time.
+        this.__dirty && normalizeTextStyle(style, true);
+
+        // Use props with prefix 'text'.
+        style.fill = style.stroke = style.shadowBlur = style.shadowColor =
+            style.shadowOffsetX = style.shadowOffsetY = null;
+
+        var text = style.text;
+        // Convert to string
+        text != null && (text += '');
+
+        // Do not apply style.bind in Text node. Because the real bind job
+        // is in textHelper.renderText, and performance of text render should
+        // be considered.
+        // style.bind(ctx, this, prevEl);
+
+        if (!needDrawText(text, style)) {
+            // The current el.style is not applied
+            // and should not be used as cache.
+            ctx.__attrCachedBy = ContextCachedBy.NONE;
+            return;
+        }
+
+        this.setTransform(ctx);
+
+        renderText(this, ctx, text, style, null, prevEl);
+
+        this.restoreTransform(ctx);
+    },
+
+    getBoundingRect: function () {
+        var style = this.style;
+
+        // Optimize, avoid normalize every time.
+        this.__dirty && normalizeTextStyle(style, true);
+
+        if (!this._rect) {
+            var text = style.text;
+            text != null ? (text += '') : (text = '');
+
+            var rect = getBoundingRect(
+                style.text + '',
+                style.font,
+                style.textAlign,
+                style.textVerticalAlign,
+                style.textPadding,
+                style.textLineHeight,
+                style.rich
+            );
+
+            rect.x += style.x || 0;
+            rect.y += style.y || 0;
+
+            if (getStroke(style.textStroke, style.textStrokeWidth)) {
+                var w = style.textStrokeWidth;
+                rect.x -= w / 2;
+                rect.y -= w / 2;
+                rect.width += w;
+                rect.height += w;
+            }
+
+            this._rect = rect;
+        }
+
+        return this._rect;
+    }
+};
+
+inherits(Text, Displayable);
+
+/**
+ * 圆形
+ * @module zrender/shape/Circle
+ */
+
+var Circle = Path.extend({
+
+    type: 'circle',
+
+    shape: {
+        cx: 0,
+        cy: 0,
+        r: 0
+    },
+
+
+    buildPath: function (ctx, shape, inBundle) {
+        // Better stroking in ShapeBundle
+        // Always do it may have performence issue ( fill may be 2x more cost)
+        if (inBundle) {
+            ctx.moveTo(shape.cx + shape.r, shape.cy);
+        }
+        // else {
+        //     if (ctx.allocate && !ctx.data.length) {
+        //         ctx.allocate(ctx.CMD_MEM_SIZE.A);
+        //     }
+        // }
+        // Better stroking in ShapeBundle
+        // ctx.moveTo(shape.cx + shape.r, shape.cy);
+        ctx.arc(shape.cx, shape.cy, shape.r, 0, Math.PI * 2, true);
+    }
+});
+
+// Fix weird bug in some version of IE11 (like 11.0.9600.178**),
+// where exception "unexpected call to method or property access"
+// might be thrown when calling ctx.fill or ctx.stroke after a path
+// whose area size is zero is drawn and ctx.clip() is called and
+// shadowBlur is set. See #4572, #3112, #5777.
+// (e.g.,
+//  ctx.moveTo(10, 10);
+//  ctx.lineTo(20, 10);
+//  ctx.closePath();
+//  ctx.clip();
+//  ctx.shadowBlur = 10;
+//  ...
+//  ctx.fill();
+// )
+
+var shadowTemp = [
+    ['shadowBlur', 0],
+    ['shadowColor', '#000'],
+    ['shadowOffsetX', 0],
+    ['shadowOffsetY', 0]
+];
+
+var fixClipWithShadow = function (orignalBrush) {
+
+    // version string can be: '11.0'
+    return (env$1.browser.ie && env$1.browser.version >= 11)
+
+        ? function () {
+            var clipPaths = this.__clipPaths;
+            var style = this.style;
+            var modified;
+
+            if (clipPaths) {
