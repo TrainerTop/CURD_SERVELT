@@ -15419,3 +15419,242 @@ var fixClipWithShadow = function (orignalBrush) {
             var modified;
 
             if (clipPaths) {
+                for (var i = 0; i < clipPaths.length; i++) {
+                    var clipPath = clipPaths[i];
+                    var shape = clipPath && clipPath.shape;
+                    var type = clipPath && clipPath.type;
+
+                    if (shape && (
+                        (type === 'sector' && shape.startAngle === shape.endAngle)
+                        || (type === 'rect' && (!shape.width || !shape.height))
+                    )) {
+                        for (var j = 0; j < shadowTemp.length; j++) {
+                            // It is save to put shadowTemp static, because shadowTemp
+                            // will be all modified each item brush called.
+                            shadowTemp[j][2] = style[shadowTemp[j][0]];
+                            style[shadowTemp[j][0]] = shadowTemp[j][1];
+                        }
+                        modified = true;
+                        break;
+                    }
+                }
+            }
+
+            orignalBrush.apply(this, arguments);
+
+            if (modified) {
+                for (var j = 0; j < shadowTemp.length; j++) {
+                    style[shadowTemp[j][0]] = shadowTemp[j][2];
+                }
+            }
+        }
+
+        : orignalBrush;
+};
+
+/**
+ * 扇形
+ * @module zrender/graphic/shape/Sector
+ */
+
+var Sector = Path.extend({
+
+    type: 'sector',
+
+    shape: {
+
+        cx: 0,
+
+        cy: 0,
+
+        r0: 0,
+
+        r: 0,
+
+        startAngle: 0,
+
+        endAngle: Math.PI * 2,
+
+        clockwise: true
+    },
+
+    brush: fixClipWithShadow(Path.prototype.brush),
+
+    buildPath: function (ctx, shape) {
+
+        var x = shape.cx;
+        var y = shape.cy;
+        var r0 = Math.max(shape.r0 || 0, 0);
+        var r = Math.max(shape.r, 0);
+        var startAngle = shape.startAngle;
+        var endAngle = shape.endAngle;
+        var clockwise = shape.clockwise;
+
+        var unitX = Math.cos(startAngle);
+        var unitY = Math.sin(startAngle);
+
+        ctx.moveTo(unitX * r0 + x, unitY * r0 + y);
+
+        ctx.lineTo(unitX * r + x, unitY * r + y);
+
+        ctx.arc(x, y, r, startAngle, endAngle, !clockwise);
+
+        ctx.lineTo(
+            Math.cos(endAngle) * r0 + x,
+            Math.sin(endAngle) * r0 + y
+        );
+
+        if (r0 !== 0) {
+            ctx.arc(x, y, r0, endAngle, startAngle, clockwise);
+        }
+
+        ctx.closePath();
+    }
+});
+
+/**
+ * 圆环
+ * @module zrender/graphic/shape/Ring
+ */
+
+var Ring = Path.extend({
+
+    type: 'ring',
+
+    shape: {
+        cx: 0,
+        cy: 0,
+        r: 0,
+        r0: 0
+    },
+
+    buildPath: function (ctx, shape) {
+        var x = shape.cx;
+        var y = shape.cy;
+        var PI2 = Math.PI * 2;
+        ctx.moveTo(x + shape.r, y);
+        ctx.arc(x, y, shape.r, 0, PI2, false);
+        ctx.moveTo(x + shape.r0, y);
+        ctx.arc(x, y, shape.r0, 0, PI2, true);
+    }
+});
+
+/**
+ * Catmull-Rom spline 插值折线
+ * @module zrender/shape/util/smoothSpline
+ * @author pissang (https://www.github.com/pissang)
+ *         Kener (@Kener-林峰, kener.linfeng@gmail.com)
+ *         errorrik (errorrik@gmail.com)
+ */
+
+/**
+ * @inner
+ */
+function interpolate(p0, p1, p2, p3, t, t2, t3) {
+    var v0 = (p2 - p0) * 0.5;
+    var v1 = (p3 - p1) * 0.5;
+    return (2 * (p1 - p2) + v0 + v1) * t3
+            + (-3 * (p1 - p2) - 2 * v0 - v1) * t2
+            + v0 * t + p1;
+}
+
+/**
+ * @alias module:zrender/shape/util/smoothSpline
+ * @param {Array} points 线段顶点数组
+ * @param {boolean} isLoop
+ * @return {Array}
+ */
+var smoothSpline = function (points, isLoop) {
+    var len$$1 = points.length;
+    var ret = [];
+
+    var distance$$1 = 0;
+    for (var i = 1; i < len$$1; i++) {
+        distance$$1 += distance(points[i - 1], points[i]);
+    }
+
+    var segs = distance$$1 / 2;
+    segs = segs < len$$1 ? len$$1 : segs;
+    for (var i = 0; i < segs; i++) {
+        var pos = i / (segs - 1) * (isLoop ? len$$1 : len$$1 - 1);
+        var idx = Math.floor(pos);
+
+        var w = pos - idx;
+
+        var p0;
+        var p1 = points[idx % len$$1];
+        var p2;
+        var p3;
+        if (!isLoop) {
+            p0 = points[idx === 0 ? idx : idx - 1];
+            p2 = points[idx > len$$1 - 2 ? len$$1 - 1 : idx + 1];
+            p3 = points[idx > len$$1 - 3 ? len$$1 - 1 : idx + 2];
+        }
+        else {
+            p0 = points[(idx - 1 + len$$1) % len$$1];
+            p2 = points[(idx + 1) % len$$1];
+            p3 = points[(idx + 2) % len$$1];
+        }
+
+        var w2 = w * w;
+        var w3 = w * w2;
+
+        ret.push([
+            interpolate(p0[0], p1[0], p2[0], p3[0], w, w2, w3),
+            interpolate(p0[1], p1[1], p2[1], p3[1], w, w2, w3)
+        ]);
+    }
+    return ret;
+};
+
+/**
+ * 贝塞尔平滑曲线
+ * @module zrender/shape/util/smoothBezier
+ * @author pissang (https://www.github.com/pissang)
+ *         Kener (@Kener-林峰, kener.linfeng@gmail.com)
+ *         errorrik (errorrik@gmail.com)
+ */
+
+/**
+ * 贝塞尔平滑曲线
+ * @alias module:zrender/shape/util/smoothBezier
+ * @param {Array} points 线段顶点数组
+ * @param {number} smooth 平滑等级, 0-1
+ * @param {boolean} isLoop
+ * @param {Array} constraint 将计算出来的控制点约束在一个包围盒内
+ *                           比如 [[0, 0], [100, 100]], 这个包围盒会与
+ *                           整个折线的包围盒做一个并集用来约束控制点。
+ * @param {Array} 计算出来的控制点数组
+ */
+var smoothBezier = function (points, smooth, isLoop, constraint) {
+    var cps = [];
+
+    var v = [];
+    var v1 = [];
+    var v2 = [];
+    var prevPoint;
+    var nextPoint;
+
+    var min$$1;
+    var max$$1;
+    if (constraint) {
+        min$$1 = [Infinity, Infinity];
+        max$$1 = [-Infinity, -Infinity];
+        for (var i = 0, len$$1 = points.length; i < len$$1; i++) {
+            min(min$$1, min$$1, points[i]);
+            max(max$$1, max$$1, points[i]);
+        }
+        // 与指定的包围盒做并集
+        min(min$$1, min$$1, constraint[0]);
+        max(max$$1, max$$1, constraint[1]);
+    }
+
+    for (var i = 0, len$$1 = points.length; i < len$$1; i++) {
+        var point = points[i];
+
+        if (isLoop) {
+            prevPoint = points[i ? i - 1 : len$$1 - 1];
+            nextPoint = points[(i + 1) % len$$1];
+        }
+        else {
+            if (i === 0 || i === len$$1 - 1) {
