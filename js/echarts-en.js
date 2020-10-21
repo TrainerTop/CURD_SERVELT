@@ -15658,3 +15658,308 @@ var smoothBezier = function (points, smooth, isLoop, constraint) {
         }
         else {
             if (i === 0 || i === len$$1 - 1) {
+                cps.push(clone$1(points[i]));
+                continue;
+            }
+            else {
+                prevPoint = points[i - 1];
+                nextPoint = points[i + 1];
+            }
+        }
+
+        sub(v, nextPoint, prevPoint);
+
+        // use degree to scale the handle length
+        scale(v, v, smooth);
+
+        var d0 = distance(point, prevPoint);
+        var d1 = distance(point, nextPoint);
+        var sum = d0 + d1;
+        if (sum !== 0) {
+            d0 /= sum;
+            d1 /= sum;
+        }
+
+        scale(v1, v, -d0);
+        scale(v2, v, d1);
+        var cp0 = add([], point, v1);
+        var cp1 = add([], point, v2);
+        if (constraint) {
+            max(cp0, cp0, min$$1);
+            min(cp0, cp0, max$$1);
+            max(cp1, cp1, min$$1);
+            min(cp1, cp1, max$$1);
+        }
+        cps.push(cp0);
+        cps.push(cp1);
+    }
+
+    if (isLoop) {
+        cps.push(cps.shift());
+    }
+
+    return cps;
+};
+
+function buildPath$1(ctx, shape, closePath) {
+    var points = shape.points;
+    var smooth = shape.smooth;
+    if (points && points.length >= 2) {
+        if (smooth && smooth !== 'spline') {
+            var controlPoints = smoothBezier(
+                points, smooth, closePath, shape.smoothConstraint
+            );
+
+            ctx.moveTo(points[0][0], points[0][1]);
+            var len = points.length;
+            for (var i = 0; i < (closePath ? len : len - 1); i++) {
+                var cp1 = controlPoints[i * 2];
+                var cp2 = controlPoints[i * 2 + 1];
+                var p = points[(i + 1) % len];
+                ctx.bezierCurveTo(
+                    cp1[0], cp1[1], cp2[0], cp2[1], p[0], p[1]
+                );
+            }
+        }
+        else {
+            if (smooth === 'spline') {
+                points = smoothSpline(points, closePath);
+            }
+
+            ctx.moveTo(points[0][0], points[0][1]);
+            for (var i = 1, l = points.length; i < l; i++) {
+                ctx.lineTo(points[i][0], points[i][1]);
+            }
+        }
+
+        closePath && ctx.closePath();
+    }
+}
+
+/**
+ * 多边形
+ * @module zrender/shape/Polygon
+ */
+
+var Polygon = Path.extend({
+
+    type: 'polygon',
+
+    shape: {
+        points: null,
+
+        smooth: false,
+
+        smoothConstraint: null
+    },
+
+    buildPath: function (ctx, shape) {
+        buildPath$1(ctx, shape, true);
+    }
+});
+
+/**
+ * @module zrender/graphic/shape/Polyline
+ */
+
+var Polyline = Path.extend({
+
+    type: 'polyline',
+
+    shape: {
+        points: null,
+
+        smooth: false,
+
+        smoothConstraint: null
+    },
+
+    style: {
+        stroke: '#000',
+
+        fill: null
+    },
+
+    buildPath: function (ctx, shape) {
+        buildPath$1(ctx, shape, false);
+    }
+});
+
+/**
+ * Sub-pixel optimize for canvas rendering, prevent from blur
+ * when rendering a thin vertical/horizontal line.
+ */
+
+var round$1 = Math.round;
+
+/**
+ * Sub pixel optimize line for canvas
+ *
+ * @param {Object} outputShape The modification will be performed on `outputShape`.
+ *                 `outputShape` and `inputShape` can be the same object.
+ *                 `outputShape` object can be used repeatly, because all of
+ *                 the `x1`, `x2`, `y1`, `y2` will be assigned in this method.
+ * @param {Object} [inputShape]
+ * @param {number} [inputShape.x1]
+ * @param {number} [inputShape.y1]
+ * @param {number} [inputShape.x2]
+ * @param {number} [inputShape.y2]
+ * @param {Object} [style]
+ * @param {number} [style.lineWidth]
+ */
+function subPixelOptimizeLine$1(outputShape, inputShape, style) {
+    var lineWidth = style && style.lineWidth;
+
+    if (!inputShape || !lineWidth) {
+        return;
+    }
+
+    var x1 = inputShape.x1;
+    var x2 = inputShape.x2;
+    var y1 = inputShape.y1;
+    var y2 = inputShape.y2;
+
+    if (round$1(x1 * 2) === round$1(x2 * 2)) {
+        outputShape.x1 = outputShape.x2 = subPixelOptimize$1(x1, lineWidth, true);
+    }
+    else {
+        outputShape.x1 = x1;
+        outputShape.x2 = x2;
+    }
+    if (round$1(y1 * 2) === round$1(y2 * 2)) {
+        outputShape.y1 = outputShape.y2 = subPixelOptimize$1(y1, lineWidth, true);
+    }
+    else {
+        outputShape.y1 = y1;
+        outputShape.y2 = y2;
+    }
+}
+
+/**
+ * Sub pixel optimize rect for canvas
+ *
+ * @param {Object} outputShape The modification will be performed on `outputShape`.
+ *                 `outputShape` and `inputShape` can be the same object.
+ *                 `outputShape` object can be used repeatly, because all of
+ *                 the `x`, `y`, `width`, `height` will be assigned in this method.
+ * @param {Object} [inputShape]
+ * @param {number} [inputShape.x]
+ * @param {number} [inputShape.y]
+ * @param {number} [inputShape.width]
+ * @param {number} [inputShape.height]
+ * @param {Object} [style]
+ * @param {number} [style.lineWidth]
+ */
+function subPixelOptimizeRect$1(outputShape, inputShape, style) {
+    var lineWidth = style && style.lineWidth;
+
+    if (!inputShape || !lineWidth) {
+        return;
+    }
+
+    var originX = inputShape.x;
+    var originY = inputShape.y;
+    var originWidth = inputShape.width;
+    var originHeight = inputShape.height;
+
+    outputShape.x = subPixelOptimize$1(originX, lineWidth, true);
+    outputShape.y = subPixelOptimize$1(originY, lineWidth, true);
+    outputShape.width = Math.max(
+        subPixelOptimize$1(originX + originWidth, lineWidth, false) - outputShape.x,
+        originWidth === 0 ? 0 : 1
+    );
+    outputShape.height = Math.max(
+        subPixelOptimize$1(originY + originHeight, lineWidth, false) - outputShape.y,
+        originHeight === 0 ? 0 : 1
+    );
+}
+
+/**
+ * Sub pixel optimize for canvas
+ *
+ * @param {number} position Coordinate, such as x, y
+ * @param {number} lineWidth Should be nonnegative integer.
+ * @param {boolean=} positiveOrNegative Default false (negative).
+ * @return {number} Optimized position.
+ */
+function subPixelOptimize$1(position, lineWidth, positiveOrNegative) {
+    // Assure that (position + lineWidth / 2) is near integer edge,
+    // otherwise line will be fuzzy in canvas.
+    var doubledPosition = round$1(position * 2);
+    return (doubledPosition + round$1(lineWidth)) % 2 === 0
+        ? doubledPosition / 2
+        : (doubledPosition + (positiveOrNegative ? 1 : -1)) / 2;
+}
+
+/**
+ * 矩形
+ * @module zrender/graphic/shape/Rect
+ */
+
+// Avoid create repeatly.
+var subPixelOptimizeOutputShape = {};
+
+var Rect = Path.extend({
+
+    type: 'rect',
+
+    shape: {
+        // 左上、右上、右下、左下角的半径依次为r1、r2、r3、r4
+        // r缩写为1         相当于 [1, 1, 1, 1]
+        // r缩写为[1]       相当于 [1, 1, 1, 1]
+        // r缩写为[1, 2]    相当于 [1, 2, 1, 2]
+        // r缩写为[1, 2, 3] 相当于 [1, 2, 3, 2]
+        r: 0,
+
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0
+    },
+
+    buildPath: function (ctx, shape) {
+        var x;
+        var y;
+        var width;
+        var height;
+
+        if (this.subPixelOptimize) {
+            subPixelOptimizeRect$1(subPixelOptimizeOutputShape, shape, this.style);
+            x = subPixelOptimizeOutputShape.x;
+            y = subPixelOptimizeOutputShape.y;
+            width = subPixelOptimizeOutputShape.width;
+            height = subPixelOptimizeOutputShape.height;
+            subPixelOptimizeOutputShape.r = shape.r;
+            shape = subPixelOptimizeOutputShape;
+        }
+        else {
+            x = shape.x;
+            y = shape.y;
+            width = shape.width;
+            height = shape.height;
+        }
+
+        if (!shape.r) {
+            ctx.rect(x, y, width, height);
+        }
+        else {
+            buildPath(ctx, shape);
+        }
+        ctx.closePath();
+        return;
+    }
+});
+
+/**
+ * 直线
+ * @module zrender/graphic/shape/Line
+ */
+
+// Avoid create repeatly.
+var subPixelOptimizeOutputShape$1 = {};
+
+var Line = Path.extend({
+
+    type: 'line',
+
+    shape: {
