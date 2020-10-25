@@ -16496,3 +16496,277 @@ inherits(IncrementalDisplayble, Displayable);
 *   http://www.apache.org/licenses/LICENSE-2.0
 *
 * Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var round = Math.round;
+var mathMax$1 = Math.max;
+var mathMin$1 = Math.min;
+
+var EMPTY_OBJ = {};
+
+var Z2_EMPHASIS_LIFT = 1;
+
+/**
+ * Extend shape with parameters
+ */
+function extendShape(opts) {
+    return Path.extend(opts);
+}
+
+/**
+ * Extend path
+ */
+function extendPath(pathData, opts) {
+    return extendFromString(pathData, opts);
+}
+
+/**
+ * Create a path element from path data string
+ * @param {string} pathData
+ * @param {Object} opts
+ * @param {module:zrender/core/BoundingRect} rect
+ * @param {string} [layout=cover] 'center' or 'cover'
+ */
+function makePath(pathData, opts, rect, layout) {
+    var path = createFromString(pathData, opts);
+    if (rect) {
+        if (layout === 'center') {
+            rect = centerGraphic(rect, path.getBoundingRect());
+        }
+        resizePath(path, rect);
+    }
+    return path;
+}
+
+/**
+ * Create a image element from image url
+ * @param {string} imageUrl image url
+ * @param {Object} opts options
+ * @param {module:zrender/core/BoundingRect} rect constrain rect
+ * @param {string} [layout=cover] 'center' or 'cover'
+ */
+function makeImage(imageUrl, rect, layout) {
+    var path = new ZImage({
+        style: {
+            image: imageUrl,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height
+        },
+        onload: function (img) {
+            if (layout === 'center') {
+                var boundingRect = {
+                    width: img.width,
+                    height: img.height
+                };
+                path.setStyle(centerGraphic(rect, boundingRect));
+            }
+        }
+    });
+    return path;
+}
+
+/**
+ * Get position of centered element in bounding box.
+ *
+ * @param  {Object} rect         element local bounding box
+ * @param  {Object} boundingRect constraint bounding box
+ * @return {Object} element position containing x, y, width, and height
+ */
+function centerGraphic(rect, boundingRect) {
+    // Set rect to center, keep width / height ratio.
+    var aspect = boundingRect.width / boundingRect.height;
+    var width = rect.height * aspect;
+    var height;
+    if (width <= rect.width) {
+        height = rect.height;
+    }
+    else {
+        width = rect.width;
+        height = width / aspect;
+    }
+    var cx = rect.x + rect.width / 2;
+    var cy = rect.y + rect.height / 2;
+
+    return {
+        x: cx - width / 2,
+        y: cy - height / 2,
+        width: width,
+        height: height
+    };
+}
+
+var mergePath = mergePath$1;
+
+/**
+ * Resize a path to fit the rect
+ * @param {module:zrender/graphic/Path} path
+ * @param {Object} rect
+ */
+function resizePath(path, rect) {
+    if (!path.applyTransform) {
+        return;
+    }
+
+    var pathRect = path.getBoundingRect();
+
+    var m = pathRect.calculateTransform(rect);
+
+    path.applyTransform(m);
+}
+
+/**
+ * Sub pixel optimize line for canvas
+ *
+ * @param {Object} param
+ * @param {Object} [param.shape]
+ * @param {number} [param.shape.x1]
+ * @param {number} [param.shape.y1]
+ * @param {number} [param.shape.x2]
+ * @param {number} [param.shape.y2]
+ * @param {Object} [param.style]
+ * @param {number} [param.style.lineWidth]
+ * @return {Object} Modified param
+ */
+function subPixelOptimizeLine(param) {
+    var shape = param.shape;
+    var lineWidth = param.style.lineWidth;
+
+    if (round(shape.x1 * 2) === round(shape.x2 * 2)) {
+        shape.x1 = shape.x2 = subPixelOptimize(shape.x1, lineWidth, true);
+    }
+    if (round(shape.y1 * 2) === round(shape.y2 * 2)) {
+        shape.y1 = shape.y2 = subPixelOptimize(shape.y1, lineWidth, true);
+    }
+    return param;
+}
+
+/**
+ * Sub pixel optimize rect for canvas
+ *
+ * @param {Object} param
+ * @param {Object} [param.shape]
+ * @param {number} [param.shape.x]
+ * @param {number} [param.shape.y]
+ * @param {number} [param.shape.width]
+ * @param {number} [param.shape.height]
+ * @param {Object} [param.style]
+ * @param {number} [param.style.lineWidth]
+ * @return {Object} Modified param
+ */
+function subPixelOptimizeRect(param) {
+    var shape = param.shape;
+    var lineWidth = param.style.lineWidth;
+    var originX = shape.x;
+    var originY = shape.y;
+    var originWidth = shape.width;
+    var originHeight = shape.height;
+    shape.x = subPixelOptimize(shape.x, lineWidth, true);
+    shape.y = subPixelOptimize(shape.y, lineWidth, true);
+    shape.width = Math.max(
+        subPixelOptimize(originX + originWidth, lineWidth, false) - shape.x,
+        originWidth === 0 ? 0 : 1
+    );
+    shape.height = Math.max(
+        subPixelOptimize(originY + originHeight, lineWidth, false) - shape.y,
+        originHeight === 0 ? 0 : 1
+    );
+    return param;
+}
+
+/**
+ * Sub pixel optimize for canvas
+ *
+ * @param {number} position Coordinate, such as x, y
+ * @param {number} lineWidth Should be nonnegative integer.
+ * @param {boolean=} positiveOrNegative Default false (negative).
+ * @return {number} Optimized position.
+ */
+function subPixelOptimize(position, lineWidth, positiveOrNegative) {
+    // Assure that (position + lineWidth / 2) is near integer edge,
+    // otherwise line will be fuzzy in canvas.
+    var doubledPosition = round(position * 2);
+    return (doubledPosition + round(lineWidth)) % 2 === 0
+        ? doubledPosition / 2
+        : (doubledPosition + (positiveOrNegative ? 1 : -1)) / 2;
+}
+
+function hasFillOrStroke(fillOrStroke) {
+    return fillOrStroke != null && fillOrStroke !== 'none';
+}
+
+// Most lifted color are duplicated.
+var liftedColorMap = createHashMap();
+var liftedColorCount = 0;
+
+function liftColor(color) {
+    if (typeof color !== 'string') {
+        return color;
+    }
+    var liftedColor = liftedColorMap.get(color);
+    if (!liftedColor) {
+        liftedColor = lift(color, -0.1);
+        if (liftedColorCount < 10000) {
+            liftedColorMap.set(color, liftedColor);
+            liftedColorCount++;
+        }
+    }
+    return liftedColor;
+}
+
+function cacheElementStl(el) {
+    if (!el.__hoverStlDirty) {
+        return;
+    }
+    el.__hoverStlDirty = false;
+
+    var hoverStyle = el.__hoverStl;
+    if (!hoverStyle) {
+        el.__cachedNormalStl = el.__cachedNormalZ2 = null;
+        return;
+    }
+
+    var normalStyle = el.__cachedNormalStl = {};
+    el.__cachedNormalZ2 = el.z2;
+    var elStyle = el.style;
+
+    for (var name in hoverStyle) {
+        // See comment in `doSingleEnterHover`.
+        if (hoverStyle[name] != null) {
+            normalStyle[name] = elStyle[name];
+        }
+    }
+
+    // Always cache fill and stroke to normalStyle for lifting color.
+    normalStyle.fill = elStyle.fill;
+    normalStyle.stroke = elStyle.stroke;
+}
+
+function doSingleEnterHover(el) {
+    var hoverStl = el.__hoverStl;
+
+    if (!hoverStl || el.__highlighted) {
+        return;
+    }
+
+    var useHoverLayer = el.useHoverLayer;
+    el.__highlighted = useHoverLayer ? 'layer' : 'plain';
+
+    var zr = el.__zr;
+    if (!zr && useHoverLayer) {
+        return;
+    }
+
+    var elTarget = el;
+    var targetStyle = el.style;
+
+    if (useHoverLayer) {
+        elTarget = zr.addHover(el);
+        targetStyle = elTarget.style;
+    }
