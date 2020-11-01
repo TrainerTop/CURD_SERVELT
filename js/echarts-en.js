@@ -16770,3 +16770,254 @@ function doSingleEnterHover(el) {
         elTarget = zr.addHover(el);
         targetStyle = elTarget.style;
     }
+
+    rollbackDefaultTextStyle(targetStyle);
+
+    if (!useHoverLayer) {
+        cacheElementStl(elTarget);
+    }
+
+    // styles can be:
+    // {
+    //    label: {
+    //        show: false,
+    //        position: 'outside',
+    //        fontSize: 18
+    //    },
+    //    emphasis: {
+    //        label: {
+    //            show: true
+    //        }
+    //    }
+    // },
+    // where properties of `emphasis` may not appear in `normal`. We previously use
+    // module:echarts/util/model#defaultEmphasis to merge `normal` to `emphasis`.
+    // But consider rich text and setOption in merge mode, it is impossible to cover
+    // all properties in merge. So we use merge mode when setting style here, where
+    // only properties that is not `null/undefined` can be set. The disadventage:
+    // null/undefined can not be used to remove style any more in `emphasis`.
+    targetStyle.extendFrom(hoverStl);
+
+    setDefaultHoverFillStroke(targetStyle, hoverStl, 'fill');
+    setDefaultHoverFillStroke(targetStyle, hoverStl, 'stroke');
+
+    applyDefaultTextStyle(targetStyle);
+
+    if (!useHoverLayer) {
+        el.dirty(false);
+        el.z2 += Z2_EMPHASIS_LIFT;
+    }
+}
+
+function setDefaultHoverFillStroke(targetStyle, hoverStyle, prop) {
+    if (!hasFillOrStroke(hoverStyle[prop]) && hasFillOrStroke(targetStyle[prop])) {
+        targetStyle[prop] = liftColor(targetStyle[prop]);
+    }
+}
+
+function doSingleLeaveHover(el) {
+    var highlighted = el.__highlighted;
+
+    if (!highlighted) {
+        return;
+    }
+
+    el.__highlighted = false;
+
+    if (highlighted === 'layer') {
+        el.__zr && el.__zr.removeHover(el);
+    }
+    else if (highlighted) {
+        var style = el.style;
+
+        var normalStl = el.__cachedNormalStl;
+        if (normalStl) {
+            rollbackDefaultTextStyle(style);
+            // Consider null/undefined value, should use
+            // `setStyle` but not `extendFrom(stl, true)`.
+            el.setStyle(normalStl);
+            applyDefaultTextStyle(style);
+        }
+        // `__cachedNormalZ2` will not be reset if calling `setElementHoverStyle`
+        // when `el` is on emphasis state. So here by comparing with 1, we try
+        // hard to make the bug case rare.
+        var normalZ2 = el.__cachedNormalZ2;
+        if (normalZ2 != null && el.z2 - normalZ2 === Z2_EMPHASIS_LIFT) {
+            el.z2 = normalZ2;
+        }
+    }
+}
+
+function traverseCall(el, method) {
+    el.isGroup
+        ? el.traverse(function (child) {
+            !child.isGroup && method(child);
+        })
+        : method(el);
+}
+
+/**
+ * Set hover style (namely "emphasis style") of element, based on the current
+ * style of the given `el`.
+ * This method should be called after all of the normal styles have been adopted
+ * to the `el`. See the reason on `setHoverStyle`.
+ *
+ * @param {module:zrender/Element} el Should not be `zrender/container/Group`.
+ * @param {Object|boolean} [hoverStl] The specified hover style.
+ *        If set as `false`, disable the hover style.
+ *        Similarly, The `el.hoverStyle` can alse be set
+ *        as `false` to disable the hover style.
+ *        Otherwise, use the default hover style if not provided.
+ * @param {Object} [opt]
+ * @param {boolean} [opt.hoverSilentOnTouch=false] See `graphic.setAsHoverStyleTrigger`
+ */
+function setElementHoverStyle(el, hoverStl) {
+    // For performance consideration, it might be better to make the "hover style" only the
+    // difference properties from the "normal style", but not a entire copy of all styles.
+    hoverStl = el.__hoverStl = hoverStl !== false && (hoverStl || {});
+    el.__hoverStlDirty = true;
+
+    // FIXME
+    // It is not completely right to save "normal"/"emphasis" flag on elements.
+    // It probably should be saved on `data` of series. Consider the cases:
+    // (1) A highlighted elements are moved out of the view port and re-enter
+    // again by dataZoom.
+    // (2) call `setOption` and replace elements totally when they are highlighted.
+    if (el.__highlighted) {
+        // Consider the case:
+        // The styles of a highlighted `el` is being updated. The new "emphasis style"
+        // should be adapted to the `el`. Notice here new "normal styles" should have
+        // been set outside and the cached "normal style" is out of date.
+        el.__cachedNormalStl = null;
+        // Do not clear `__cachedNormalZ2` here, because setting `z2` is not a constraint
+        // of this method. In most cases, `z2` is not set and hover style should be able
+        // to rollback. Of course, that would bring bug, but only in a rare case, see
+        // `doSingleLeaveHover` for details.
+        doSingleLeaveHover(el);
+
+        doSingleEnterHover(el);
+    }
+}
+
+/**
+ * Emphasis (called by API) has higher priority than `mouseover`.
+ * When element has been called to be entered emphasis, mouse over
+ * should not trigger the highlight effect (for example, animation
+ * scale) again, and `mouseout` should not downplay the highlight
+ * effect. So the listener of `mouseover` and `mouseout` should
+ * check `isInEmphasis`.
+ *
+ * @param {module:zrender/Element} el
+ * @return {boolean}
+ */
+function isInEmphasis(el) {
+    return el && el.__isEmphasisEntered;
+}
+
+function onElementMouseOver(e) {
+    if (this.__hoverSilentOnTouch && e.zrByTouch) {
+        return;
+    }
+
+    // Only if element is not in emphasis status
+    !this.__isEmphasisEntered && traverseCall(this, doSingleEnterHover);
+}
+
+function onElementMouseOut(e) {
+    if (this.__hoverSilentOnTouch && e.zrByTouch) {
+        return;
+    }
+
+    // Only if element is not in emphasis status
+    !this.__isEmphasisEntered && traverseCall(this, doSingleLeaveHover);
+}
+
+function enterEmphasis() {
+    this.__isEmphasisEntered = true;
+    traverseCall(this, doSingleEnterHover);
+}
+
+function leaveEmphasis() {
+    this.__isEmphasisEntered = false;
+    traverseCall(this, doSingleLeaveHover);
+}
+
+/**
+ * Set hover style (namely "emphasis style") of element,
+ * based on the current style of the given `el`.
+ *
+ * (1)
+ * **CONSTRAINTS** for this method:
+ * <A> This method MUST be called after all of the normal styles having been adopted
+ * to the `el`.
+ * <B> The input `hoverStyle` (that is, "emphasis style") MUST be the subset of the
+ * "normal style" having been set to the el.
+ * <C> `color` MUST be one of the "normal styles" (because color might be lifted as
+ * a default hover style).
+ *
+ * The reason: this method treat the current style of the `el` as the "normal style"
+ * and cache them when enter/update the "emphasis style". Consider the case: the `el`
+ * is in "emphasis" state and `setOption`/`dispatchAction` trigger the style updating
+ * logic, where the el should shift from the original emphasis style to the new
+ * "emphasis style" and should be able to "downplay" back to the new "normal style".
+ *
+ * Indeed, it is error-prone to make a interface has so many constraints, but I have
+ * not found a better solution yet to fit the backward compatibility, performance and
+ * the current programming style.
+ *
+ * (2)
+ * Call the method for a "root" element once. Do not call it for each descendants.
+ * If the descendants elemenets of a group has itself hover style different from the
+ * root group, we can simply mount the style on `el.hoverStyle` for them, but should
+ * not call this method for them.
+ *
+ * @param {module:zrender/Element} el
+ * @param {Object|boolean} [hoverStyle] See `graphic.setElementHoverStyle`.
+ * @param {Object} [opt]
+ * @param {boolean} [opt.hoverSilentOnTouch=false] See `graphic.setAsHoverStyleTrigger`.
+ */
+function setHoverStyle(el, hoverStyle, opt) {
+    el.isGroup
+        ? el.traverse(function (child) {
+            // If element has sepcified hoverStyle, then use it instead of given hoverStyle
+            // Often used when item group has a label element and it's hoverStyle is different
+            !child.isGroup && setElementHoverStyle(child, child.hoverStyle || hoverStyle);
+        })
+        : setElementHoverStyle(el, el.hoverStyle || hoverStyle);
+
+    setAsHoverStyleTrigger(el, opt);
+}
+
+/**
+ * @param {Object|boolean} [opt] If `false`, means disable trigger.
+ * @param {boolean} [opt.hoverSilentOnTouch=false]
+ *        In touch device, mouseover event will be trigger on touchstart event
+ *        (see module:zrender/dom/HandlerProxy). By this mechanism, we can
+ *        conveniently use hoverStyle when tap on touch screen without additional
+ *        code for compatibility.
+ *        But if the chart/component has select feature, which usually also use
+ *        hoverStyle, there might be conflict between 'select-highlight' and
+ *        'hover-highlight' especially when roam is enabled (see geo for example).
+ *        In this case, hoverSilentOnTouch should be used to disable hover-highlight
+ *        on touch device.
+ */
+function setAsHoverStyleTrigger(el, opt) {
+    var disable = opt === false;
+    el.__hoverSilentOnTouch = opt != null && opt.hoverSilentOnTouch;
+
+    // Simple optimize, since this method might be
+    // called for each elements of a group in some cases.
+    if (!disable || el.__hoverStyleTrigger) {
+        var method = disable ? 'off' : 'on';
+
+        // Duplicated function will be auto-ignored, see Eventful.js.
+        el[method]('mouseover', onElementMouseOver)[method]('mouseout', onElementMouseOut);
+        // Emphasis, normal can be triggered manually
+        el[method]('emphasis', enterEmphasis)[method]('normal', leaveEmphasis);
+
+        el.__hoverStyleTrigger = !disable;
+    }
+}
+
+/**
+ * See more info in `setTextStyleCommon`.
