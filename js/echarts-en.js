@@ -17277,3 +17277,270 @@ function setTokenTextStyle(textStyle, textStyleModel, globalTextStyle, opt, isEm
     textStyle.insideRawTextPosition = textStyle.textPosition;
 
     if (!isEmphasis) {
+        if (isBlock) {
+            textStyle.insideRollbackOpt = opt;
+            applyDefaultTextStyle(textStyle);
+        }
+
+        // Set default finally.
+        if (textStyle.textFill == null) {
+            textStyle.textFill = opt.autoColor;
+        }
+    }
+
+    // Do not use `getFont` here, because merge should be supported, where
+    // part of these properties may be changed in emphasis style, and the
+    // others should remain their original value got from normal style.
+    textStyle.fontStyle = textStyleModel.getShallow('fontStyle') || globalTextStyle.fontStyle;
+    textStyle.fontWeight = textStyleModel.getShallow('fontWeight') || globalTextStyle.fontWeight;
+    textStyle.fontSize = textStyleModel.getShallow('fontSize') || globalTextStyle.fontSize;
+    textStyle.fontFamily = textStyleModel.getShallow('fontFamily') || globalTextStyle.fontFamily;
+
+    textStyle.textAlign = textStyleModel.getShallow('align');
+    textStyle.textVerticalAlign = textStyleModel.getShallow('verticalAlign')
+        || textStyleModel.getShallow('baseline');
+
+    textStyle.textLineHeight = textStyleModel.getShallow('lineHeight');
+    textStyle.textWidth = textStyleModel.getShallow('width');
+    textStyle.textHeight = textStyleModel.getShallow('height');
+    textStyle.textTag = textStyleModel.getShallow('tag');
+
+    if (!isBlock || !opt.disableBox) {
+        textStyle.textBackgroundColor = getAutoColor(textStyleModel.getShallow('backgroundColor'), opt);
+        textStyle.textPadding = textStyleModel.getShallow('padding');
+        textStyle.textBorderColor = getAutoColor(textStyleModel.getShallow('borderColor'), opt);
+        textStyle.textBorderWidth = textStyleModel.getShallow('borderWidth');
+        textStyle.textBorderRadius = textStyleModel.getShallow('borderRadius');
+
+        textStyle.textBoxShadowColor = textStyleModel.getShallow('shadowColor');
+        textStyle.textBoxShadowBlur = textStyleModel.getShallow('shadowBlur');
+        textStyle.textBoxShadowOffsetX = textStyleModel.getShallow('shadowOffsetX');
+        textStyle.textBoxShadowOffsetY = textStyleModel.getShallow('shadowOffsetY');
+    }
+
+    textStyle.textShadowColor = textStyleModel.getShallow('textShadowColor')
+        || globalTextStyle.textShadowColor;
+    textStyle.textShadowBlur = textStyleModel.getShallow('textShadowBlur')
+        || globalTextStyle.textShadowBlur;
+    textStyle.textShadowOffsetX = textStyleModel.getShallow('textShadowOffsetX')
+        || globalTextStyle.textShadowOffsetX;
+    textStyle.textShadowOffsetY = textStyleModel.getShallow('textShadowOffsetY')
+        || globalTextStyle.textShadowOffsetY;
+}
+
+function getAutoColor(color, opt) {
+    return color !== 'auto' ? color : (opt && opt.autoColor) ? opt.autoColor : null;
+}
+
+/**
+ * Give some default value to the input `textStyle` object, based on the current settings
+ * in this `textStyle` object.
+ *
+ * The Scenario:
+ * when text position is `inside` and `textFill` is not specified, we show
+ * text border by default for better view. But it should be considered that text position
+ * might be changed when hovering or being emphasis, where the `insideRollback` is used to
+ * restore the style.
+ *
+ * Usage (& NOTICE):
+ * When a style object (eithor plain object or instance of `zrender/src/graphic/Style`) is
+ * about to be modified on its text related properties, `rollbackDefaultTextStyle` should
+ * be called before the modification and `applyDefaultTextStyle` should be called after that.
+ * (For the case that all of the text related properties is reset, like `setTextStyleCommon`
+ * does, `rollbackDefaultTextStyle` is not needed to be called).
+ */
+function applyDefaultTextStyle(textStyle) {
+    var opt = textStyle.insideRollbackOpt;
+
+    // Only `insideRollbackOpt` created (in `setTextStyleCommon`),
+    // applyDefaultTextStyle works.
+    if (!opt || textStyle.textFill != null) {
+        return;
+    }
+
+    var useInsideStyle = opt.useInsideStyle;
+    var textPosition = textStyle.insideRawTextPosition;
+    var insideRollback;
+    var autoColor = opt.autoColor;
+
+    if (useInsideStyle !== false
+        && (useInsideStyle === true
+            || (opt.isRectText
+                && textPosition
+                // textPosition can be [10, 30]
+                && typeof textPosition === 'string'
+                && textPosition.indexOf('inside') >= 0
+            )
+        )
+    ) {
+        insideRollback = {
+            textFill: null,
+            textStroke: textStyle.textStroke,
+            textStrokeWidth: textStyle.textStrokeWidth
+        };
+        textStyle.textFill = '#fff';
+        // Consider text with #fff overflow its container.
+        if (textStyle.textStroke == null) {
+            textStyle.textStroke = autoColor;
+            textStyle.textStrokeWidth == null && (textStyle.textStrokeWidth = 2);
+        }
+    }
+    else if (autoColor != null) {
+        insideRollback = {textFill: null};
+        textStyle.textFill = autoColor;
+    }
+
+    // Always set `insideRollback`, for clearing previous.
+    if (insideRollback) {
+        textStyle.insideRollback = insideRollback;
+    }
+}
+
+/**
+ * Consider the case: in a scatter,
+ * label: {
+ *     normal: {position: 'inside'},
+ *     emphasis: {position: 'top'}
+ * }
+ * In the normal state, the `textFill` will be set as '#fff' for pretty view (see
+ * `applyDefaultTextStyle`), but when switching to emphasis state, the `textFill`
+ * should be retured to 'autoColor', but not keep '#fff'.
+ */
+function rollbackDefaultTextStyle(style) {
+    var insideRollback = style.insideRollback;
+    if (insideRollback) {
+        style.textFill = insideRollback.textFill;
+        style.textStroke = insideRollback.textStroke;
+        style.textStrokeWidth = insideRollback.textStrokeWidth;
+        style.insideRollback = null;
+    }
+}
+
+function getFont(opt, ecModel) {
+    // ecModel or default text style model.
+    var gTextStyleModel = ecModel || ecModel.getModel('textStyle');
+    return trim([
+        // FIXME in node-canvas fontWeight is before fontStyle
+        opt.fontStyle || gTextStyleModel && gTextStyleModel.getShallow('fontStyle') || '',
+        opt.fontWeight || gTextStyleModel && gTextStyleModel.getShallow('fontWeight') || '',
+        (opt.fontSize || gTextStyleModel && gTextStyleModel.getShallow('fontSize') || 12) + 'px',
+        opt.fontFamily || gTextStyleModel && gTextStyleModel.getShallow('fontFamily') || 'sans-serif'
+    ].join(' '));
+}
+
+function animateOrSetProps(isUpdate, el, props, animatableModel, dataIndex, cb) {
+    if (typeof dataIndex === 'function') {
+        cb = dataIndex;
+        dataIndex = null;
+    }
+    // Do not check 'animation' property directly here. Consider this case:
+    // animation model is an `itemModel`, whose does not have `isAnimationEnabled`
+    // but its parent model (`seriesModel`) does.
+    var animationEnabled = animatableModel && animatableModel.isAnimationEnabled();
+
+    if (animationEnabled) {
+        var postfix = isUpdate ? 'Update' : '';
+        var duration = animatableModel.getShallow('animationDuration' + postfix);
+        var animationEasing = animatableModel.getShallow('animationEasing' + postfix);
+        var animationDelay = animatableModel.getShallow('animationDelay' + postfix);
+        if (typeof animationDelay === 'function') {
+            animationDelay = animationDelay(
+                dataIndex,
+                animatableModel.getAnimationDelayParams
+                    ? animatableModel.getAnimationDelayParams(el, dataIndex)
+                    : null
+            );
+        }
+        if (typeof duration === 'function') {
+            duration = duration(dataIndex);
+        }
+
+        duration > 0
+            ? el.animateTo(props, duration, animationDelay || 0, animationEasing, cb, !!cb)
+            : (el.stopAnimation(), el.attr(props), cb && cb());
+    }
+    else {
+        el.stopAnimation();
+        el.attr(props);
+        cb && cb();
+    }
+}
+
+/**
+ * Update graphic element properties with or without animation according to the
+ * configuration in series.
+ *
+ * Caution: this method will stop previous animation.
+ * So if do not use this method to one element twice before
+ * animation starts, unless you know what you are doing.
+ *
+ * @param {module:zrender/Element} el
+ * @param {Object} props
+ * @param {module:echarts/model/Model} [animatableModel]
+ * @param {number} [dataIndex]
+ * @param {Function} [cb]
+ * @example
+ *     graphic.updateProps(el, {
+ *         position: [100, 100]
+ *     }, seriesModel, dataIndex, function () { console.log('Animation done!'); });
+ *     // Or
+ *     graphic.updateProps(el, {
+ *         position: [100, 100]
+ *     }, seriesModel, function () { console.log('Animation done!'); });
+ */
+function updateProps(el, props, animatableModel, dataIndex, cb) {
+    animateOrSetProps(true, el, props, animatableModel, dataIndex, cb);
+}
+
+/**
+ * Init graphic element properties with or without animation according to the
+ * configuration in series.
+ *
+ * Caution: this method will stop previous animation.
+ * So if do not use this method to one element twice before
+ * animation starts, unless you know what you are doing.
+ *
+ * @param {module:zrender/Element} el
+ * @param {Object} props
+ * @param {module:echarts/model/Model} [animatableModel]
+ * @param {number} [dataIndex]
+ * @param {Function} cb
+ */
+function initProps(el, props, animatableModel, dataIndex, cb) {
+    animateOrSetProps(false, el, props, animatableModel, dataIndex, cb);
+}
+
+/**
+ * Get transform matrix of target (param target),
+ * in coordinate of its ancestor (param ancestor)
+ *
+ * @param {module:zrender/mixin/Transformable} target
+ * @param {module:zrender/mixin/Transformable} [ancestor]
+ */
+function getTransform(target, ancestor) {
+    var mat = identity([]);
+
+    while (target && target !== ancestor) {
+        mul$1(mat, target.getLocalTransform(), mat);
+        target = target.parent;
+    }
+
+    return mat;
+}
+
+/**
+ * Apply transform to an vertex.
+ * @param {Array.<number>} target [x, y]
+ * @param {Array.<number>|TypedArray.<number>|Object} transform Can be:
+ *      + Transform matrix: like [1, 0, 0, 1, 0, 0]
+ *      + {position, rotation, scale}, the same as `zrender/Transformable`.
+ * @param {boolean=} invert Whether use invert matrix.
+ * @return {Array.<number>} [x, y]
+ */
+function applyTransform$1(target, transform, invert$$1) {
+    if (transform && !isArrayLike(transform)) {
+        transform = Transformable.getLocalTransform(transform);
+    }
+
+    if (invert$$1) {
+        transform = invert([], transform);
