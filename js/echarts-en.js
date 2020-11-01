@@ -17021,3 +17021,259 @@ function setAsHoverStyleTrigger(el, opt) {
 
 /**
  * See more info in `setTextStyleCommon`.
+ * @param {Object|module:zrender/graphic/Style} normalStyle
+ * @param {Object} emphasisStyle
+ * @param {module:echarts/model/Model} normalModel
+ * @param {module:echarts/model/Model} emphasisModel
+ * @param {Object} opt Check `opt` of `setTextStyleCommon` to find other props.
+ * @param {string|Function} [opt.defaultText]
+ * @param {module:echarts/model/Model} [opt.labelFetcher] Fetch text by
+ *      `opt.labelFetcher.getFormattedLabel(opt.labelDataIndex, 'normal'/'emphasis', null, opt.labelDimIndex)`
+ * @param {module:echarts/model/Model} [opt.labelDataIndex] Fetch text by
+ *      `opt.textFetcher.getFormattedLabel(opt.labelDataIndex, 'normal'/'emphasis', null, opt.labelDimIndex)`
+ * @param {module:echarts/model/Model} [opt.labelDimIndex] Fetch text by
+ *      `opt.textFetcher.getFormattedLabel(opt.labelDataIndex, 'normal'/'emphasis', null, opt.labelDimIndex)`
+ * @param {Object} [normalSpecified]
+ * @param {Object} [emphasisSpecified]
+ */
+function setLabelStyle(
+    normalStyle, emphasisStyle,
+    normalModel, emphasisModel,
+    opt,
+    normalSpecified, emphasisSpecified
+) {
+    opt = opt || EMPTY_OBJ;
+    var labelFetcher = opt.labelFetcher;
+    var labelDataIndex = opt.labelDataIndex;
+    var labelDimIndex = opt.labelDimIndex;
+
+    // This scenario, `label.normal.show = true; label.emphasis.show = false`,
+    // is not supported util someone requests.
+
+    var showNormal = normalModel.getShallow('show');
+    var showEmphasis = emphasisModel.getShallow('show');
+
+    // Consider performance, only fetch label when necessary.
+    // If `normal.show` is `false` and `emphasis.show` is `true` and `emphasis.formatter` is not set,
+    // label should be displayed, where text is fetched by `normal.formatter` or `opt.defaultText`.
+    var baseText;
+    if (showNormal || showEmphasis) {
+        if (labelFetcher) {
+            baseText = labelFetcher.getFormattedLabel(labelDataIndex, 'normal', null, labelDimIndex);
+        }
+        if (baseText == null) {
+            baseText = isFunction$1(opt.defaultText) ? opt.defaultText(labelDataIndex, opt) : opt.defaultText;
+        }
+    }
+    var normalStyleText = showNormal ? baseText : null;
+    var emphasisStyleText = showEmphasis
+        ? retrieve2(
+            labelFetcher
+                ? labelFetcher.getFormattedLabel(labelDataIndex, 'emphasis', null, labelDimIndex)
+                : null,
+            baseText
+        )
+        : null;
+
+    // Optimize: If style.text is null, text will not be drawn.
+    if (normalStyleText != null || emphasisStyleText != null) {
+        // Always set `textStyle` even if `normalStyle.text` is null, because default
+        // values have to be set on `normalStyle`.
+        // If we set default values on `emphasisStyle`, consider case:
+        // Firstly, `setOption(... label: {normal: {text: null}, emphasis: {show: true}} ...);`
+        // Secondly, `setOption(... label: {noraml: {show: true, text: 'abc', color: 'red'} ...);`
+        // Then the 'red' will not work on emphasis.
+        setTextStyle(normalStyle, normalModel, normalSpecified, opt);
+        setTextStyle(emphasisStyle, emphasisModel, emphasisSpecified, opt, true);
+    }
+
+    normalStyle.text = normalStyleText;
+    emphasisStyle.text = emphasisStyleText;
+}
+
+/**
+ * Set basic textStyle properties.
+ * See more info in `setTextStyleCommon`.
+ * @param {Object|module:zrender/graphic/Style} textStyle
+ * @param {module:echarts/model/Model} model
+ * @param {Object} [specifiedTextStyle] Can be overrided by settings in model.
+ * @param {Object} [opt] See `opt` of `setTextStyleCommon`.
+ * @param {boolean} [isEmphasis]
+ */
+function setTextStyle(
+    textStyle, textStyleModel, specifiedTextStyle, opt, isEmphasis
+) {
+    setTextStyleCommon(textStyle, textStyleModel, opt, isEmphasis);
+    specifiedTextStyle && extend(textStyle, specifiedTextStyle);
+    // textStyle.host && textStyle.host.dirty && textStyle.host.dirty(false);
+
+    return textStyle;
+}
+
+/**
+ * Set text option in the style.
+ * See more info in `setTextStyleCommon`.
+ * @deprecated
+ * @param {Object} textStyle
+ * @param {module:echarts/model/Model} labelModel
+ * @param {string|boolean} defaultColor Default text color.
+ *        If set as false, it will be processed as a emphasis style.
+ */
+function setText(textStyle, labelModel, defaultColor) {
+    var opt = {isRectText: true};
+    var isEmphasis;
+
+    if (defaultColor === false) {
+        isEmphasis = true;
+    }
+    else {
+        // Support setting color as 'auto' to get visual color.
+        opt.autoColor = defaultColor;
+    }
+    setTextStyleCommon(textStyle, labelModel, opt, isEmphasis);
+    // textStyle.host && textStyle.host.dirty && textStyle.host.dirty(false);
+}
+
+/**
+ * The uniform entry of set text style, that is, retrieve style definitions
+ * from `model` and set to `textStyle` object.
+ *
+ * Never in merge mode, but in overwrite mode, that is, all of the text style
+ * properties will be set. (Consider the states of normal and emphasis and
+ * default value can be adopted, merge would make the logic too complicated
+ * to manage.)
+ *
+ * The `textStyle` object can either be a plain object or an instance of
+ * `zrender/src/graphic/Style`, and either be the style of normal or emphasis.
+ * After this mothod called, the `textStyle` object can then be used in
+ * `el.setStyle(textStyle)` or `el.hoverStyle = textStyle`.
+ *
+ * Default value will be adopted and `insideRollbackOpt` will be created.
+ * See `applyDefaultTextStyle` `rollbackDefaultTextStyle` for more details.
+ *
+ * opt: {
+ *      disableBox: boolean, Whether diable drawing box of block (outer most).
+ *      isRectText: boolean,
+ *      autoColor: string, specify a color when color is 'auto',
+ *              for textFill, textStroke, textBackgroundColor, and textBorderColor.
+ *              If autoColor specified, it is used as default textFill.
+ *      useInsideStyle:
+ *              `true`: Use inside style (textFill, textStroke, textStrokeWidth)
+ *                  if `textFill` is not specified.
+ *              `false`: Do not use inside style.
+ *              `null/undefined`: use inside style if `isRectText` is true and
+ *                  `textFill` is not specified and textPosition contains `'inside'`.
+ *      forceRich: boolean
+ * }
+ */
+function setTextStyleCommon(textStyle, textStyleModel, opt, isEmphasis) {
+    // Consider there will be abnormal when merge hover style to normal style if given default value.
+    opt = opt || EMPTY_OBJ;
+
+    if (opt.isRectText) {
+        var textPosition = textStyleModel.getShallow('position')
+            || (isEmphasis ? null : 'inside');
+        // 'outside' is not a valid zr textPostion value, but used
+        // in bar series, and magric type should be considered.
+        textPosition === 'outside' && (textPosition = 'top');
+        textStyle.textPosition = textPosition;
+        textStyle.textOffset = textStyleModel.getShallow('offset');
+        var labelRotate = textStyleModel.getShallow('rotate');
+        labelRotate != null && (labelRotate *= Math.PI / 180);
+        textStyle.textRotation = labelRotate;
+        textStyle.textDistance = retrieve2(
+            textStyleModel.getShallow('distance'), isEmphasis ? null : 5
+        );
+    }
+
+    var ecModel = textStyleModel.ecModel;
+    var globalTextStyle = ecModel && ecModel.option.textStyle;
+
+    // Consider case:
+    // {
+    //     data: [{
+    //         value: 12,
+    //         label: {
+    //             rich: {
+    //                 // no 'a' here but using parent 'a'.
+    //             }
+    //         }
+    //     }],
+    //     rich: {
+    //         a: { ... }
+    //     }
+    // }
+    var richItemNames = getRichItemNames(textStyleModel);
+    var richResult;
+    if (richItemNames) {
+        richResult = {};
+        for (var name in richItemNames) {
+            if (richItemNames.hasOwnProperty(name)) {
+                // Cascade is supported in rich.
+                var richTextStyle = textStyleModel.getModel(['rich', name]);
+                // In rich, never `disableBox`.
+                setTokenTextStyle(richResult[name] = {}, richTextStyle, globalTextStyle, opt, isEmphasis);
+            }
+        }
+    }
+    textStyle.rich = richResult;
+
+    setTokenTextStyle(textStyle, textStyleModel, globalTextStyle, opt, isEmphasis, true);
+
+    if (opt.forceRich && !opt.textStyle) {
+        opt.textStyle = {};
+    }
+
+    return textStyle;
+}
+
+// Consider case:
+// {
+//     data: [{
+//         value: 12,
+//         label: {
+//             rich: {
+//                 // no 'a' here but using parent 'a'.
+//             }
+//         }
+//     }],
+//     rich: {
+//         a: { ... }
+//     }
+// }
+function getRichItemNames(textStyleModel) {
+    // Use object to remove duplicated names.
+    var richItemNameMap;
+    while (textStyleModel && textStyleModel !== textStyleModel.ecModel) {
+        var rich = (textStyleModel.option || EMPTY_OBJ).rich;
+        if (rich) {
+            richItemNameMap = richItemNameMap || {};
+            for (var name in rich) {
+                if (rich.hasOwnProperty(name)) {
+                    richItemNameMap[name] = 1;
+                }
+            }
+        }
+        textStyleModel = textStyleModel.parentModel;
+    }
+    return richItemNameMap;
+}
+
+function setTokenTextStyle(textStyle, textStyleModel, globalTextStyle, opt, isEmphasis, isBlock) {
+    // In merge mode, default value should not be given.
+    globalTextStyle = !isEmphasis && globalTextStyle || EMPTY_OBJ;
+
+    textStyle.textFill = getAutoColor(textStyleModel.getShallow('color'), opt)
+        || globalTextStyle.color;
+    textStyle.textStroke = getAutoColor(textStyleModel.getShallow('textBorderColor'), opt)
+        || globalTextStyle.textBorderColor;
+    textStyle.textStrokeWidth = retrieve2(
+        textStyleModel.getShallow('textBorderWidth'),
+        globalTextStyle.textBorderWidth
+    );
+
+    // Save original textPosition, because style.textPosition will be repalced by
+    // real location (like [10, 30]) in zrender.
+    textStyle.insideRawTextPosition = textStyle.textPosition;
+
+    if (!isEmphasis) {
