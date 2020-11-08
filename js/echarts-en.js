@@ -17544,3 +17544,275 @@ function applyTransform$1(target, transform, invert$$1) {
 
     if (invert$$1) {
         transform = invert([], transform);
+    }
+    return applyTransform([], target, transform);
+}
+
+/**
+ * @param {string} direction 'left' 'right' 'top' 'bottom'
+ * @param {Array.<number>} transform Transform matrix: like [1, 0, 0, 1, 0, 0]
+ * @param {boolean=} invert Whether use invert matrix.
+ * @return {string} Transformed direction. 'left' 'right' 'top' 'bottom'
+ */
+function transformDirection(direction, transform, invert$$1) {
+
+    // Pick a base, ensure that transform result will not be (0, 0).
+    var hBase = (transform[4] === 0 || transform[5] === 0 || transform[0] === 0)
+        ? 1 : Math.abs(2 * transform[4] / transform[0]);
+    var vBase = (transform[4] === 0 || transform[5] === 0 || transform[2] === 0)
+        ? 1 : Math.abs(2 * transform[4] / transform[2]);
+
+    var vertex = [
+        direction === 'left' ? -hBase : direction === 'right' ? hBase : 0,
+        direction === 'top' ? -vBase : direction === 'bottom' ? vBase : 0
+    ];
+
+    vertex = applyTransform$1(vertex, transform, invert$$1);
+
+    return Math.abs(vertex[0]) > Math.abs(vertex[1])
+        ? (vertex[0] > 0 ? 'right' : 'left')
+        : (vertex[1] > 0 ? 'bottom' : 'top');
+}
+
+/**
+ * Apply group transition animation from g1 to g2.
+ * If no animatableModel, no animation.
+ */
+function groupTransition(g1, g2, animatableModel, cb) {
+    if (!g1 || !g2) {
+        return;
+    }
+
+    function getElMap(g) {
+        var elMap = {};
+        g.traverse(function (el) {
+            if (!el.isGroup && el.anid) {
+                elMap[el.anid] = el;
+            }
+        });
+        return elMap;
+    }
+    function getAnimatableProps(el) {
+        var obj = {
+            position: clone$1(el.position),
+            rotation: el.rotation
+        };
+        if (el.shape) {
+            obj.shape = extend({}, el.shape);
+        }
+        return obj;
+    }
+    var elMap1 = getElMap(g1);
+
+    g2.traverse(function (el) {
+        if (!el.isGroup && el.anid) {
+            var oldEl = elMap1[el.anid];
+            if (oldEl) {
+                var newProp = getAnimatableProps(el);
+                el.attr(getAnimatableProps(oldEl));
+                updateProps(el, newProp, animatableModel, el.dataIndex);
+            }
+            // else {
+            //     if (el.previousProps) {
+            //         graphic.updateProps
+            //     }
+            // }
+        }
+    });
+}
+
+/**
+ * @param {Array.<Array.<number>>} points Like: [[23, 44], [53, 66], ...]
+ * @param {Object} rect {x, y, width, height}
+ * @return {Array.<Array.<number>>} A new clipped points.
+ */
+function clipPointsByRect(points, rect) {
+    // FIXME: this way migth be incorrect when grpahic clipped by a corner.
+    // and when element have border.
+    return map(points, function (point) {
+        var x = point[0];
+        x = mathMax$1(x, rect.x);
+        x = mathMin$1(x, rect.x + rect.width);
+        var y = point[1];
+        y = mathMax$1(y, rect.y);
+        y = mathMin$1(y, rect.y + rect.height);
+        return [x, y];
+    });
+}
+
+/**
+ * @param {Object} targetRect {x, y, width, height}
+ * @param {Object} rect {x, y, width, height}
+ * @return {Object} A new clipped rect. If rect size are negative, return undefined.
+ */
+function clipRectByRect(targetRect, rect) {
+    var x = mathMax$1(targetRect.x, rect.x);
+    var x2 = mathMin$1(targetRect.x + targetRect.width, rect.x + rect.width);
+    var y = mathMax$1(targetRect.y, rect.y);
+    var y2 = mathMin$1(targetRect.y + targetRect.height, rect.y + rect.height);
+
+    // If the total rect is cliped, nothing, including the border,
+    // should be painted. So return undefined.
+    if (x2 >= x && y2 >= y) {
+        return {
+            x: x,
+            y: y,
+            width: x2 - x,
+            height: y2 - y
+        };
+    }
+}
+
+/**
+ * @param {string} iconStr Support 'image://' or 'path://' or direct svg path.
+ * @param {Object} [opt] Properties of `module:zrender/Element`, except `style`.
+ * @param {Object} [rect] {x, y, width, height}
+ * @return {module:zrender/Element} Icon path or image element.
+ */
+function createIcon(iconStr, opt, rect) {
+    opt = extend({rectHover: true}, opt);
+    var style = opt.style = {strokeNoScale: true};
+    rect = rect || {x: -1, y: -1, width: 2, height: 2};
+
+    if (iconStr) {
+        return iconStr.indexOf('image://') === 0
+            ? (
+                style.image = iconStr.slice(8),
+                defaults(style, rect),
+                new ZImage(opt)
+            )
+            : (
+                makePath(
+                    iconStr.replace('path://', ''),
+                    opt,
+                    rect,
+                    'center'
+                )
+            );
+    }
+}
+
+
+
+
+var graphic = (Object.freeze || Object)({
+	Z2_EMPHASIS_LIFT: Z2_EMPHASIS_LIFT,
+	extendShape: extendShape,
+	extendPath: extendPath,
+	makePath: makePath,
+	makeImage: makeImage,
+	mergePath: mergePath,
+	resizePath: resizePath,
+	subPixelOptimizeLine: subPixelOptimizeLine,
+	subPixelOptimizeRect: subPixelOptimizeRect,
+	subPixelOptimize: subPixelOptimize,
+	setElementHoverStyle: setElementHoverStyle,
+	isInEmphasis: isInEmphasis,
+	setHoverStyle: setHoverStyle,
+	setAsHoverStyleTrigger: setAsHoverStyleTrigger,
+	setLabelStyle: setLabelStyle,
+	setTextStyle: setTextStyle,
+	setText: setText,
+	getFont: getFont,
+	updateProps: updateProps,
+	initProps: initProps,
+	getTransform: getTransform,
+	applyTransform: applyTransform$1,
+	transformDirection: transformDirection,
+	groupTransition: groupTransition,
+	clipPointsByRect: clipPointsByRect,
+	clipRectByRect: clipRectByRect,
+	createIcon: createIcon,
+	Group: Group,
+	Image: ZImage,
+	Text: Text,
+	Circle: Circle,
+	Sector: Sector,
+	Ring: Ring,
+	Polygon: Polygon,
+	Polyline: Polyline,
+	Rect: Rect,
+	Line: Line,
+	BezierCurve: BezierCurve,
+	Arc: Arc,
+	IncrementalDisplayable: IncrementalDisplayble,
+	CompoundPath: CompoundPath,
+	LinearGradient: LinearGradient,
+	RadialGradient: RadialGradient,
+	BoundingRect: BoundingRect
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var PATH_COLOR = ['textStyle', 'color'];
+
+var textStyleMixin = {
+    /**
+     * Get color property or get color from option.textStyle.color
+     * @param {boolean} [isEmphasis]
+     * @return {string}
+     */
+    getTextColor: function (isEmphasis) {
+        var ecModel = this.ecModel;
+        return this.getShallow('color')
+            || (
+                (!isEmphasis && ecModel) ? ecModel.get(PATH_COLOR) : null
+            );
+    },
+
+    /**
+     * Create font string from fontStyle, fontWeight, fontSize, fontFamily
+     * @return {string}
+     */
+    getFont: function () {
+        return getFont({
+            fontStyle: this.getShallow('fontStyle'),
+            fontWeight: this.getShallow('fontWeight'),
+            fontSize: this.getShallow('fontSize'),
+            fontFamily: this.getShallow('fontFamily')
+        }, this.ecModel);
+    },
+
+    getTextRect: function (text) {
+        return getBoundingRect(
+            text,
+            this.getFont(),
+            this.getShallow('align'),
+            this.getShallow('verticalAlign') || this.getShallow('baseline'),
+            this.getShallow('padding'),
+            this.getShallow('lineHeight'),
+            this.getShallow('rich'),
+            this.getShallow('truncateText')
+        );
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
