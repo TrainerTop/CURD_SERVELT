@@ -18577,3 +18577,262 @@ function parseDate(value) {
         // Use local time when no timezone offset specifed.
         if (!match[8]) {
             // match[n] can only be string or undefined.
+            // But take care of '12' + 1 => '121'.
+            return new Date(
+                +match[1],
+                +(match[2] || 1) - 1,
+                +match[3] || 1,
+                +match[4] || 0,
+                +(match[5] || 0),
+                +match[6] || 0,
+                +match[7] || 0
+            );
+        }
+        // Timezoneoffset of Javascript Date has considered DST (Daylight Saving Time,
+        // https://tc39.github.io/ecma262/#sec-daylight-saving-time-adjustment).
+        // For example, system timezone is set as "Time Zone: America/Toronto",
+        // then these code will get different result:
+        // `new Date(1478411999999).getTimezoneOffset();  // get 240`
+        // `new Date(1478412000000).getTimezoneOffset();  // get 300`
+        // So we should not use `new Date`, but use `Date.UTC`.
+        else {
+            var hour = +match[4] || 0;
+            if (match[8].toUpperCase() !== 'Z') {
+                hour -= match[8].slice(0, 3);
+            }
+            return new Date(Date.UTC(
+                +match[1],
+                +(match[2] || 1) - 1,
+                +match[3] || 1,
+                hour,
+                +(match[5] || 0),
+                +match[6] || 0,
+                +match[7] || 0
+            ));
+        }
+    }
+    else if (value == null) {
+        return new Date(NaN);
+    }
+
+    return new Date(Math.round(value));
+}
+
+/**
+ * Quantity of a number. e.g. 0.1, 1, 10, 100
+ *
+ * @param  {number} val
+ * @return {number}
+ */
+function quantity(val) {
+    return Math.pow(10, quantityExponent(val));
+}
+
+function quantityExponent(val) {
+    return Math.floor(Math.log(val) / Math.LN10);
+}
+
+/**
+ * find a “nice” number approximately equal to x. Round the number if round = true,
+ * take ceiling if round = false. The primary observation is that the “nicest”
+ * numbers in decimal are 1, 2, and 5, and all power-of-ten multiples of these numbers.
+ *
+ * See "Nice Numbers for Graph Labels" of Graphic Gems.
+ *
+ * @param  {number} val Non-negative value.
+ * @param  {boolean} round
+ * @return {number}
+ */
+function nice(val, round) {
+    var exponent = quantityExponent(val);
+    var exp10 = Math.pow(10, exponent);
+    var f = val / exp10; // 1 <= f < 10
+    var nf;
+    if (round) {
+        if (f < 1.5) {
+            nf = 1;
+        }
+        else if (f < 2.5) {
+            nf = 2;
+        }
+        else if (f < 4) {
+            nf = 3;
+        }
+        else if (f < 7) {
+            nf = 5;
+        }
+        else {
+            nf = 10;
+        }
+    }
+    else {
+        if (f < 1) {
+            nf = 1;
+        }
+        else if (f < 2) {
+            nf = 2;
+        }
+        else if (f < 3) {
+            nf = 3;
+        }
+        else if (f < 5) {
+            nf = 5;
+        }
+        else {
+            nf = 10;
+        }
+    }
+    val = nf * exp10;
+
+    // Fix 3 * 0.1 === 0.30000000000000004 issue (see IEEE 754).
+    // 20 is the uppper bound of toFixed.
+    return exponent >= -20 ? +val.toFixed(exponent < 0 ? -exponent : 0) : val;
+}
+
+/**
+ * This code was copied from "d3.js"
+ * <https://github.com/d3/d3/blob/9cc9a875e636a1dcf36cc1e07bdf77e1ad6e2c74/src/arrays/quantile.js>.
+ * See the license statement at the head of this file.
+ * @param {Array.<number>} ascArr
+ */
+function quantile(ascArr, p) {
+    var H = (ascArr.length - 1) * p + 1;
+    var h = Math.floor(H);
+    var v = +ascArr[h - 1];
+    var e = H - h;
+    return e ? v + e * (ascArr[h] - v) : v;
+}
+
+/**
+ * Order intervals asc, and split them when overlap.
+ * expect(numberUtil.reformIntervals([
+ *     {interval: [18, 62], close: [1, 1]},
+ *     {interval: [-Infinity, -70], close: [0, 0]},
+ *     {interval: [-70, -26], close: [1, 1]},
+ *     {interval: [-26, 18], close: [1, 1]},
+ *     {interval: [62, 150], close: [1, 1]},
+ *     {interval: [106, 150], close: [1, 1]},
+ *     {interval: [150, Infinity], close: [0, 0]}
+ * ])).toEqual([
+ *     {interval: [-Infinity, -70], close: [0, 0]},
+ *     {interval: [-70, -26], close: [1, 1]},
+ *     {interval: [-26, 18], close: [0, 1]},
+ *     {interval: [18, 62], close: [0, 1]},
+ *     {interval: [62, 150], close: [0, 1]},
+ *     {interval: [150, Infinity], close: [0, 0]}
+ * ]);
+ * @param {Array.<Object>} list, where `close` mean open or close
+ *        of the interval, and Infinity can be used.
+ * @return {Array.<Object>} The origin list, which has been reformed.
+ */
+function reformIntervals(list) {
+    list.sort(function (a, b) {
+        return littleThan(a, b, 0) ? -1 : 1;
+    });
+
+    var curr = -Infinity;
+    var currClose = 1;
+    for (var i = 0; i < list.length;) {
+        var interval = list[i].interval;
+        var close = list[i].close;
+
+        for (var lg = 0; lg < 2; lg++) {
+            if (interval[lg] <= curr) {
+                interval[lg] = curr;
+                close[lg] = !lg ? 1 - currClose : 1;
+            }
+            curr = interval[lg];
+            currClose = close[lg];
+        }
+
+        if (interval[0] === interval[1] && close[0] * close[1] !== 1) {
+            list.splice(i, 1);
+        }
+        else {
+            i++;
+        }
+    }
+
+    return list;
+
+    function littleThan(a, b, lg) {
+        return a.interval[lg] < b.interval[lg]
+            || (
+                a.interval[lg] === b.interval[lg]
+                && (
+                    (a.close[lg] - b.close[lg] === (!lg ? 1 : -1))
+                    || (!lg && littleThan(a, b, 1))
+                )
+            );
+    }
+}
+
+/**
+ * parseFloat NaNs numeric-cast false positives (null|true|false|"")
+ * ...but misinterprets leading-number strings, particularly hex literals ("0x...")
+ * subtraction forces infinities to NaN
+ *
+ * @param {*} v
+ * @return {boolean}
+ */
+function isNumeric(v) {
+    return v - parseFloat(v) >= 0;
+}
+
+
+var number = (Object.freeze || Object)({
+	linearMap: linearMap,
+	parsePercent: parsePercent$1,
+	round: round$2,
+	asc: asc,
+	getPrecision: getPrecision,
+	getPrecisionSafe: getPrecisionSafe,
+	getPixelPrecision: getPixelPrecision,
+	getPercentWithPrecision: getPercentWithPrecision,
+	MAX_SAFE_INTEGER: MAX_SAFE_INTEGER,
+	remRadian: remRadian,
+	isRadianAroundZero: isRadianAroundZero,
+	parseDate: parseDate,
+	quantity: quantity,
+	nice: nice,
+	quantile: quantile,
+	reformIntervals: reformIntervals,
+	isNumeric: isNumeric
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// import Text from 'zrender/src/graphic/Text';
+
+/**
+ * 每三位默认加,格式化
+ * @param {string|number} x
+ * @return {string}
+ */
+function addCommas(x) {
+    if (isNaN(x)) {
+        return '-';
+    }
+    x = (x + '').split('.');
+    return x[0].replace(/(\d{1,3})(?=(?:\d{3})+(?!\d))/g, '$1,')
+            + (x.length > 1 ? ('.' + x[1]) : '');
+}
+
+/**
