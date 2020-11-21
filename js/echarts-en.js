@@ -18310,3 +18310,270 @@ function linearMap(val, domain, range, clamp) {
     if (clamp) {
         if (subDomain > 0) {
             if (val <= domain[0]) {
+                return range[0];
+            }
+            else if (val >= domain[1]) {
+                return range[1];
+            }
+        }
+        else {
+            if (val >= domain[0]) {
+                return range[0];
+            }
+            else if (val <= domain[1]) {
+                return range[1];
+            }
+        }
+    }
+    else {
+        if (val === domain[0]) {
+            return range[0];
+        }
+        if (val === domain[1]) {
+            return range[1];
+        }
+    }
+
+    return (val - domain[0]) / subDomain * subRange + range[0];
+}
+
+/**
+ * Convert a percent string to absolute number.
+ * Returns NaN if percent is not a valid string or number
+ * @memberOf module:echarts/util/number
+ * @param {string|number} percent
+ * @param {number} all
+ * @return {number}
+ */
+function parsePercent$1(percent, all) {
+    switch (percent) {
+        case 'center':
+        case 'middle':
+            percent = '50%';
+            break;
+        case 'left':
+        case 'top':
+            percent = '0%';
+            break;
+        case 'right':
+        case 'bottom':
+            percent = '100%';
+            break;
+    }
+    if (typeof percent === 'string') {
+        if (_trim(percent).match(/%$/)) {
+            return parseFloat(percent) / 100 * all;
+        }
+
+        return parseFloat(percent);
+    }
+
+    return percent == null ? NaN : +percent;
+}
+
+/**
+ * (1) Fix rounding error of float numbers.
+ * (2) Support return string to avoid scientific notation like '3.5e-7'.
+ *
+ * @param {number} x
+ * @param {number} [precision]
+ * @param {boolean} [returnStr]
+ * @return {number|string}
+ */
+function round$2(x, precision, returnStr) {
+    if (precision == null) {
+        precision = 10;
+    }
+    // Avoid range error
+    precision = Math.min(Math.max(0, precision), 20);
+    x = (+x).toFixed(precision);
+    return returnStr ? x : +x;
+}
+
+function asc(arr) {
+    arr.sort(function (a, b) {
+        return a - b;
+    });
+    return arr;
+}
+
+/**
+ * Get precision
+ * @param {number} val
+ */
+function getPrecision(val) {
+    val = +val;
+    if (isNaN(val)) {
+        return 0;
+    }
+    // It is much faster than methods converting number to string as follows
+    //      var tmp = val.toString();
+    //      return tmp.length - 1 - tmp.indexOf('.');
+    // especially when precision is low
+    var e = 1;
+    var count = 0;
+    while (Math.round(val * e) / e !== val) {
+        e *= 10;
+        count++;
+    }
+    return count;
+}
+
+/**
+ * @param {string|number} val
+ * @return {number}
+ */
+function getPrecisionSafe(val) {
+    var str = val.toString();
+
+    // Consider scientific notation: '3.4e-12' '3.4e+12'
+    var eIndex = str.indexOf('e');
+    if (eIndex > 0) {
+        var precision = +str.slice(eIndex + 1);
+        return precision < 0 ? -precision : 0;
+    }
+    else {
+        var dotIndex = str.indexOf('.');
+        return dotIndex < 0 ? 0 : str.length - 1 - dotIndex;
+    }
+}
+
+/**
+ * Minimal dicernible data precisioin according to a single pixel.
+ *
+ * @param {Array.<number>} dataExtent
+ * @param {Array.<number>} pixelExtent
+ * @return {number} precision
+ */
+function getPixelPrecision(dataExtent, pixelExtent) {
+    var log = Math.log;
+    var LN10 = Math.LN10;
+    var dataQuantity = Math.floor(log(dataExtent[1] - dataExtent[0]) / LN10);
+    var sizeQuantity = Math.round(log(Math.abs(pixelExtent[1] - pixelExtent[0])) / LN10);
+    // toFixed() digits argument must be between 0 and 20.
+    var precision = Math.min(Math.max(-dataQuantity + sizeQuantity, 0), 20);
+    return !isFinite(precision) ? 20 : precision;
+}
+
+/**
+ * Get a data of given precision, assuring the sum of percentages
+ * in valueList is 1.
+ * The largest remainer method is used.
+ * https://en.wikipedia.org/wiki/Largest_remainder_method
+ *
+ * @param {Array.<number>} valueList a list of all data
+ * @param {number} idx index of the data to be processed in valueList
+ * @param {number} precision integer number showing digits of precision
+ * @return {number} percent ranging from 0 to 100
+ */
+function getPercentWithPrecision(valueList, idx, precision) {
+    if (!valueList[idx]) {
+        return 0;
+    }
+
+    var sum = reduce(valueList, function (acc, val) {
+        return acc + (isNaN(val) ? 0 : val);
+    }, 0);
+    if (sum === 0) {
+        return 0;
+    }
+
+    var digits = Math.pow(10, precision);
+    var votesPerQuota = map(valueList, function (val) {
+        return (isNaN(val) ? 0 : val) / sum * digits * 100;
+    });
+    var targetSeats = digits * 100;
+
+    var seats = map(votesPerQuota, function (votes) {
+        // Assign automatic seats.
+        return Math.floor(votes);
+    });
+    var currentSum = reduce(seats, function (acc, val) {
+        return acc + val;
+    }, 0);
+
+    var remainder = map(votesPerQuota, function (votes, idx) {
+        return votes - seats[idx];
+    });
+
+    // Has remainding votes.
+    while (currentSum < targetSeats) {
+        // Find next largest remainder.
+        var max = Number.NEGATIVE_INFINITY;
+        var maxId = null;
+        for (var i = 0, len = remainder.length; i < len; ++i) {
+            if (remainder[i] > max) {
+                max = remainder[i];
+                maxId = i;
+            }
+        }
+
+        // Add a vote to max remainder.
+        ++seats[maxId];
+        remainder[maxId] = 0;
+        ++currentSum;
+    }
+
+    return seats[idx] / digits;
+}
+
+// Number.MAX_SAFE_INTEGER, ie do not support.
+var MAX_SAFE_INTEGER = 9007199254740991;
+
+/**
+ * To 0 - 2 * PI, considering negative radian.
+ * @param {number} radian
+ * @return {number}
+ */
+function remRadian(radian) {
+    var pi2 = Math.PI * 2;
+    return (radian % pi2 + pi2) % pi2;
+}
+
+/**
+ * @param {type} radian
+ * @return {boolean}
+ */
+function isRadianAroundZero(val) {
+    return val > -RADIAN_EPSILON && val < RADIAN_EPSILON;
+}
+
+/* eslint-disable */
+var TIME_REG = /^(?:(\d{4})(?:[-\/](\d{1,2})(?:[-\/](\d{1,2})(?:[T ](\d{1,2})(?::(\d\d)(?::(\d\d)(?:[.,](\d+))?)?)?(Z|[\+\-]\d\d:?\d\d)?)?)?)?)?$/; // jshint ignore:line
+/* eslint-enable */
+
+/**
+ * @param {string|Date|number} value These values can be accepted:
+ *   + An instance of Date, represent a time in its own time zone.
+ *   + Or string in a subset of ISO 8601, only including:
+ *     + only year, month, date: '2012-03', '2012-03-01', '2012-03-01 05', '2012-03-01 05:06',
+ *     + separated with T or space: '2012-03-01T12:22:33.123', '2012-03-01 12:22:33.123',
+ *     + time zone: '2012-03-01T12:22:33Z', '2012-03-01T12:22:33+8000', '2012-03-01T12:22:33-05:00',
+ *     all of which will be treated as local time if time zone is not specified
+ *     (see <https://momentjs.com/>).
+ *   + Or other string format, including (all of which will be treated as loacal time):
+ *     '2012', '2012-3-1', '2012/3/1', '2012/03/01',
+ *     '2009/6/12 2:00', '2009/6/12 2:05:08', '2009/6/12 2:05:08.123'
+ *   + a timestamp, which represent a time in UTC.
+ * @return {Date} date
+ */
+function parseDate(value) {
+    if (value instanceof Date) {
+        return value;
+    }
+    else if (typeof value === 'string') {
+        // Different browsers parse date in different way, so we parse it manually.
+        // Some other issues:
+        // new Date('1970-01-01') is UTC,
+        // new Date('1970/01/01') and new Date('1970-1-01') is local.
+        // See issue #3623
+        var match = TIME_REG.exec(value);
+
+        if (!match) {
+            // return Invalid Date.
+            return new Date(NaN);
+        }
+
+        // Use local time when no timezone offset specifed.
+        if (!match[8]) {
+            // match[n] can only be string or undefined.
