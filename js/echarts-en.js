@@ -19111,3 +19111,245 @@ var format = (Object.freeze || Object)({
 */
 
 // Layout helpers for each component positioning
+
+var each$3 = each$1;
+
+/**
+ * @public
+ */
+var LOCATION_PARAMS = [
+    'left', 'right', 'top', 'bottom', 'width', 'height'
+];
+
+/**
+ * @public
+ */
+var HV_NAMES = [
+    ['width', 'left', 'right'],
+    ['height', 'top', 'bottom']
+];
+
+function boxLayout(orient, group, gap, maxWidth, maxHeight) {
+    var x = 0;
+    var y = 0;
+
+    if (maxWidth == null) {
+        maxWidth = Infinity;
+    }
+    if (maxHeight == null) {
+        maxHeight = Infinity;
+    }
+    var currentLineMaxSize = 0;
+
+    group.eachChild(function (child, idx) {
+        var position = child.position;
+        var rect = child.getBoundingRect();
+        var nextChild = group.childAt(idx + 1);
+        var nextChildRect = nextChild && nextChild.getBoundingRect();
+        var nextX;
+        var nextY;
+
+        if (orient === 'horizontal') {
+            var moveX = rect.width + (nextChildRect ? (-nextChildRect.x + rect.x) : 0);
+            nextX = x + moveX;
+            // Wrap when width exceeds maxWidth or meet a `newline` group
+            // FIXME compare before adding gap?
+            if (nextX > maxWidth || child.newline) {
+                x = 0;
+                nextX = moveX;
+                y += currentLineMaxSize + gap;
+                currentLineMaxSize = rect.height;
+            }
+            else {
+                // FIXME: consider rect.y is not `0`?
+                currentLineMaxSize = Math.max(currentLineMaxSize, rect.height);
+            }
+        }
+        else {
+            var moveY = rect.height + (nextChildRect ? (-nextChildRect.y + rect.y) : 0);
+            nextY = y + moveY;
+            // Wrap when width exceeds maxHeight or meet a `newline` group
+            if (nextY > maxHeight || child.newline) {
+                x += currentLineMaxSize + gap;
+                y = 0;
+                nextY = moveY;
+                currentLineMaxSize = rect.width;
+            }
+            else {
+                currentLineMaxSize = Math.max(currentLineMaxSize, rect.width);
+            }
+        }
+
+        if (child.newline) {
+            return;
+        }
+
+        position[0] = x;
+        position[1] = y;
+
+        orient === 'horizontal'
+            ? (x = nextX + gap)
+            : (y = nextY + gap);
+    });
+}
+
+/**
+ * VBox or HBox layouting
+ * @param {string} orient
+ * @param {module:zrender/container/Group} group
+ * @param {number} gap
+ * @param {number} [width=Infinity]
+ * @param {number} [height=Infinity]
+ */
+var box = boxLayout;
+
+/**
+ * VBox layouting
+ * @param {module:zrender/container/Group} group
+ * @param {number} gap
+ * @param {number} [width=Infinity]
+ * @param {number} [height=Infinity]
+ */
+var vbox = curry(boxLayout, 'vertical');
+
+/**
+ * HBox layouting
+ * @param {module:zrender/container/Group} group
+ * @param {number} gap
+ * @param {number} [width=Infinity]
+ * @param {number} [height=Infinity]
+ */
+var hbox = curry(boxLayout, 'horizontal');
+
+/**
+ * If x or x2 is not specified or 'center' 'left' 'right',
+ * the width would be as long as possible.
+ * If y or y2 is not specified or 'middle' 'top' 'bottom',
+ * the height would be as long as possible.
+ *
+ * @param {Object} positionInfo
+ * @param {number|string} [positionInfo.x]
+ * @param {number|string} [positionInfo.y]
+ * @param {number|string} [positionInfo.x2]
+ * @param {number|string} [positionInfo.y2]
+ * @param {Object} containerRect {width, height}
+ * @param {string|number} margin
+ * @return {Object} {width, height}
+ */
+function getAvailableSize(positionInfo, containerRect, margin) {
+    var containerWidth = containerRect.width;
+    var containerHeight = containerRect.height;
+
+    var x = parsePercent$1(positionInfo.x, containerWidth);
+    var y = parsePercent$1(positionInfo.y, containerHeight);
+    var x2 = parsePercent$1(positionInfo.x2, containerWidth);
+    var y2 = parsePercent$1(positionInfo.y2, containerHeight);
+
+    (isNaN(x) || isNaN(parseFloat(positionInfo.x))) && (x = 0);
+    (isNaN(x2) || isNaN(parseFloat(positionInfo.x2))) && (x2 = containerWidth);
+    (isNaN(y) || isNaN(parseFloat(positionInfo.y))) && (y = 0);
+    (isNaN(y2) || isNaN(parseFloat(positionInfo.y2))) && (y2 = containerHeight);
+
+    margin = normalizeCssArray$1(margin || 0);
+
+    return {
+        width: Math.max(x2 - x - margin[1] - margin[3], 0),
+        height: Math.max(y2 - y - margin[0] - margin[2], 0)
+    };
+}
+
+/**
+ * Parse position info.
+ *
+ * @param {Object} positionInfo
+ * @param {number|string} [positionInfo.left]
+ * @param {number|string} [positionInfo.top]
+ * @param {number|string} [positionInfo.right]
+ * @param {number|string} [positionInfo.bottom]
+ * @param {number|string} [positionInfo.width]
+ * @param {number|string} [positionInfo.height]
+ * @param {number|string} [positionInfo.aspect] Aspect is width / height
+ * @param {Object} containerRect
+ * @param {string|number} [margin]
+ *
+ * @return {module:zrender/core/BoundingRect}
+ */
+function getLayoutRect(
+    positionInfo, containerRect, margin
+) {
+    margin = normalizeCssArray$1(margin || 0);
+
+    var containerWidth = containerRect.width;
+    var containerHeight = containerRect.height;
+
+    var left = parsePercent$1(positionInfo.left, containerWidth);
+    var top = parsePercent$1(positionInfo.top, containerHeight);
+    var right = parsePercent$1(positionInfo.right, containerWidth);
+    var bottom = parsePercent$1(positionInfo.bottom, containerHeight);
+    var width = parsePercent$1(positionInfo.width, containerWidth);
+    var height = parsePercent$1(positionInfo.height, containerHeight);
+
+    var verticalMargin = margin[2] + margin[0];
+    var horizontalMargin = margin[1] + margin[3];
+    var aspect = positionInfo.aspect;
+
+    // If width is not specified, calculate width from left and right
+    if (isNaN(width)) {
+        width = containerWidth - right - horizontalMargin - left;
+    }
+    if (isNaN(height)) {
+        height = containerHeight - bottom - verticalMargin - top;
+    }
+
+    if (aspect != null) {
+        // If width and height are not given
+        // 1. Graph should not exceeds the container
+        // 2. Aspect must be keeped
+        // 3. Graph should take the space as more as possible
+        // FIXME
+        // Margin is not considered, because there is no case that both
+        // using margin and aspect so far.
+        if (isNaN(width) && isNaN(height)) {
+            if (aspect > containerWidth / containerHeight) {
+                width = containerWidth * 0.8;
+            }
+            else {
+                height = containerHeight * 0.8;
+            }
+        }
+
+        // Calculate width or height with given aspect
+        if (isNaN(width)) {
+            width = aspect * height;
+        }
+        if (isNaN(height)) {
+            height = width / aspect;
+        }
+    }
+
+    // If left is not specified, calculate left from right and width
+    if (isNaN(left)) {
+        left = containerWidth - right - width - horizontalMargin;
+    }
+    if (isNaN(top)) {
+        top = containerHeight - bottom - height - verticalMargin;
+    }
+
+    // Align left and top
+    switch (positionInfo.left || positionInfo.right) {
+        case 'center':
+            left = containerWidth / 2 - width / 2 - margin[3];
+            break;
+        case 'right':
+            left = containerWidth - width - horizontalMargin;
+            break;
+    }
+    switch (positionInfo.top || positionInfo.bottom) {
+        case 'middle':
+        case 'center':
+            top = containerHeight / 2 - height / 2 - margin[0];
+            break;
+        case 'bottom':
+            top = containerHeight - height - verticalMargin;
+            break;
+    }
