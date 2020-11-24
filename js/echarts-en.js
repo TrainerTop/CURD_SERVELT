@@ -19353,3 +19353,276 @@ function getLayoutRect(
             top = containerHeight - height - verticalMargin;
             break;
     }
+    // If something is wrong and left, top, width, height are calculated as NaN
+    left = left || 0;
+    top = top || 0;
+    if (isNaN(width)) {
+        // Width may be NaN if only one value is given except width
+        width = containerWidth - horizontalMargin - left - (right || 0);
+    }
+    if (isNaN(height)) {
+        // Height may be NaN if only one value is given except height
+        height = containerHeight - verticalMargin - top - (bottom || 0);
+    }
+
+    var rect = new BoundingRect(left + margin[3], top + margin[0], width, height);
+    rect.margin = margin;
+    return rect;
+}
+
+
+/**
+ * Position a zr element in viewport
+ *  Group position is specified by either
+ *  {left, top}, {right, bottom}
+ *  If all properties exists, right and bottom will be igonred.
+ *
+ * Logic:
+ *     1. Scale (against origin point in parent coord)
+ *     2. Rotate (against origin point in parent coord)
+ *     3. Traslate (with el.position by this method)
+ * So this method only fixes the last step 'Traslate', which does not affect
+ * scaling and rotating.
+ *
+ * If be called repeatly with the same input el, the same result will be gotten.
+ *
+ * @param {module:zrender/Element} el Should have `getBoundingRect` method.
+ * @param {Object} positionInfo
+ * @param {number|string} [positionInfo.left]
+ * @param {number|string} [positionInfo.top]
+ * @param {number|string} [positionInfo.right]
+ * @param {number|string} [positionInfo.bottom]
+ * @param {number|string} [positionInfo.width] Only for opt.boundingModel: 'raw'
+ * @param {number|string} [positionInfo.height] Only for opt.boundingModel: 'raw'
+ * @param {Object} containerRect
+ * @param {string|number} margin
+ * @param {Object} [opt]
+ * @param {Array.<number>} [opt.hv=[1,1]] Only horizontal or only vertical.
+ * @param {Array.<number>} [opt.boundingMode='all']
+ *        Specify how to calculate boundingRect when locating.
+ *        'all': Position the boundingRect that is transformed and uioned
+ *               both itself and its descendants.
+ *               This mode simplies confine the elements in the bounding
+ *               of their container (e.g., using 'right: 0').
+ *        'raw': Position the boundingRect that is not transformed and only itself.
+ *               This mode is useful when you want a element can overflow its
+ *               container. (Consider a rotated circle needs to be located in a corner.)
+ *               In this mode positionInfo.width/height can only be number.
+ */
+function positionElement(el, positionInfo, containerRect, margin, opt) {
+    var h = !opt || !opt.hv || opt.hv[0];
+    var v = !opt || !opt.hv || opt.hv[1];
+    var boundingMode = opt && opt.boundingMode || 'all';
+
+    if (!h && !v) {
+        return;
+    }
+
+    var rect;
+    if (boundingMode === 'raw') {
+        rect = el.type === 'group'
+            ? new BoundingRect(0, 0, +positionInfo.width || 0, +positionInfo.height || 0)
+            : el.getBoundingRect();
+    }
+    else {
+        rect = el.getBoundingRect();
+        if (el.needLocalTransform()) {
+            var transform = el.getLocalTransform();
+            // Notice: raw rect may be inner object of el,
+            // which should not be modified.
+            rect = rect.clone();
+            rect.applyTransform(transform);
+        }
+    }
+
+    // The real width and height can not be specified but calculated by the given el.
+    positionInfo = getLayoutRect(
+        defaults(
+            {width: rect.width, height: rect.height},
+            positionInfo
+        ),
+        containerRect,
+        margin
+    );
+
+    // Because 'tranlate' is the last step in transform
+    // (see zrender/core/Transformable#getLocalTransform),
+    // we can just only modify el.position to get final result.
+    var elPos = el.position;
+    var dx = h ? positionInfo.x - rect.x : 0;
+    var dy = v ? positionInfo.y - rect.y : 0;
+
+    el.attr('position', boundingMode === 'raw' ? [dx, dy] : [elPos[0] + dx, elPos[1] + dy]);
+}
+
+/**
+ * @param {Object} option Contains some of the properties in HV_NAMES.
+ * @param {number} hvIdx 0: horizontal; 1: vertical.
+ */
+function sizeCalculable(option, hvIdx) {
+    return option[HV_NAMES[hvIdx][0]] != null
+        || (option[HV_NAMES[hvIdx][1]] != null && option[HV_NAMES[hvIdx][2]] != null);
+}
+
+/**
+ * Consider Case:
+ * When defulat option has {left: 0, width: 100}, and we set {right: 0}
+ * through setOption or media query, using normal zrUtil.merge will cause
+ * {right: 0} does not take effect.
+ *
+ * @example
+ * ComponentModel.extend({
+ *     init: function () {
+ *         ...
+ *         var inputPositionParams = layout.getLayoutParams(option);
+ *         this.mergeOption(inputPositionParams);
+ *     },
+ *     mergeOption: function (newOption) {
+ *         newOption && zrUtil.merge(thisOption, newOption, true);
+ *         layout.mergeLayoutParam(thisOption, newOption);
+ *     }
+ * });
+ *
+ * @param {Object} targetOption
+ * @param {Object} newOption
+ * @param {Object|string} [opt]
+ * @param {boolean|Array.<boolean>} [opt.ignoreSize=false] Used for the components
+ *  that width (or height) should not be calculated by left and right (or top and bottom).
+ */
+function mergeLayoutParam(targetOption, newOption, opt) {
+    !isObject$1(opt) && (opt = {});
+
+    var ignoreSize = opt.ignoreSize;
+    !isArray(ignoreSize) && (ignoreSize = [ignoreSize, ignoreSize]);
+
+    var hResult = merge$$1(HV_NAMES[0], 0);
+    var vResult = merge$$1(HV_NAMES[1], 1);
+
+    copy(HV_NAMES[0], targetOption, hResult);
+    copy(HV_NAMES[1], targetOption, vResult);
+
+    function merge$$1(names, hvIdx) {
+        var newParams = {};
+        var newValueCount = 0;
+        var merged = {};
+        var mergedValueCount = 0;
+        var enoughParamNumber = 2;
+
+        each$3(names, function (name) {
+            merged[name] = targetOption[name];
+        });
+        each$3(names, function (name) {
+            // Consider case: newOption.width is null, which is
+            // set by user for removing width setting.
+            hasProp(newOption, name) && (newParams[name] = merged[name] = newOption[name]);
+            hasValue(newParams, name) && newValueCount++;
+            hasValue(merged, name) && mergedValueCount++;
+        });
+
+        if (ignoreSize[hvIdx]) {
+            // Only one of left/right is premitted to exist.
+            if (hasValue(newOption, names[1])) {
+                merged[names[2]] = null;
+            }
+            else if (hasValue(newOption, names[2])) {
+                merged[names[1]] = null;
+            }
+            return merged;
+        }
+
+        // Case: newOption: {width: ..., right: ...},
+        // or targetOption: {right: ...} and newOption: {width: ...},
+        // There is no conflict when merged only has params count
+        // little than enoughParamNumber.
+        if (mergedValueCount === enoughParamNumber || !newValueCount) {
+            return merged;
+        }
+        // Case: newOption: {width: ..., right: ...},
+        // Than we can make sure user only want those two, and ignore
+        // all origin params in targetOption.
+        else if (newValueCount >= enoughParamNumber) {
+            return newParams;
+        }
+        else {
+            // Chose another param from targetOption by priority.
+            for (var i = 0; i < names.length; i++) {
+                var name = names[i];
+                if (!hasProp(newParams, name) && hasProp(targetOption, name)) {
+                    newParams[name] = targetOption[name];
+                    break;
+                }
+            }
+            return newParams;
+        }
+    }
+
+    function hasProp(obj, name) {
+        return obj.hasOwnProperty(name);
+    }
+
+    function hasValue(obj, name) {
+        return obj[name] != null && obj[name] !== 'auto';
+    }
+
+    function copy(names, target, source) {
+        each$3(names, function (name) {
+            target[name] = source[name];
+        });
+    }
+}
+
+/**
+ * Retrieve 'left', 'right', 'top', 'bottom', 'width', 'height' from object.
+ * @param {Object} source
+ * @return {Object} Result contains those props.
+ */
+function getLayoutParams(source) {
+    return copyLayoutParams({}, source);
+}
+
+/**
+ * Retrieve 'left', 'right', 'top', 'bottom', 'width', 'height' from object.
+ * @param {Object} source
+ * @return {Object} Result contains those props.
+ */
+function copyLayoutParams(target, source) {
+    source && target && each$3(LOCATION_PARAMS, function (name) {
+        source.hasOwnProperty(name) && (target[name] = source[name]);
+    });
+    return target;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+var boxLayoutMixin = {
+    getBoxLayoutParams: function () {
+        return {
+            left: this.get('left'),
+            top: this.get('top'),
+            right: this.get('right'),
+            bottom: this.get('bottom'),
+            width: this.get('width'),
+            height: this.get('height')
+        };
+    }
+};
+
+/*
