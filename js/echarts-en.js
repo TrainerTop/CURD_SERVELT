@@ -20107,3 +20107,280 @@ var fetchers = {
         if (__DEV__) {
             if (!singleAxisModel) {
                 throw new Error('singleAxis should be specified.');
+            }
+        }
+
+        result.coordSysDims = ['single'];
+        axisMap.set('single', singleAxisModel);
+
+        if (isCategory(singleAxisModel)) {
+            categoryAxisMap.set('single', singleAxisModel);
+            result.firstCategoryDimIndex = 0;
+        }
+    },
+
+    polar: function (seriesModel, result, axisMap, categoryAxisMap) {
+        var polarModel = seriesModel.getReferringComponents('polar')[0];
+        var radiusAxisModel = polarModel.findAxisModel('radiusAxis');
+        var angleAxisModel = polarModel.findAxisModel('angleAxis');
+
+        if (__DEV__) {
+            if (!angleAxisModel) {
+                throw new Error('angleAxis option not found');
+            }
+            if (!radiusAxisModel) {
+                throw new Error('radiusAxis option not found');
+            }
+        }
+
+        result.coordSysDims = ['radius', 'angle'];
+        axisMap.set('radius', radiusAxisModel);
+        axisMap.set('angle', angleAxisModel);
+
+        if (isCategory(radiusAxisModel)) {
+            categoryAxisMap.set('radius', radiusAxisModel);
+            result.firstCategoryDimIndex = 0;
+        }
+        if (isCategory(angleAxisModel)) {
+            categoryAxisMap.set('angle', angleAxisModel);
+            result.firstCategoryDimIndex = 1;
+        }
+    },
+
+    geo: function (seriesModel, result, axisMap, categoryAxisMap) {
+        result.coordSysDims = ['lng', 'lat'];
+    },
+
+    parallel: function (seriesModel, result, axisMap, categoryAxisMap) {
+        var ecModel = seriesModel.ecModel;
+        var parallelModel = ecModel.getComponent(
+            'parallel', seriesModel.get('parallelIndex')
+        );
+        var coordSysDims = result.coordSysDims = parallelModel.dimensions.slice();
+
+        each$1(parallelModel.parallelAxisIndex, function (axisIndex, index) {
+            var axisModel = ecModel.getComponent('parallelAxis', axisIndex);
+            var axisDim = coordSysDims[index];
+            axisMap.set(axisDim, axisModel);
+
+            if (isCategory(axisModel) && result.firstCategoryDimIndex == null) {
+                categoryAxisMap.set(axisDim, axisModel);
+                result.firstCategoryDimIndex = index;
+            }
+        });
+    }
+};
+
+function isCategory(axisModel) {
+    return axisModel.get('type') === 'category';
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Avoid typo.
+var SOURCE_FORMAT_ORIGINAL = 'original';
+var SOURCE_FORMAT_ARRAY_ROWS = 'arrayRows';
+var SOURCE_FORMAT_OBJECT_ROWS = 'objectRows';
+var SOURCE_FORMAT_KEYED_COLUMNS = 'keyedColumns';
+var SOURCE_FORMAT_UNKNOWN = 'unknown';
+// ??? CHANGE A NAME
+var SOURCE_FORMAT_TYPED_ARRAY = 'typedArray';
+
+var SERIES_LAYOUT_BY_COLUMN = 'column';
+var SERIES_LAYOUT_BY_ROW = 'row';
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * [sourceFormat]
+ *
+ * + "original":
+ * This format is only used in series.data, where
+ * itemStyle can be specified in data item.
+ *
+ * + "arrayRows":
+ * [
+ *     ['product', 'score', 'amount'],
+ *     ['Matcha Latte', 89.3, 95.8],
+ *     ['Milk Tea', 92.1, 89.4],
+ *     ['Cheese Cocoa', 94.4, 91.2],
+ *     ['Walnut Brownie', 85.4, 76.9]
+ * ]
+ *
+ * + "objectRows":
+ * [
+ *     {product: 'Matcha Latte', score: 89.3, amount: 95.8},
+ *     {product: 'Milk Tea', score: 92.1, amount: 89.4},
+ *     {product: 'Cheese Cocoa', score: 94.4, amount: 91.2},
+ *     {product: 'Walnut Brownie', score: 85.4, amount: 76.9}
+ * ]
+ *
+ * + "keyedColumns":
+ * {
+ *     'product': ['Matcha Latte', 'Milk Tea', 'Cheese Cocoa', 'Walnut Brownie'],
+ *     'count': [823, 235, 1042, 988],
+ *     'score': [95.8, 81.4, 91.2, 76.9]
+ * }
+ *
+ * + "typedArray"
+ *
+ * + "unknown"
+ */
+
+/**
+ * @constructor
+ * @param {Object} fields
+ * @param {string} fields.sourceFormat
+ * @param {Array|Object} fields.fromDataset
+ * @param {Array|Object} [fields.data]
+ * @param {string} [seriesLayoutBy='column']
+ * @param {Array.<Object|string>} [dimensionsDefine]
+ * @param {Objet|HashMap} [encodeDefine]
+ * @param {number} [startIndex=0]
+ * @param {number} [dimensionsDetectCount]
+ */
+function Source(fields) {
+
+    /**
+     * @type {boolean}
+     */
+    this.fromDataset = fields.fromDataset;
+
+    /**
+     * Not null/undefined.
+     * @type {Array|Object}
+     */
+    this.data = fields.data || (
+        fields.sourceFormat === SOURCE_FORMAT_KEYED_COLUMNS ? {} : []
+    );
+
+    /**
+     * See also "detectSourceFormat".
+     * Not null/undefined.
+     * @type {string}
+     */
+    this.sourceFormat = fields.sourceFormat || SOURCE_FORMAT_UNKNOWN;
+
+    /**
+     * 'row' or 'column'
+     * Not null/undefined.
+     * @type {string} seriesLayoutBy
+     */
+    this.seriesLayoutBy = fields.seriesLayoutBy || SERIES_LAYOUT_BY_COLUMN;
+
+    /**
+     * dimensions definition in option.
+     * can be null/undefined.
+     * @type {Array.<Object|string>}
+     */
+    this.dimensionsDefine = fields.dimensionsDefine;
+
+    /**
+     * encode definition in option.
+     * can be null/undefined.
+     * @type {Objet|HashMap}
+     */
+    this.encodeDefine = fields.encodeDefine && createHashMap(fields.encodeDefine);
+
+    /**
+     * Not null/undefined, uint.
+     * @type {number}
+     */
+    this.startIndex = fields.startIndex || 0;
+
+    /**
+     * Can be null/undefined (when unknown), uint.
+     * @type {number}
+     */
+    this.dimensionsDetectCount = fields.dimensionsDetectCount;
+}
+
+/**
+ * Wrap original series data for some compatibility cases.
+ */
+Source.seriesDataToSource = function (data) {
+    return new Source({
+        data: data,
+        sourceFormat: isTypedArray(data)
+            ? SOURCE_FORMAT_TYPED_ARRAY
+            : SOURCE_FORMAT_ORIGINAL,
+        fromDataset: false
+    });
+};
+
+enableClassCheck(Source);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var inner$3 = makeInner();
+
+/**
+ * @see {module:echarts/data/Source}
+ * @param {module:echarts/component/dataset/DatasetModel} datasetModel
+ * @return {string} sourceFormat
+ */
+function detectSourceFormat(datasetModel) {
+    var data = datasetModel.option.source;
+    var sourceFormat = SOURCE_FORMAT_UNKNOWN;
+
+    if (isTypedArray(data)) {
+        sourceFormat = SOURCE_FORMAT_TYPED_ARRAY;
+    }
+    else if (isArray(data)) {
+        // FIXME Whether tolerate null in top level array?
+        if (data.length === 0) {
+            sourceFormat = SOURCE_FORMAT_ARRAY_ROWS;
+        }
+
+        for (var i = 0, len = data.length; i < len; i++) {
