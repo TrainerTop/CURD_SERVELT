@@ -20384,3 +20384,295 @@ function detectSourceFormat(datasetModel) {
         }
 
         for (var i = 0, len = data.length; i < len; i++) {
+            var item = data[i];
+
+            if (item == null) {
+                continue;
+            }
+            else if (isArray(item)) {
+                sourceFormat = SOURCE_FORMAT_ARRAY_ROWS;
+                break;
+            }
+            else if (isObject$1(item)) {
+                sourceFormat = SOURCE_FORMAT_OBJECT_ROWS;
+                break;
+            }
+        }
+    }
+    else if (isObject$1(data)) {
+        for (var key in data) {
+            if (data.hasOwnProperty(key) && isArrayLike(data[key])) {
+                sourceFormat = SOURCE_FORMAT_KEYED_COLUMNS;
+                break;
+            }
+        }
+    }
+    else if (data != null) {
+        throw new Error('Invalid data');
+    }
+
+    inner$3(datasetModel).sourceFormat = sourceFormat;
+}
+
+/**
+ * [Scenarios]:
+ * (1) Provide source data directly:
+ *     series: {
+ *         encode: {...},
+ *         dimensions: [...]
+ *         seriesLayoutBy: 'row',
+ *         data: [[...]]
+ *     }
+ * (2) Refer to datasetModel.
+ *     series: [{
+ *         encode: {...}
+ *         // Ignore datasetIndex means `datasetIndex: 0`
+ *         // and the dimensions defination in dataset is used
+ *     }, {
+ *         encode: {...},
+ *         seriesLayoutBy: 'column',
+ *         datasetIndex: 1
+ *     }]
+ *
+ * Get data from series itself or datset.
+ * @return {module:echarts/data/Source} source
+ */
+function getSource(seriesModel) {
+    return inner$3(seriesModel).source;
+}
+
+/**
+ * MUST be called before mergeOption of all series.
+ * @param {module:echarts/model/Global} ecModel
+ */
+function resetSourceDefaulter(ecModel) {
+    // `datasetMap` is used to make default encode.
+    inner$3(ecModel).datasetMap = createHashMap();
+}
+
+/**
+ * [Caution]:
+ * MUST be called after series option merged and
+ * before "series.getInitailData()" called.
+ *
+ * [The rule of making default encode]:
+ * Category axis (if exists) alway map to the first dimension.
+ * Each other axis occupies a subsequent dimension.
+ *
+ * [Why make default encode]:
+ * Simplify the typing of encode in option, avoiding the case like that:
+ * series: [{encode: {x: 0, y: 1}}, {encode: {x: 0, y: 2}}, {encode: {x: 0, y: 3}}],
+ * where the "y" have to be manually typed as "1, 2, 3, ...".
+ *
+ * @param {module:echarts/model/Series} seriesModel
+ */
+function prepareSource(seriesModel) {
+    var seriesOption = seriesModel.option;
+
+    var data = seriesOption.data;
+    var sourceFormat = isTypedArray(data)
+        ? SOURCE_FORMAT_TYPED_ARRAY : SOURCE_FORMAT_ORIGINAL;
+    var fromDataset = false;
+
+    var seriesLayoutBy = seriesOption.seriesLayoutBy;
+    var sourceHeader = seriesOption.sourceHeader;
+    var dimensionsDefine = seriesOption.dimensions;
+
+    var datasetModel = getDatasetModel(seriesModel);
+    if (datasetModel) {
+        var datasetOption = datasetModel.option;
+
+        data = datasetOption.source;
+        sourceFormat = inner$3(datasetModel).sourceFormat;
+        fromDataset = true;
+
+        // These settings from series has higher priority.
+        seriesLayoutBy = seriesLayoutBy || datasetOption.seriesLayoutBy;
+        sourceHeader == null && (sourceHeader = datasetOption.sourceHeader);
+        dimensionsDefine = dimensionsDefine || datasetOption.dimensions;
+    }
+
+    var completeResult = completeBySourceData(
+        data, sourceFormat, seriesLayoutBy, sourceHeader, dimensionsDefine
+    );
+
+    // Note: dataset option does not have `encode`.
+    var encodeDefine = seriesOption.encode;
+    if (!encodeDefine && datasetModel) {
+        encodeDefine = makeDefaultEncode(
+            seriesModel, datasetModel, data, sourceFormat, seriesLayoutBy, completeResult
+        );
+    }
+
+    inner$3(seriesModel).source = new Source({
+        data: data,
+        fromDataset: fromDataset,
+        seriesLayoutBy: seriesLayoutBy,
+        sourceFormat: sourceFormat,
+        dimensionsDefine: completeResult.dimensionsDefine,
+        startIndex: completeResult.startIndex,
+        dimensionsDetectCount: completeResult.dimensionsDetectCount,
+        encodeDefine: encodeDefine
+    });
+}
+
+// return {startIndex, dimensionsDefine, dimensionsCount}
+function completeBySourceData(data, sourceFormat, seriesLayoutBy, sourceHeader, dimensionsDefine) {
+    if (!data) {
+        return {dimensionsDefine: normalizeDimensionsDefine(dimensionsDefine)};
+    }
+
+    var dimensionsDetectCount;
+    var startIndex;
+    var findPotentialName;
+
+    if (sourceFormat === SOURCE_FORMAT_ARRAY_ROWS) {
+        // Rule: Most of the first line are string: it is header.
+        // Caution: consider a line with 5 string and 1 number,
+        // it still can not be sure it is a head, because the
+        // 5 string may be 5 values of category columns.
+        if (sourceHeader === 'auto' || sourceHeader == null) {
+            arrayRowsTravelFirst(function (val) {
+                // '-' is regarded as null/undefined.
+                if (val != null && val !== '-') {
+                    if (isString(val)) {
+                        startIndex == null && (startIndex = 1);
+                    }
+                    else {
+                        startIndex = 0;
+                    }
+                }
+            // 10 is an experience number, avoid long loop.
+            }, seriesLayoutBy, data, 10);
+        }
+        else {
+            startIndex = sourceHeader ? 1 : 0;
+        }
+
+        if (!dimensionsDefine && startIndex === 1) {
+            dimensionsDefine = [];
+            arrayRowsTravelFirst(function (val, index) {
+                dimensionsDefine[index] = val != null ? val : '';
+            }, seriesLayoutBy, data);
+        }
+
+        dimensionsDetectCount = dimensionsDefine
+            ? dimensionsDefine.length
+            : seriesLayoutBy === SERIES_LAYOUT_BY_ROW
+            ? data.length
+            : data[0]
+            ? data[0].length
+            : null;
+    }
+    else if (sourceFormat === SOURCE_FORMAT_OBJECT_ROWS) {
+        if (!dimensionsDefine) {
+            dimensionsDefine = objectRowsCollectDimensions(data);
+            findPotentialName = true;
+        }
+    }
+    else if (sourceFormat === SOURCE_FORMAT_KEYED_COLUMNS) {
+        if (!dimensionsDefine) {
+            dimensionsDefine = [];
+            findPotentialName = true;
+            each$1(data, function (colArr, key) {
+                dimensionsDefine.push(key);
+            });
+        }
+    }
+    else if (sourceFormat === SOURCE_FORMAT_ORIGINAL) {
+        var value0 = getDataItemValue(data[0]);
+        dimensionsDetectCount = isArray(value0) && value0.length || 1;
+    }
+    else if (sourceFormat === SOURCE_FORMAT_TYPED_ARRAY) {
+        if (__DEV__) {
+            assert$1(!!dimensionsDefine, 'dimensions must be given if data is TypedArray.');
+        }
+    }
+
+    var potentialNameDimIndex;
+    if (findPotentialName) {
+        each$1(dimensionsDefine, function (dim, idx) {
+            if ((isObject$1(dim) ? dim.name : dim) === 'name') {
+                potentialNameDimIndex = idx;
+            }
+        });
+    }
+
+    return {
+        startIndex: startIndex,
+        dimensionsDefine: normalizeDimensionsDefine(dimensionsDefine),
+        dimensionsDetectCount: dimensionsDetectCount,
+        potentialNameDimIndex: potentialNameDimIndex
+        // TODO: potentialIdDimIdx
+    };
+}
+
+// Consider dimensions defined like ['A', 'price', 'B', 'price', 'C', 'price'],
+// which is reasonable. But dimension name is duplicated.
+// Returns undefined or an array contains only object without null/undefiend or string.
+function normalizeDimensionsDefine(dimensionsDefine) {
+    if (!dimensionsDefine) {
+        // The meaning of null/undefined is different from empty array.
+        return;
+    }
+    var nameMap = createHashMap();
+    return map(dimensionsDefine, function (item, index) {
+        item = extend({}, isObject$1(item) ? item : {name: item});
+
+        // User can set null in dimensions.
+        // We dont auto specify name, othewise a given name may
+        // cause it be refered unexpectedly.
+        if (item.name == null) {
+            return item;
+        }
+
+        // Also consider number form like 2012.
+        item.name += '';
+        // User may also specify displayName.
+        // displayName will always exists except user not
+        // specified or dim name is not specified or detected.
+        // (A auto generated dim name will not be used as
+        // displayName).
+        if (item.displayName == null) {
+            item.displayName = item.name;
+        }
+
+        var exist = nameMap.get(item.name);
+        if (!exist) {
+            nameMap.set(item.name, {count: 1});
+        }
+        else {
+            item.name += '-' + exist.count++;
+        }
+
+        return item;
+    });
+}
+
+function arrayRowsTravelFirst(cb, seriesLayoutBy, data, maxLoop) {
+    maxLoop == null && (maxLoop = Infinity);
+    if (seriesLayoutBy === SERIES_LAYOUT_BY_ROW) {
+        for (var i = 0; i < data.length && i < maxLoop; i++) {
+            cb(data[i] ? data[i][0] : null, i);
+        }
+    }
+    else {
+        var value0 = data[0] || [];
+        for (var i = 0; i < value0.length && i < maxLoop; i++) {
+            cb(value0[i], i);
+        }
+    }
+}
+
+function objectRowsCollectDimensions(data) {
+    var firstIndex = 0;
+    var obj;
+    while (firstIndex < data.length && !(obj = data[firstIndex++])) {} // jshint ignore: line
+    if (obj) {
+        var dimensions = [];
+        each$1(obj, function (value, key) {
+            dimensions.push(key);
+        });
+        return dimensions;
+    }
+}
