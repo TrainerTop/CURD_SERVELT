@@ -20676,3 +20676,259 @@ function objectRowsCollectDimensions(data) {
         return dimensions;
     }
 }
+
+// ??? TODO merge to completedimensions, where also has
+// default encode making logic. And the default rule
+// should depends on series? consider 'map'.
+function makeDefaultEncode(
+    seriesModel, datasetModel, data, sourceFormat, seriesLayoutBy, completeResult
+) {
+    var coordSysDefine = getCoordSysDefineBySeries(seriesModel);
+    var encode = {};
+    // var encodeTooltip = [];
+    // var encodeLabel = [];
+    var encodeItemName = [];
+    var encodeSeriesName = [];
+    var seriesType = seriesModel.subType;
+
+    // ??? TODO refactor: provide by series itself.
+    // Consider the case: 'map' series is based on geo coordSys,
+    // 'graph', 'heatmap' can be based on cartesian. But can not
+    // give default rule simply here.
+    var nSeriesMap = createHashMap(['pie', 'map', 'funnel']);
+    var cSeriesMap = createHashMap([
+        'line', 'bar', 'pictorialBar', 'scatter', 'effectScatter', 'candlestick', 'boxplot'
+    ]);
+
+    // Usually in this case series will use the first data
+    // dimension as the "value" dimension, or other default
+    // processes respectively.
+    if (coordSysDefine && cSeriesMap.get(seriesType) != null) {
+        var ecModel = seriesModel.ecModel;
+        var datasetMap = inner$3(ecModel).datasetMap;
+        var key = datasetModel.uid + '_' + seriesLayoutBy;
+        var datasetRecord = datasetMap.get(key)
+            || datasetMap.set(key, {categoryWayDim: 1, valueWayDim: 0});
+
+        // TODO
+        // Auto detect first time axis and do arrangement.
+        each$1(coordSysDefine.coordSysDims, function (coordDim) {
+            // In value way.
+            if (coordSysDefine.firstCategoryDimIndex == null) {
+                var dataDim = datasetRecord.valueWayDim++;
+                encode[coordDim] = dataDim;
+
+                // ??? TODO give a better default series name rule?
+                // especially when encode x y specified.
+                // consider: when mutiple series share one dimension
+                // category axis, series name should better use
+                // the other dimsion name. On the other hand, use
+                // both dimensions name.
+
+                encodeSeriesName.push(dataDim);
+                // encodeTooltip.push(dataDim);
+                // encodeLabel.push(dataDim);
+            }
+            // In category way, category axis.
+            else if (coordSysDefine.categoryAxisMap.get(coordDim)) {
+                encode[coordDim] = 0;
+                encodeItemName.push(0);
+            }
+            // In category way, non-category axis.
+            else {
+                var dataDim = datasetRecord.categoryWayDim++;
+                encode[coordDim] = dataDim;
+                // encodeTooltip.push(dataDim);
+                // encodeLabel.push(dataDim);
+                encodeSeriesName.push(dataDim);
+            }
+        });
+    }
+    // Do not make a complex rule! Hard to code maintain and not necessary.
+    // ??? TODO refactor: provide by series itself.
+    // [{name: ..., value: ...}, ...] like:
+    else if (nSeriesMap.get(seriesType) != null) {
+        // Find the first not ordinal. (5 is an experience value)
+        var firstNotOrdinal;
+        for (var i = 0; i < 5 && firstNotOrdinal == null; i++) {
+            if (!doGuessOrdinal(
+                data, sourceFormat, seriesLayoutBy,
+                completeResult.dimensionsDefine, completeResult.startIndex, i
+            )) {
+                firstNotOrdinal = i;
+            }
+        }
+        if (firstNotOrdinal != null) {
+            encode.value = firstNotOrdinal;
+            var nameDimIndex = completeResult.potentialNameDimIndex
+                || Math.max(firstNotOrdinal - 1, 0);
+            // By default, label use itemName in charts.
+            // So we dont set encodeLabel here.
+            encodeSeriesName.push(nameDimIndex);
+            encodeItemName.push(nameDimIndex);
+            // encodeTooltip.push(firstNotOrdinal);
+        }
+    }
+
+    // encodeTooltip.length && (encode.tooltip = encodeTooltip);
+    // encodeLabel.length && (encode.label = encodeLabel);
+    encodeItemName.length && (encode.itemName = encodeItemName);
+    encodeSeriesName.length && (encode.seriesName = encodeSeriesName);
+
+    return encode;
+}
+
+/**
+ * If return null/undefined, indicate that should not use datasetModel.
+ */
+function getDatasetModel(seriesModel) {
+    var option = seriesModel.option;
+    // Caution: consider the scenario:
+    // A dataset is declared and a series is not expected to use the dataset,
+    // and at the beginning `setOption({series: { noData })` (just prepare other
+    // option but no data), then `setOption({series: {data: [...]}); In this case,
+    // the user should set an empty array to avoid that dataset is used by default.
+    var thisData = option.data;
+    if (!thisData) {
+        return seriesModel.ecModel.getComponent('dataset', option.datasetIndex || 0);
+    }
+}
+
+/**
+ * The rule should not be complex, otherwise user might not
+ * be able to known where the data is wrong.
+ * The code is ugly, but how to make it neat?
+ *
+ * @param {module:echars/data/Source} source
+ * @param {number} dimIndex
+ * @return {boolean} Whether ordinal.
+ */
+function guessOrdinal(source, dimIndex) {
+    return doGuessOrdinal(
+        source.data,
+        source.sourceFormat,
+        source.seriesLayoutBy,
+        source.dimensionsDefine,
+        source.startIndex,
+        dimIndex
+    );
+}
+
+// dimIndex may be overflow source data.
+function doGuessOrdinal(
+    data, sourceFormat, seriesLayoutBy, dimensionsDefine, startIndex, dimIndex
+) {
+    var result;
+    // Experience value.
+    var maxLoop = 5;
+
+    if (isTypedArray(data)) {
+        return false;
+    }
+
+    // When sourceType is 'objectRows' or 'keyedColumns', dimensionsDefine
+    // always exists in source.
+    var dimName;
+    if (dimensionsDefine) {
+        dimName = dimensionsDefine[dimIndex];
+        dimName = isObject$1(dimName) ? dimName.name : dimName;
+    }
+
+    if (sourceFormat === SOURCE_FORMAT_ARRAY_ROWS) {
+        if (seriesLayoutBy === SERIES_LAYOUT_BY_ROW) {
+            var sample = data[dimIndex];
+            for (var i = 0; i < (sample || []).length && i < maxLoop; i++) {
+                if ((result = detectValue(sample[startIndex + i])) != null) {
+                    return result;
+                }
+            }
+        }
+        else {
+            for (var i = 0; i < data.length && i < maxLoop; i++) {
+                var row = data[startIndex + i];
+                if (row && (result = detectValue(row[dimIndex])) != null) {
+                    return result;
+                }
+            }
+        }
+    }
+    else if (sourceFormat === SOURCE_FORMAT_OBJECT_ROWS) {
+        if (!dimName) {
+            return;
+        }
+        for (var i = 0; i < data.length && i < maxLoop; i++) {
+            var item = data[i];
+            if (item && (result = detectValue(item[dimName])) != null) {
+                return result;
+            }
+        }
+    }
+    else if (sourceFormat === SOURCE_FORMAT_KEYED_COLUMNS) {
+        if (!dimName) {
+            return;
+        }
+        var sample = data[dimName];
+        if (!sample || isTypedArray(sample)) {
+            return false;
+        }
+        for (var i = 0; i < sample.length && i < maxLoop; i++) {
+            if ((result = detectValue(sample[i])) != null) {
+                return result;
+            }
+        }
+    }
+    else if (sourceFormat === SOURCE_FORMAT_ORIGINAL) {
+        for (var i = 0; i < data.length && i < maxLoop; i++) {
+            var item = data[i];
+            var val = getDataItemValue(item);
+            if (!isArray(val)) {
+                return false;
+            }
+            if ((result = detectValue(val[dimIndex])) != null) {
+                return result;
+            }
+        }
+    }
+
+    function detectValue(val) {
+        // Consider usage convenience, '1', '2' will be treated as "number".
+        // `isFinit('')` get `true`.
+        if (val != null && isFinite(val) && val !== '') {
+            return false;
+        }
+        else if (isString(val) && val !== '-') {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * ECharts global model
+ *
+ * @module {echarts/model/Global}
+ */
+
+
+/**
+ * Caution: If the mechanism should be changed some day, these cases
