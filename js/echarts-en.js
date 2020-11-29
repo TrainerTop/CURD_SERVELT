@@ -21210,3 +21210,253 @@ var GlobalModel = Model.extend({
         if (!mainType) {
             return [];
         }
+
+        var index = condition.index;
+        var id = condition.id;
+        var name = condition.name;
+
+        var cpts = this._componentsMap.get(mainType);
+
+        if (!cpts || !cpts.length) {
+            return [];
+        }
+
+        var result;
+
+        if (index != null) {
+            if (!isArray(index)) {
+                index = [index];
+            }
+            result = filter(map(index, function (idx) {
+                return cpts[idx];
+            }), function (val) {
+                return !!val;
+            });
+        }
+        else if (id != null) {
+            var isIdArray = isArray(id);
+            result = filter(cpts, function (cpt) {
+                return (isIdArray && indexOf(id, cpt.id) >= 0)
+                    || (!isIdArray && cpt.id === id);
+            });
+        }
+        else if (name != null) {
+            var isNameArray = isArray(name);
+            result = filter(cpts, function (cpt) {
+                return (isNameArray && indexOf(name, cpt.name) >= 0)
+                    || (!isNameArray && cpt.name === name);
+            });
+        }
+        else {
+            // Return all components with mainType
+            result = cpts.slice();
+        }
+
+        return filterBySubType(result, condition);
+    },
+
+    /**
+     * The interface is different from queryComponents,
+     * which is convenient for inner usage.
+     *
+     * @usage
+     * var result = findComponents(
+     *     {mainType: 'dataZoom', query: {dataZoomId: 'abc'}}
+     * );
+     * var result = findComponents(
+     *     {mainType: 'series', subType: 'pie', query: {seriesName: 'uio'}}
+     * );
+     * var result = findComponents(
+     *     {mainType: 'series'},
+     *     function (model, index) {...}
+     * );
+     * // result like [component0, componnet1, ...]
+     *
+     * @param {Object} condition
+     * @param {string} condition.mainType Mandatory.
+     * @param {string} [condition.subType] Optional.
+     * @param {Object} [condition.query] like {xxxIndex, xxxId, xxxName},
+     *        where xxx is mainType.
+     *        If query attribute is null/undefined or has no index/id/name,
+     *        do not filtering by query conditions, which is convenient for
+     *        no-payload situations or when target of action is global.
+     * @param {Function} [condition.filter] parameter: component, return boolean.
+     * @return {Array.<module:echarts/model/Component>}
+     */
+    findComponents: function (condition) {
+        var query = condition.query;
+        var mainType = condition.mainType;
+
+        var queryCond = getQueryCond(query);
+        var result = queryCond
+            ? this.queryComponents(queryCond)
+            : this._componentsMap.get(mainType);
+
+        return doFilter(filterBySubType(result, condition));
+
+        function getQueryCond(q) {
+            var indexAttr = mainType + 'Index';
+            var idAttr = mainType + 'Id';
+            var nameAttr = mainType + 'Name';
+            return q && (
+                    q[indexAttr] != null
+                    || q[idAttr] != null
+                    || q[nameAttr] != null
+                )
+                ? {
+                    mainType: mainType,
+                    // subType will be filtered finally.
+                    index: q[indexAttr],
+                    id: q[idAttr],
+                    name: q[nameAttr]
+                }
+                : null;
+        }
+
+        function doFilter(res) {
+            return condition.filter
+                    ? filter(res, condition.filter)
+                    : res;
+        }
+    },
+
+    /**
+     * @usage
+     * eachComponent('legend', function (legendModel, index) {
+     *     ...
+     * });
+     * eachComponent(function (componentType, model, index) {
+     *     // componentType does not include subType
+     *     // (componentType is 'xxx' but not 'xxx.aa')
+     * });
+     * eachComponent(
+     *     {mainType: 'dataZoom', query: {dataZoomId: 'abc'}},
+     *     function (model, index) {...}
+     * );
+     * eachComponent(
+     *     {mainType: 'series', subType: 'pie', query: {seriesName: 'uio'}},
+     *     function (model, index) {...}
+     * );
+     *
+     * @param {string|Object=} mainType When mainType is object, the definition
+     *                                  is the same as the method 'findComponents'.
+     * @param {Function} cb
+     * @param {*} context
+     */
+    eachComponent: function (mainType, cb, context) {
+        var componentsMap = this._componentsMap;
+
+        if (typeof mainType === 'function') {
+            context = cb;
+            cb = mainType;
+            componentsMap.each(function (components, componentType) {
+                each$1(components, function (component, index) {
+                    cb.call(context, componentType, component, index);
+                });
+            });
+        }
+        else if (isString(mainType)) {
+            each$1(componentsMap.get(mainType), cb, context);
+        }
+        else if (isObject$1(mainType)) {
+            var queryResult = this.findComponents(mainType);
+            each$1(queryResult, cb, context);
+        }
+    },
+
+    /**
+     * @param {string} name
+     * @return {Array.<module:echarts/model/Series>}
+     */
+    getSeriesByName: function (name) {
+        var series = this._componentsMap.get('series');
+        return filter(series, function (oneSeries) {
+            return oneSeries.name === name;
+        });
+    },
+
+    /**
+     * @param {number} seriesIndex
+     * @return {module:echarts/model/Series}
+     */
+    getSeriesByIndex: function (seriesIndex) {
+        return this._componentsMap.get('series')[seriesIndex];
+    },
+
+    /**
+     * Get series list before filtered by type.
+     * FIXME: rename to getRawSeriesByType?
+     *
+     * @param {string} subType
+     * @return {Array.<module:echarts/model/Series>}
+     */
+    getSeriesByType: function (subType) {
+        var series = this._componentsMap.get('series');
+        return filter(series, function (oneSeries) {
+            return oneSeries.subType === subType;
+        });
+    },
+
+    /**
+     * @return {Array.<module:echarts/model/Series>}
+     */
+    getSeries: function () {
+        return this._componentsMap.get('series').slice();
+    },
+
+    /**
+     * @return {number}
+     */
+    getSeriesCount: function () {
+        return this._componentsMap.get('series').length;
+    },
+
+    /**
+     * After filtering, series may be different
+     * frome raw series.
+     *
+     * @param {Function} cb
+     * @param {*} context
+     */
+    eachSeries: function (cb, context) {
+        assertSeriesInitialized(this);
+        each$1(this._seriesIndices, function (rawSeriesIndex) {
+            var series = this._componentsMap.get('series')[rawSeriesIndex];
+            cb.call(context, series, rawSeriesIndex);
+        }, this);
+    },
+
+    /**
+     * Iterate raw series before filtered.
+     *
+     * @param {Function} cb
+     * @param {*} context
+     */
+    eachRawSeries: function (cb, context) {
+        each$1(this._componentsMap.get('series'), cb, context);
+    },
+
+    /**
+     * After filtering, series may be different.
+     * frome raw series.
+     *
+     * @parma {string} subType
+     * @param {Function} cb
+     * @param {*} context
+     */
+    eachSeriesByType: function (subType, cb, context) {
+        assertSeriesInitialized(this);
+        each$1(this._seriesIndices, function (rawSeriesIndex) {
+            var series = this._componentsMap.get('series')[rawSeriesIndex];
+            if (series.subType === subType) {
+                cb.call(context, series, rawSeriesIndex);
+            }
+        }, this);
+    },
+
+    /**
+     * Iterate raw series before filtered of given type.
+     *
+     * @parma {string} subType
+     * @param {Function} cb
+     * @param {*} context
