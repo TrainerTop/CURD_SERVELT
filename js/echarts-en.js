@@ -20932,3 +20932,281 @@ function doGuessOrdinal(
 
 /**
  * Caution: If the mechanism should be changed some day, these cases
+ * should be considered:
+ *
+ * (1) In `merge option` mode, if using the same option to call `setOption`
+ * many times, the result should be the same (try our best to ensure that).
+ * (2) In `merge option` mode, if a component has no id/name specified, it
+ * will be merged by index, and the result sequence of the components is
+ * consistent to the original sequence.
+ * (3) `reset` feature (in toolbox). Find detailed info in comments about
+ * `mergeOption` in module:echarts/model/OptionManager.
+ */
+
+var OPTION_INNER_KEY = '\0_ec_inner';
+
+/**
+ * @alias module:echarts/model/Global
+ *
+ * @param {Object} option
+ * @param {module:echarts/model/Model} parentModel
+ * @param {Object} theme
+ */
+var GlobalModel = Model.extend({
+
+    init: function (option, parentModel, theme, optionManager) {
+        theme = theme || {};
+
+        this.option = null; // Mark as not initialized.
+
+        /**
+         * @type {module:echarts/model/Model}
+         * @private
+         */
+        this._theme = new Model(theme);
+
+        /**
+         * @type {module:echarts/model/OptionManager}
+         */
+        this._optionManager = optionManager;
+    },
+
+    setOption: function (option, optionPreprocessorFuncs) {
+        assert$1(
+            !(OPTION_INNER_KEY in option),
+            'please use chart.getOption()'
+        );
+
+        this._optionManager.setOption(option, optionPreprocessorFuncs);
+
+        this.resetOption(null);
+    },
+
+    /**
+     * @param {string} type null/undefined: reset all.
+     *                      'recreate': force recreate all.
+     *                      'timeline': only reset timeline option
+     *                      'media': only reset media query option
+     * @return {boolean} Whether option changed.
+     */
+    resetOption: function (type) {
+        var optionChanged = false;
+        var optionManager = this._optionManager;
+
+        if (!type || type === 'recreate') {
+            var baseOption = optionManager.mountOption(type === 'recreate');
+
+            if (!this.option || type === 'recreate') {
+                initBase.call(this, baseOption);
+            }
+            else {
+                this.restoreData();
+                this.mergeOption(baseOption);
+            }
+            optionChanged = true;
+        }
+
+        if (type === 'timeline' || type === 'media') {
+            this.restoreData();
+        }
+
+        if (!type || type === 'recreate' || type === 'timeline') {
+            var timelineOption = optionManager.getTimelineOption(this);
+            timelineOption && (this.mergeOption(timelineOption), optionChanged = true);
+        }
+
+        if (!type || type === 'recreate' || type === 'media') {
+            var mediaOptions = optionManager.getMediaOption(this, this._api);
+            if (mediaOptions.length) {
+                each$1(mediaOptions, function (mediaOption) {
+                    this.mergeOption(mediaOption, optionChanged = true);
+                }, this);
+            }
+        }
+
+        return optionChanged;
+    },
+
+    /**
+     * @protected
+     */
+    mergeOption: function (newOption) {
+        var option = this.option;
+        var componentsMap = this._componentsMap;
+        var newCptTypes = [];
+
+        resetSourceDefaulter(this);
+
+        // If no component class, merge directly.
+        // For example: color, animaiton options, etc.
+        each$1(newOption, function (componentOption, mainType) {
+            if (componentOption == null) {
+                return;
+            }
+
+            if (!ComponentModel.hasClass(mainType)) {
+                // globalSettingTask.dirty();
+                option[mainType] = option[mainType] == null
+                    ? clone(componentOption)
+                    : merge(option[mainType], componentOption, true);
+            }
+            else if (mainType) {
+                newCptTypes.push(mainType);
+            }
+        });
+
+        ComponentModel.topologicalTravel(
+            newCptTypes, ComponentModel.getAllClassMainTypes(), visitComponent, this
+        );
+
+        function visitComponent(mainType, dependencies) {
+
+            var newCptOptionList = normalizeToArray(newOption[mainType]);
+
+            var mapResult = mappingToExists(
+                componentsMap.get(mainType), newCptOptionList
+            );
+
+            makeIdAndName(mapResult);
+
+            // Set mainType and complete subType.
+            each$1(mapResult, function (item, index) {
+                var opt = item.option;
+                if (isObject$1(opt)) {
+                    item.keyInfo.mainType = mainType;
+                    item.keyInfo.subType = determineSubType(mainType, opt, item.exist);
+                }
+            });
+
+            var dependentModels = getComponentsByTypes(
+                componentsMap, dependencies
+            );
+
+            option[mainType] = [];
+            componentsMap.set(mainType, []);
+
+            each$1(mapResult, function (resultItem, index) {
+                var componentModel = resultItem.exist;
+                var newCptOption = resultItem.option;
+
+                assert$1(
+                    isObject$1(newCptOption) || componentModel,
+                    'Empty component definition'
+                );
+
+                // Consider where is no new option and should be merged using {},
+                // see removeEdgeAndAdd in topologicalTravel and
+                // ComponentModel.getAllClassMainTypes.
+                if (!newCptOption) {
+                    componentModel.mergeOption({}, this);
+                    componentModel.optionUpdated({}, false);
+                }
+                else {
+                    var ComponentModelClass = ComponentModel.getClass(
+                        mainType, resultItem.keyInfo.subType, true
+                    );
+
+                    if (componentModel && componentModel instanceof ComponentModelClass) {
+                        componentModel.name = resultItem.keyInfo.name;
+                        // componentModel.settingTask && componentModel.settingTask.dirty();
+                        componentModel.mergeOption(newCptOption, this);
+                        componentModel.optionUpdated(newCptOption, false);
+                    }
+                    else {
+                        // PENDING Global as parent ?
+                        var extraOpt = extend(
+                            {
+                                dependentModels: dependentModels,
+                                componentIndex: index
+                            },
+                            resultItem.keyInfo
+                        );
+                        componentModel = new ComponentModelClass(
+                            newCptOption, this, this, extraOpt
+                        );
+                        extend(componentModel, extraOpt);
+                        componentModel.init(newCptOption, this, this, extraOpt);
+
+                        // Call optionUpdated after init.
+                        // newCptOption has been used as componentModel.option
+                        // and may be merged with theme and default, so pass null
+                        // to avoid confusion.
+                        componentModel.optionUpdated(null, true);
+                    }
+                }
+
+                componentsMap.get(mainType)[index] = componentModel;
+                option[mainType][index] = componentModel.option;
+            }, this);
+
+            // Backup series for filtering.
+            if (mainType === 'series') {
+                createSeriesIndices(this, componentsMap.get('series'));
+            }
+        }
+
+        this._seriesIndicesMap = createHashMap(
+            this._seriesIndices = this._seriesIndices || []
+        );
+    },
+
+    /**
+     * Get option for output (cloned option and inner info removed)
+     * @public
+     * @return {Object}
+     */
+    getOption: function () {
+        var option = clone(this.option);
+
+        each$1(option, function (opts, mainType) {
+            if (ComponentModel.hasClass(mainType)) {
+                var opts = normalizeToArray(opts);
+                for (var i = opts.length - 1; i >= 0; i--) {
+                    // Remove options with inner id.
+                    if (isIdInner(opts[i])) {
+                        opts.splice(i, 1);
+                    }
+                }
+                option[mainType] = opts;
+            }
+        });
+
+        delete option[OPTION_INNER_KEY];
+
+        return option;
+    },
+
+    /**
+     * @return {module:echarts/model/Model}
+     */
+    getTheme: function () {
+        return this._theme;
+    },
+
+    /**
+     * @param {string} mainType
+     * @param {number} [idx=0]
+     * @return {module:echarts/model/Component}
+     */
+    getComponent: function (mainType, idx) {
+        var list = this._componentsMap.get(mainType);
+        if (list) {
+            return list[idx || 0];
+        }
+    },
+
+    /**
+     * If none of index and id and name used, return all components with mainType.
+     * @param {Object} condition
+     * @param {string} condition.mainType
+     * @param {string} [condition.subType] If ignore, only query by mainType
+     * @param {number|Array.<number>} [condition.index] Either input index or id or name.
+     * @param {string|Array.<string>} [condition.id] Either input index or id or name.
+     * @param {string|Array.<string>} [condition.name] Either input index or id or name.
+     * @return {Array.<module:echarts/model/Component>}
+     */
+    queryComponents: function (condition) {
+        var mainType = condition.mainType;
+        if (!mainType) {
+            return [];
+        }
