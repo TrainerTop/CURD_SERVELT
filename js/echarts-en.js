@@ -21460,3 +21460,304 @@ var GlobalModel = Model.extend({
      * @parma {string} subType
      * @param {Function} cb
      * @param {*} context
+     */
+    eachRawSeriesByType: function (subType, cb, context) {
+        return each$1(this.getSeriesByType(subType), cb, context);
+    },
+
+    /**
+     * @param {module:echarts/model/Series} seriesModel
+     */
+    isSeriesFiltered: function (seriesModel) {
+        assertSeriesInitialized(this);
+        return this._seriesIndicesMap.get(seriesModel.componentIndex) == null;
+    },
+
+    /**
+     * @return {Array.<number>}
+     */
+    getCurrentSeriesIndices: function () {
+        return (this._seriesIndices || []).slice();
+    },
+
+    /**
+     * @param {Function} cb
+     * @param {*} context
+     */
+    filterSeries: function (cb, context) {
+        assertSeriesInitialized(this);
+        var filteredSeries = filter(
+            this._componentsMap.get('series'), cb, context
+        );
+        createSeriesIndices(this, filteredSeries);
+    },
+
+    restoreData: function (payload) {
+        var componentsMap = this._componentsMap;
+
+        createSeriesIndices(this, componentsMap.get('series'));
+
+        var componentTypes = [];
+        componentsMap.each(function (components, componentType) {
+            componentTypes.push(componentType);
+        });
+
+        ComponentModel.topologicalTravel(
+            componentTypes,
+            ComponentModel.getAllClassMainTypes(),
+            function (componentType, dependencies) {
+                each$1(componentsMap.get(componentType), function (component) {
+                    (componentType !== 'series' || !isNotTargetSeries(component, payload))
+                        && component.restoreData();
+                });
+            }
+        );
+    }
+
+});
+
+function isNotTargetSeries(seriesModel, payload) {
+    if (payload) {
+        var index = payload.seiresIndex;
+        var id = payload.seriesId;
+        var name = payload.seriesName;
+        return (index != null && seriesModel.componentIndex !== index)
+            || (id != null && seriesModel.id !== id)
+            || (name != null && seriesModel.name !== name);
+    }
+}
+
+/**
+ * @inner
+ */
+function mergeTheme(option, theme) {
+    // PENDING
+    // NOT use `colorLayer` in theme if option has `color`
+    var notMergeColorLayer = option.color && !option.colorLayer;
+
+    each$1(theme, function (themeItem, name) {
+        if (name === 'colorLayer' && notMergeColorLayer) {
+            return;
+        }
+        // 如果有 component model 则把具体的 merge 逻辑交给该 model 处理
+        if (!ComponentModel.hasClass(name)) {
+            if (typeof themeItem === 'object') {
+                option[name] = !option[name]
+                    ? clone(themeItem)
+                    : merge(option[name], themeItem, false);
+            }
+            else {
+                if (option[name] == null) {
+                    option[name] = themeItem;
+                }
+            }
+        }
+    });
+}
+
+function initBase(baseOption) {
+    baseOption = baseOption;
+
+    // Using OPTION_INNER_KEY to mark that this option can not be used outside,
+    // i.e. `chart.setOption(chart.getModel().option);` is forbiden.
+    this.option = {};
+    this.option[OPTION_INNER_KEY] = 1;
+
+    /**
+     * Init with series: [], in case of calling findSeries method
+     * before series initialized.
+     * @type {Object.<string, Array.<module:echarts/model/Model>>}
+     * @private
+     */
+    this._componentsMap = createHashMap({series: []});
+
+    /**
+     * Mapping between filtered series list and raw series list.
+     * key: filtered series indices, value: raw series indices.
+     * @type {Array.<nubmer>}
+     * @private
+     */
+    this._seriesIndices;
+
+    this._seriesIndicesMap;
+
+    mergeTheme(baseOption, this._theme.option);
+
+    // TODO Needs clone when merging to the unexisted property
+    merge(baseOption, globalDefault, false);
+
+    this.mergeOption(baseOption);
+}
+
+/**
+ * @inner
+ * @param {Array.<string>|string} types model types
+ * @return {Object} key: {string} type, value: {Array.<Object>} models
+ */
+function getComponentsByTypes(componentsMap, types) {
+    if (!isArray(types)) {
+        types = types ? [types] : [];
+    }
+
+    var ret = {};
+    each$1(types, function (type) {
+        ret[type] = (componentsMap.get(type) || []).slice();
+    });
+
+    return ret;
+}
+
+/**
+ * @inner
+ */
+function determineSubType(mainType, newCptOption, existComponent) {
+    var subType = newCptOption.type
+        ? newCptOption.type
+        : existComponent
+        ? existComponent.subType
+        // Use determineSubType only when there is no existComponent.
+        : ComponentModel.determineSubType(mainType, newCptOption);
+
+    // tooltip, markline, markpoint may always has no subType
+    return subType;
+}
+
+/**
+ * @inner
+ */
+function createSeriesIndices(ecModel, seriesModels) {
+    ecModel._seriesIndicesMap = createHashMap(
+        ecModel._seriesIndices = map(seriesModels, function (series) {
+            return series.componentIndex;
+        }) || []
+    );
+}
+
+/**
+ * @inner
+ */
+function filterBySubType(components, condition) {
+    // Using hasOwnProperty for restrict. Consider
+    // subType is undefined in user payload.
+    return condition.hasOwnProperty('subType')
+        ? filter(components, function (cpt) {
+            return cpt.subType === condition.subType;
+        })
+        : components;
+}
+
+/**
+ * @inner
+ */
+function assertSeriesInitialized(ecModel) {
+    // Components that use _seriesIndices should depends on series component,
+    // which make sure that their initialization is after series.
+    if (__DEV__) {
+        if (!ecModel._seriesIndices) {
+            throw new Error('Option should contains series.');
+        }
+    }
+}
+
+mixin(GlobalModel, colorPaletteMixin);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var echartsAPIList = [
+    'getDom', 'getZr', 'getWidth', 'getHeight', 'getDevicePixelRatio', 'dispatchAction', 'isDisposed',
+    'on', 'off', 'getDataURL', 'getConnectedDataURL', 'getModel', 'getOption',
+    'getViewOfComponentModel', 'getViewOfSeriesModel'
+];
+// And `getCoordinateSystems` and `getComponentByElement` will be injected in echarts.js
+
+function ExtensionAPI(chartInstance) {
+    each$1(echartsAPIList, function (name) {
+        this[name] = bind(chartInstance[name], chartInstance);
+    }, this);
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var coordinateSystemCreators = {};
+
+function CoordinateSystemManager() {
+
+    this._coordinateSystems = [];
+}
+
+CoordinateSystemManager.prototype = {
+
+    constructor: CoordinateSystemManager,
+
+    create: function (ecModel, api) {
+        var coordinateSystems = [];
+        each$1(coordinateSystemCreators, function (creater, type) {
+            var list = creater.create(ecModel, api);
+            coordinateSystems = coordinateSystems.concat(list || []);
+        });
+
+        this._coordinateSystems = coordinateSystems;
+    },
+
+    update: function (ecModel, api) {
+        each$1(this._coordinateSystems, function (coordSys) {
+            coordSys.update && coordSys.update(ecModel, api);
+        });
+    },
+
+    getCoordinateSystems: function () {
+        return this._coordinateSystems.slice();
+    }
+};
+
+CoordinateSystemManager.register = function (type, coordinateSystemCreator) {
+    coordinateSystemCreators[type] = coordinateSystemCreator;
+};
+
+CoordinateSystemManager.get = function (type) {
+    return coordinateSystemCreators[type];
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
