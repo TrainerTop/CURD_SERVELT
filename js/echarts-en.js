@@ -21761,3 +21761,279 @@ CoordinateSystemManager.get = function (type) {
 * "License"); you may not use this file except in compliance
 * with the License.  You may obtain a copy of the License at
 *
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * ECharts option manager
+ *
+ * @module {echarts/model/OptionManager}
+ */
+
+
+var each$4 = each$1;
+var clone$3 = clone;
+var map$1 = map;
+var merge$1 = merge;
+
+var QUERY_REG = /^(min|max)?(.+)$/;
+
+/**
+ * TERM EXPLANATIONS:
+ *
+ * [option]:
+ *
+ *     An object that contains definitions of components. For example:
+ *     var option = {
+ *         title: {...},
+ *         legend: {...},
+ *         visualMap: {...},
+ *         series: [
+ *             {data: [...]},
+ *             {data: [...]},
+ *             ...
+ *         ]
+ *     };
+ *
+ * [rawOption]:
+ *
+ *     An object input to echarts.setOption. 'rawOption' may be an
+ *     'option', or may be an object contains multi-options. For example:
+ *     var option = {
+ *         baseOption: {
+ *             title: {...},
+ *             legend: {...},
+ *             series: [
+ *                 {data: [...]},
+ *                 {data: [...]},
+ *                 ...
+ *             ]
+ *         },
+ *         timeline: {...},
+ *         options: [
+ *             {title: {...}, series: {data: [...]}},
+ *             {title: {...}, series: {data: [...]}},
+ *             ...
+ *         ],
+ *         media: [
+ *             {
+ *                 query: {maxWidth: 320},
+ *                 option: {series: {x: 20}, visualMap: {show: false}}
+ *             },
+ *             {
+ *                 query: {minWidth: 320, maxWidth: 720},
+ *                 option: {series: {x: 500}, visualMap: {show: true}}
+ *             },
+ *             {
+ *                 option: {series: {x: 1200}, visualMap: {show: true}}
+ *             }
+ *         ]
+ *     };
+ *
+ * @alias module:echarts/model/OptionManager
+ * @param {module:echarts/ExtensionAPI} api
+ */
+function OptionManager(api) {
+
+    /**
+     * @private
+     * @type {module:echarts/ExtensionAPI}
+     */
+    this._api = api;
+
+    /**
+     * @private
+     * @type {Array.<number>}
+     */
+    this._timelineOptions = [];
+
+    /**
+     * @private
+     * @type {Array.<Object>}
+     */
+    this._mediaList = [];
+
+    /**
+     * @private
+     * @type {Object}
+     */
+    this._mediaDefault;
+
+    /**
+     * -1, means default.
+     * empty means no media.
+     * @private
+     * @type {Array.<number>}
+     */
+    this._currentMediaIndices = [];
+
+    /**
+     * @private
+     * @type {Object}
+     */
+    this._optionBackup;
+
+    /**
+     * @private
+     * @type {Object}
+     */
+    this._newBaseOption;
+}
+
+// timeline.notMerge is not supported in ec3. Firstly there is rearly
+// case that notMerge is needed. Secondly supporting 'notMerge' requires
+// rawOption cloned and backuped when timeline changed, which does no
+// good to performance. What's more, that both timeline and setOption
+// method supply 'notMerge' brings complex and some problems.
+// Consider this case:
+// (step1) chart.setOption({timeline: {notMerge: false}, ...}, false);
+// (step2) chart.setOption({timeline: {notMerge: true}, ...}, false);
+
+OptionManager.prototype = {
+
+    constructor: OptionManager,
+
+    /**
+     * @public
+     * @param {Object} rawOption Raw option.
+     * @param {module:echarts/model/Global} ecModel
+     * @param {Array.<Function>} optionPreprocessorFuncs
+     * @return {Object} Init option
+     */
+    setOption: function (rawOption, optionPreprocessorFuncs) {
+        if (rawOption) {
+            // That set dat primitive is dangerous if user reuse the data when setOption again.
+            each$1(normalizeToArray(rawOption.series), function (series) {
+                series && series.data && isTypedArray(series.data) && setAsPrimitive(series.data);
+            });
+        }
+
+        // Caution: some series modify option data, if do not clone,
+        // it should ensure that the repeat modify correctly
+        // (create a new object when modify itself).
+        rawOption = clone$3(rawOption, true);
+
+        // FIXME
+        // 如果 timeline options 或者 media 中设置了某个属性，而baseOption中没有设置，则进行警告。
+
+        var oldOptionBackup = this._optionBackup;
+        var newParsedOption = parseRawOption.call(
+            this, rawOption, optionPreprocessorFuncs, !oldOptionBackup
+        );
+        this._newBaseOption = newParsedOption.baseOption;
+
+        // For setOption at second time (using merge mode);
+        if (oldOptionBackup) {
+            // Only baseOption can be merged.
+            mergeOption(oldOptionBackup.baseOption, newParsedOption.baseOption);
+
+            // For simplicity, timeline options and media options do not support merge,
+            // that is, if you `setOption` twice and both has timeline options, the latter
+            // timeline opitons will not be merged to the formers, but just substitude them.
+            if (newParsedOption.timelineOptions.length) {
+                oldOptionBackup.timelineOptions = newParsedOption.timelineOptions;
+            }
+            if (newParsedOption.mediaList.length) {
+                oldOptionBackup.mediaList = newParsedOption.mediaList;
+            }
+            if (newParsedOption.mediaDefault) {
+                oldOptionBackup.mediaDefault = newParsedOption.mediaDefault;
+            }
+        }
+        else {
+            this._optionBackup = newParsedOption;
+        }
+    },
+
+    /**
+     * @param {boolean} isRecreate
+     * @return {Object}
+     */
+    mountOption: function (isRecreate) {
+        var optionBackup = this._optionBackup;
+
+        // TODO
+        // 如果没有reset功能则不clone。
+
+        this._timelineOptions = map$1(optionBackup.timelineOptions, clone$3);
+        this._mediaList = map$1(optionBackup.mediaList, clone$3);
+        this._mediaDefault = clone$3(optionBackup.mediaDefault);
+        this._currentMediaIndices = [];
+
+        return clone$3(isRecreate
+            // this._optionBackup.baseOption, which is created at the first `setOption`
+            // called, and is merged into every new option by inner method `mergeOption`
+            // each time `setOption` called, can be only used in `isRecreate`, because
+            // its reliability is under suspicion. In other cases option merge is
+            // performed by `model.mergeOption`.
+            ? optionBackup.baseOption : this._newBaseOption
+        );
+    },
+
+    /**
+     * @param {module:echarts/model/Global} ecModel
+     * @return {Object}
+     */
+    getTimelineOption: function (ecModel) {
+        var option;
+        var timelineOptions = this._timelineOptions;
+
+        if (timelineOptions.length) {
+            // getTimelineOption can only be called after ecModel inited,
+            // so we can get currentIndex from timelineModel.
+            var timelineModel = ecModel.getComponent('timeline');
+            if (timelineModel) {
+                option = clone$3(
+                    timelineOptions[timelineModel.getCurrentIndex()],
+                    true
+                );
+            }
+        }
+
+        return option;
+    },
+
+    /**
+     * @param {module:echarts/model/Global} ecModel
+     * @return {Array.<Object>}
+     */
+    getMediaOption: function (ecModel) {
+        var ecWidth = this._api.getWidth();
+        var ecHeight = this._api.getHeight();
+        var mediaList = this._mediaList;
+        var mediaDefault = this._mediaDefault;
+        var indices = [];
+        var result = [];
+
+        // No media defined.
+        if (!mediaList.length && !mediaDefault) {
+            return result;
+        }
+
+        // Multi media may be applied, the latter defined media has higher priority.
+        for (var i = 0, len = mediaList.length; i < len; i++) {
+            if (applyMediaQuery(mediaList[i].query, ecWidth, ecHeight)) {
+                indices.push(i);
+            }
+        }
+
+        // FIXME
+        // 是否mediaDefault应该强制用户设置，否则可能修改不能回归。
+        if (!indices.length && mediaDefault) {
+            indices = [-1];
+        }
+
+        if (indices.length && !indicesEquals(indices, this._currentMediaIndices)) {
+            result = map$1(indices, function (index) {
+                return clone$3(
+                    index === -1 ? mediaDefault.option : mediaList[index].option
+                );
+            });
+        }
