@@ -22299,3 +22299,291 @@ function removeEC3NormalStatus(opt) {
     // treemap
     convertNormalEmphasis(opt, 'upperLabel');
     // graph
+    convertNormalEmphasis(opt, 'edgeLabel');
+}
+
+function compatTextStyle(opt, propName) {
+    // Check whether is not object (string\null\undefined ...)
+    var labelOptSingle = isObject$3(opt) && opt[propName];
+    var textStyle = isObject$3(labelOptSingle) && labelOptSingle.textStyle;
+    if (textStyle) {
+        for (var i = 0, len = TEXT_STYLE_OPTIONS.length; i < len; i++) {
+            var propName = TEXT_STYLE_OPTIONS[i];
+            if (textStyle.hasOwnProperty(propName)) {
+                labelOptSingle[propName] = textStyle[propName];
+            }
+        }
+    }
+}
+
+function compatEC3CommonStyles(opt) {
+    if (opt) {
+        removeEC3NormalStatus(opt);
+        compatTextStyle(opt, 'label');
+        opt.emphasis && compatTextStyle(opt.emphasis, 'label');
+    }
+}
+
+function processSeries(seriesOpt) {
+    if (!isObject$3(seriesOpt)) {
+        return;
+    }
+
+    compatEC2ItemStyle(seriesOpt);
+    removeEC3NormalStatus(seriesOpt);
+
+    compatTextStyle(seriesOpt, 'label');
+    // treemap
+    compatTextStyle(seriesOpt, 'upperLabel');
+    // graph
+    compatTextStyle(seriesOpt, 'edgeLabel');
+    if (seriesOpt.emphasis) {
+        compatTextStyle(seriesOpt.emphasis, 'label');
+        // treemap
+        compatTextStyle(seriesOpt.emphasis, 'upperLabel');
+        // graph
+        compatTextStyle(seriesOpt.emphasis, 'edgeLabel');
+    }
+
+    var markPoint = seriesOpt.markPoint;
+    if (markPoint) {
+        compatEC2ItemStyle(markPoint);
+        compatEC3CommonStyles(markPoint);
+    }
+
+    var markLine = seriesOpt.markLine;
+    if (markLine) {
+        compatEC2ItemStyle(markLine);
+        compatEC3CommonStyles(markLine);
+    }
+
+    var markArea = seriesOpt.markArea;
+    if (markArea) {
+        compatEC3CommonStyles(markArea);
+    }
+
+    var data = seriesOpt.data;
+
+    // Break with ec3: if `setOption` again, there may be no `type` in option,
+    // then the backward compat based on option type will not be performed.
+
+    if (seriesOpt.type === 'graph') {
+        data = data || seriesOpt.nodes;
+        var edgeData = seriesOpt.links || seriesOpt.edges;
+        if (edgeData && !isTypedArray(edgeData)) {
+            for (var i = 0; i < edgeData.length; i++) {
+                compatEC3CommonStyles(edgeData[i]);
+            }
+        }
+        each$1(seriesOpt.categories, function (opt) {
+            removeEC3NormalStatus(opt);
+        });
+    }
+
+    if (data && !isTypedArray(data)) {
+        for (var i = 0; i < data.length; i++) {
+            compatEC3CommonStyles(data[i]);
+        }
+    }
+
+    // mark point data
+    var markPoint = seriesOpt.markPoint;
+    if (markPoint && markPoint.data) {
+        var mpData = markPoint.data;
+        for (var i = 0; i < mpData.length; i++) {
+            compatEC3CommonStyles(mpData[i]);
+        }
+    }
+    // mark line data
+    var markLine = seriesOpt.markLine;
+    if (markLine && markLine.data) {
+        var mlData = markLine.data;
+        for (var i = 0; i < mlData.length; i++) {
+            if (isArray(mlData[i])) {
+                compatEC3CommonStyles(mlData[i][0]);
+                compatEC3CommonStyles(mlData[i][1]);
+            }
+            else {
+                compatEC3CommonStyles(mlData[i]);
+            }
+        }
+    }
+
+    // Series
+    if (seriesOpt.type === 'gauge') {
+        compatTextStyle(seriesOpt, 'axisLabel');
+        compatTextStyle(seriesOpt, 'title');
+        compatTextStyle(seriesOpt, 'detail');
+    }
+    else if (seriesOpt.type === 'treemap') {
+        convertNormalEmphasis(seriesOpt.breadcrumb, 'itemStyle');
+        each$1(seriesOpt.levels, function (opt) {
+            removeEC3NormalStatus(opt);
+        });
+    }
+    else if (seriesOpt.type === 'tree') {
+        removeEC3NormalStatus(seriesOpt.leaves);
+    }
+    // sunburst starts from ec4, so it does not need to compat levels.
+}
+
+function toArr(o) {
+    return isArray(o) ? o : o ? [o] : [];
+}
+
+function toObj(o) {
+    return (isArray(o) ? o[0] : o) || {};
+}
+
+var compatStyle = function (option, isTheme) {
+    each$5(toArr(option.series), function (seriesOpt) {
+        isObject$3(seriesOpt) && processSeries(seriesOpt);
+    });
+
+    var axes = ['xAxis', 'yAxis', 'radiusAxis', 'angleAxis', 'singleAxis', 'parallelAxis', 'radar'];
+    isTheme && axes.push('valueAxis', 'categoryAxis', 'logAxis', 'timeAxis');
+
+    each$5(
+        axes,
+        function (axisName) {
+            each$5(toArr(option[axisName]), function (axisOpt) {
+                if (axisOpt) {
+                    compatTextStyle(axisOpt, 'axisLabel');
+                    compatTextStyle(axisOpt.axisPointer, 'label');
+                }
+            });
+        }
+    );
+
+    each$5(toArr(option.parallel), function (parallelOpt) {
+        var parallelAxisDefault = parallelOpt && parallelOpt.parallelAxisDefault;
+        compatTextStyle(parallelAxisDefault, 'axisLabel');
+        compatTextStyle(parallelAxisDefault && parallelAxisDefault.axisPointer, 'label');
+    });
+
+    each$5(toArr(option.calendar), function (calendarOpt) {
+        convertNormalEmphasis(calendarOpt, 'itemStyle');
+        compatTextStyle(calendarOpt, 'dayLabel');
+        compatTextStyle(calendarOpt, 'monthLabel');
+        compatTextStyle(calendarOpt, 'yearLabel');
+    });
+
+    // radar.name.textStyle
+    each$5(toArr(option.radar), function (radarOpt) {
+        compatTextStyle(radarOpt, 'name');
+    });
+
+    each$5(toArr(option.geo), function (geoOpt) {
+        if (isObject$3(geoOpt)) {
+            compatEC3CommonStyles(geoOpt);
+            each$5(toArr(geoOpt.regions), function (regionObj) {
+                compatEC3CommonStyles(regionObj);
+            });
+        }
+    });
+
+    each$5(toArr(option.timeline), function (timelineOpt) {
+        compatEC3CommonStyles(timelineOpt);
+        convertNormalEmphasis(timelineOpt, 'label');
+        convertNormalEmphasis(timelineOpt, 'itemStyle');
+        convertNormalEmphasis(timelineOpt, 'controlStyle', true);
+
+        var data = timelineOpt.data;
+        isArray(data) && each$1(data, function (item) {
+            if (isObject$1(item)) {
+                convertNormalEmphasis(item, 'label');
+                convertNormalEmphasis(item, 'itemStyle');
+            }
+        });
+    });
+
+    each$5(toArr(option.toolbox), function (toolboxOpt) {
+        convertNormalEmphasis(toolboxOpt, 'iconStyle');
+        each$5(toolboxOpt.feature, function (featureOpt) {
+            convertNormalEmphasis(featureOpt, 'iconStyle');
+        });
+    });
+
+    compatTextStyle(toObj(option.axisPointer), 'label');
+    compatTextStyle(toObj(option.tooltip).axisPointer, 'label');
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Compatitable with 2.0
+
+function get(opt, path) {
+    path = path.split(',');
+    var obj = opt;
+    for (var i = 0; i < path.length; i++) {
+        obj = obj && obj[path[i]];
+        if (obj == null) {
+            break;
+        }
+    }
+    return obj;
+}
+
+function set$1(opt, path, val, overwrite) {
+    path = path.split(',');
+    var obj = opt;
+    var key;
+    for (var i = 0; i < path.length - 1; i++) {
+        key = path[i];
+        if (obj[key] == null) {
+            obj[key] = {};
+        }
+        obj = obj[key];
+    }
+    if (overwrite || obj[path[i]] == null) {
+        obj[path[i]] = val;
+    }
+}
+
+function compatLayoutProperties(option) {
+    each$1(LAYOUT_PROPERTIES, function (prop) {
+        if (prop[0] in option && !(prop[1] in option)) {
+            option[prop[1]] = option[prop[0]];
+        }
+    });
+}
+
+var LAYOUT_PROPERTIES = [
+    ['x', 'left'], ['y', 'top'], ['x2', 'right'], ['y2', 'bottom']
+];
+
+var COMPATITABLE_COMPONENTS = [
+    'grid', 'geo', 'parallel', 'legend', 'toolbox', 'title', 'visualMap', 'dataZoom', 'timeline'
+];
+
+var backwardCompat = function (option, isTheme) {
+    compatStyle(option, isTheme);
+
+    // Make sure series array for model initialization.
+    option.series = normalizeToArray(option.series);
+
+    each$1(option.series, function (seriesOpt) {
+        if (!isObject$1(seriesOpt)) {
+            return;
+        }
+
+        var seriesType = seriesOpt.type;
+
+        if (seriesType === 'pie' || seriesType === 'gauge') {
