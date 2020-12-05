@@ -22587,3 +22587,277 @@ var backwardCompat = function (option, isTheme) {
         var seriesType = seriesOpt.type;
 
         if (seriesType === 'pie' || seriesType === 'gauge') {
+            if (seriesOpt.clockWise != null) {
+                seriesOpt.clockwise = seriesOpt.clockWise;
+            }
+        }
+        if (seriesType === 'gauge') {
+            var pointerColor = get(seriesOpt, 'pointer.color');
+            pointerColor != null
+                && set$1(seriesOpt, 'itemStyle.normal.color', pointerColor);
+        }
+
+        compatLayoutProperties(seriesOpt);
+    });
+
+    // dataRange has changed to visualMap
+    if (option.dataRange) {
+        option.visualMap = option.dataRange;
+    }
+
+    each$1(COMPATITABLE_COMPONENTS, function (componentName) {
+        var options = option[componentName];
+        if (options) {
+            if (!isArray(options)) {
+                options = [options];
+            }
+            each$1(options, function (option) {
+                compatLayoutProperties(option);
+            });
+        }
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// (1) [Caution]: the logic is correct based on the premises:
+//     data processing stage is blocked in stream.
+//     See <module:echarts/stream/Scheduler#performDataProcessorTasks>
+// (2) Only register once when import repeatly.
+//     Should be executed before after series filtered and before stack calculation.
+var dataStack = function (ecModel) {
+    var stackInfoMap = createHashMap();
+    ecModel.eachSeries(function (seriesModel) {
+        var stack = seriesModel.get('stack');
+        // Compatibal: when `stack` is set as '', do not stack.
+        if (stack) {
+            var stackInfoList = stackInfoMap.get(stack) || stackInfoMap.set(stack, []);
+            var data = seriesModel.getData();
+
+            var stackInfo = {
+                // Used for calculate axis extent automatically.
+                stackResultDimension: data.getCalculationInfo('stackResultDimension'),
+                stackedOverDimension: data.getCalculationInfo('stackedOverDimension'),
+                stackedDimension: data.getCalculationInfo('stackedDimension'),
+                stackedByDimension: data.getCalculationInfo('stackedByDimension'),
+                isStackedByIndex: data.getCalculationInfo('isStackedByIndex'),
+                data: data,
+                seriesModel: seriesModel
+            };
+
+            // If stacked on axis that do not support data stack.
+            if (!stackInfo.stackedDimension
+                || !(stackInfo.isStackedByIndex || stackInfo.stackedByDimension)
+            ) {
+                return;
+            }
+
+            stackInfoList.length && data.setCalculationInfo(
+                'stackedOnSeries', stackInfoList[stackInfoList.length - 1].seriesModel
+            );
+
+            stackInfoList.push(stackInfo);
+        }
+    });
+
+    stackInfoMap.each(calculateStack);
+};
+
+function calculateStack(stackInfoList) {
+    each$1(stackInfoList, function (targetStackInfo, idxInStack) {
+        var resultVal = [];
+        var resultNaN = [NaN, NaN];
+        var dims = [targetStackInfo.stackResultDimension, targetStackInfo.stackedOverDimension];
+        var targetData = targetStackInfo.data;
+        var isStackedByIndex = targetStackInfo.isStackedByIndex;
+
+        // Should not write on raw data, because stack series model list changes
+        // depending on legend selection.
+        var newData = targetData.map(dims, function (v0, v1, dataIndex) {
+            var sum = targetData.get(targetStackInfo.stackedDimension, dataIndex);
+
+            // Consider `connectNulls` of line area, if value is NaN, stackedOver
+            // should also be NaN, to draw a appropriate belt area.
+            if (isNaN(sum)) {
+                return resultNaN;
+            }
+
+            var byValue;
+            var stackedDataRawIndex;
+
+            if (isStackedByIndex) {
+                stackedDataRawIndex = targetData.getRawIndex(dataIndex);
+            }
+            else {
+                byValue = targetData.get(targetStackInfo.stackedByDimension, dataIndex);
+            }
+
+            // If stackOver is NaN, chart view will render point on value start.
+            var stackedOver = NaN;
+
+            for (var j = idxInStack - 1; j >= 0; j--) {
+                var stackInfo = stackInfoList[j];
+
+                // Has been optimized by inverted indices on `stackedByDimension`.
+                if (!isStackedByIndex) {
+                    stackedDataRawIndex = stackInfo.data.rawIndexOf(stackInfo.stackedByDimension, byValue);
+                }
+
+                if (stackedDataRawIndex >= 0) {
+                    var val = stackInfo.data.getByRawIndex(stackInfo.stackResultDimension, stackedDataRawIndex);
+
+                    // Considering positive stack, negative stack and empty data
+                    if ((sum >= 0 && val > 0) // Positive stack
+                        || (sum <= 0 && val < 0) // Negative stack
+                    ) {
+                        sum += val;
+                        stackedOver = val;
+                        break;
+                    }
+                }
+            }
+
+            resultVal[0] = sum;
+            resultVal[1] = stackedOver;
+
+            return resultVal;
+        });
+
+        targetData.hostModel.setData(newData);
+        // Update for consequent calculation
+        targetStackInfo.data = newData;
+    });
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// TODO
+// ??? refactor? check the outer usage of data provider.
+// merge with defaultDimValueGetter?
+
+/**
+ * If normal array used, mutable chunk size is supported.
+ * If typed array used, chunk size must be fixed.
+ */
+function DefaultDataProvider(source, dimSize) {
+    if (!Source.isInstance(source)) {
+        source = Source.seriesDataToSource(source);
+    }
+    this._source = source;
+
+    var data = this._data = source.data;
+    var sourceFormat = source.sourceFormat;
+
+    // Typed array. TODO IE10+?
+    if (sourceFormat === SOURCE_FORMAT_TYPED_ARRAY) {
+        if (__DEV__) {
+            if (dimSize == null) {
+                throw new Error('Typed array data must specify dimension size');
+            }
+        }
+        this._offset = 0;
+        this._dimSize = dimSize;
+        this._data = data;
+    }
+
+    var methods = providerMethods[
+        sourceFormat === SOURCE_FORMAT_ARRAY_ROWS
+        ? sourceFormat + '_' + source.seriesLayoutBy
+        : sourceFormat
+    ];
+
+    if (__DEV__) {
+        assert$1(methods, 'Invalide sourceFormat: ' + sourceFormat);
+    }
+
+    extend(this, methods);
+}
+
+var providerProto = DefaultDataProvider.prototype;
+// If data is pure without style configuration
+providerProto.pure = false;
+// If data is persistent and will not be released after use.
+providerProto.persistent = true;
+
+// ???! FIXME legacy data provider do not has method getSource
+providerProto.getSource = function () {
+    return this._source;
+};
+
+var providerMethods = {
+
+    'arrayRows_column': {
+        pure: true,
+        count: function () {
+            return Math.max(0, this._data.length - this._source.startIndex);
+        },
+        getItem: function (idx) {
+            return this._data[idx + this._source.startIndex];
+        },
+        appendData: appendDataSimply
+    },
+
+    'arrayRows_row': {
+        pure: true,
+        count: function () {
+            var row = this._data[0];
+            return row ? Math.max(0, row.length - this._source.startIndex) : 0;
+        },
+        getItem: function (idx) {
+            idx += this._source.startIndex;
+            var item = [];
+            var data = this._data;
+            for (var i = 0; i < data.length; i++) {
+                var row = data[i];
+                item.push(row ? row[idx] : null);
+            }
+            return item;
+        },
+        appendData: function () {
+            throw new Error('Do not support appendData when set seriesLayoutBy: "row".');
+        }
+    },
+
+    'objectRows': {
+        pure: true,
+        count: countSimply,
+        getItem: getItemSimply,
+        appendData: appendDataSimply
+    },
+
+    'keyedColumns': {
+        pure: true,
