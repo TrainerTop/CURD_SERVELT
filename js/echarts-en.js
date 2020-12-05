@@ -22037,3 +22037,265 @@ OptionManager.prototype = {
                 );
             });
         }
+        // Otherwise return nothing.
+
+        this._currentMediaIndices = indices;
+
+        return result;
+    }
+};
+
+function parseRawOption(rawOption, optionPreprocessorFuncs, isNew) {
+    var timelineOptions = [];
+    var mediaList = [];
+    var mediaDefault;
+    var baseOption;
+
+    // Compatible with ec2.
+    var timelineOpt = rawOption.timeline;
+
+    if (rawOption.baseOption) {
+        baseOption = rawOption.baseOption;
+    }
+
+    // For timeline
+    if (timelineOpt || rawOption.options) {
+        baseOption = baseOption || {};
+        timelineOptions = (rawOption.options || []).slice();
+    }
+
+    // For media query
+    if (rawOption.media) {
+        baseOption = baseOption || {};
+        var media = rawOption.media;
+        each$4(media, function (singleMedia) {
+            if (singleMedia && singleMedia.option) {
+                if (singleMedia.query) {
+                    mediaList.push(singleMedia);
+                }
+                else if (!mediaDefault) {
+                    // Use the first media default.
+                    mediaDefault = singleMedia;
+                }
+            }
+        });
+    }
+
+    // For normal option
+    if (!baseOption) {
+        baseOption = rawOption;
+    }
+
+    // Set timelineOpt to baseOption in ec3,
+    // which is convenient for merge option.
+    if (!baseOption.timeline) {
+        baseOption.timeline = timelineOpt;
+    }
+
+    // Preprocess.
+    each$4([baseOption].concat(timelineOptions)
+        .concat(map(mediaList, function (media) {
+            return media.option;
+        })),
+        function (option) {
+            each$4(optionPreprocessorFuncs, function (preProcess) {
+                preProcess(option, isNew);
+            });
+        }
+    );
+
+    return {
+        baseOption: baseOption,
+        timelineOptions: timelineOptions,
+        mediaDefault: mediaDefault,
+        mediaList: mediaList
+    };
+}
+
+/**
+ * @see <http://www.w3.org/TR/css3-mediaqueries/#media1>
+ * Support: width, height, aspectRatio
+ * Can use max or min as prefix.
+ */
+function applyMediaQuery(query, ecWidth, ecHeight) {
+    var realMap = {
+        width: ecWidth,
+        height: ecHeight,
+        aspectratio: ecWidth / ecHeight // lowser case for convenientce.
+    };
+
+    var applicatable = true;
+
+    each$1(query, function (value, attr) {
+        var matched = attr.match(QUERY_REG);
+
+        if (!matched || !matched[1] || !matched[2]) {
+            return;
+        }
+
+        var operator = matched[1];
+        var realAttr = matched[2].toLowerCase();
+
+        if (!compare(realMap[realAttr], value, operator)) {
+            applicatable = false;
+        }
+    });
+
+    return applicatable;
+}
+
+function compare(real, expect, operator) {
+    if (operator === 'min') {
+        return real >= expect;
+    }
+    else if (operator === 'max') {
+        return real <= expect;
+    }
+    else { // Equals
+        return real === expect;
+    }
+}
+
+function indicesEquals(indices1, indices2) {
+    // indices is always order by asc and has only finite number.
+    return indices1.join(',') === indices2.join(',');
+}
+
+/**
+ * Consider case:
+ * `chart.setOption(opt1);`
+ * Then user do some interaction like dataZoom, dataView changing.
+ * `chart.setOption(opt2);`
+ * Then user press 'reset button' in toolbox.
+ *
+ * After doing that all of the interaction effects should be reset, the
+ * chart should be the same as the result of invoke
+ * `chart.setOption(opt1); chart.setOption(opt2);`.
+ *
+ * Although it is not able ensure that
+ * `chart.setOption(opt1); chart.setOption(opt2);` is equivalents to
+ * `chart.setOption(merge(opt1, opt2));` exactly,
+ * this might be the only simple way to implement that feature.
+ *
+ * MEMO: We've considered some other approaches:
+ * 1. Each model handle its self restoration but not uniform treatment.
+ *     (Too complex in logic and error-prone)
+ * 2. Use a shadow ecModel. (Performace expensive)
+ */
+function mergeOption(oldOption, newOption) {
+    newOption = newOption || {};
+
+    each$4(newOption, function (newCptOpt, mainType) {
+        if (newCptOpt == null) {
+            return;
+        }
+
+        var oldCptOpt = oldOption[mainType];
+
+        if (!ComponentModel.hasClass(mainType)) {
+            oldOption[mainType] = merge$1(oldCptOpt, newCptOpt, true);
+        }
+        else {
+            newCptOpt = normalizeToArray(newCptOpt);
+            oldCptOpt = normalizeToArray(oldCptOpt);
+
+            var mapResult = mappingToExists(oldCptOpt, newCptOpt);
+
+            oldOption[mainType] = map$1(mapResult, function (item) {
+                return (item.option && item.exist)
+                    ? merge$1(item.exist, item.option, true)
+                    : (item.exist || item.option);
+            });
+        }
+    });
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var each$5 = each$1;
+var isObject$3 = isObject$1;
+
+var POSSIBLE_STYLES = [
+    'areaStyle', 'lineStyle', 'nodeStyle', 'linkStyle',
+    'chordStyle', 'label', 'labelLine'
+];
+
+function compatEC2ItemStyle(opt) {
+    var itemStyleOpt = opt && opt.itemStyle;
+    if (!itemStyleOpt) {
+        return;
+    }
+    for (var i = 0, len = POSSIBLE_STYLES.length; i < len; i++) {
+        var styleName = POSSIBLE_STYLES[i];
+        var normalItemStyleOpt = itemStyleOpt.normal;
+        var emphasisItemStyleOpt = itemStyleOpt.emphasis;
+        if (normalItemStyleOpt && normalItemStyleOpt[styleName]) {
+            opt[styleName] = opt[styleName] || {};
+            if (!opt[styleName].normal) {
+                opt[styleName].normal = normalItemStyleOpt[styleName];
+            }
+            else {
+                merge(opt[styleName].normal, normalItemStyleOpt[styleName]);
+            }
+            normalItemStyleOpt[styleName] = null;
+        }
+        if (emphasisItemStyleOpt && emphasisItemStyleOpt[styleName]) {
+            opt[styleName] = opt[styleName] || {};
+            if (!opt[styleName].emphasis) {
+                opt[styleName].emphasis = emphasisItemStyleOpt[styleName];
+            }
+            else {
+                merge(opt[styleName].emphasis, emphasisItemStyleOpt[styleName]);
+            }
+            emphasisItemStyleOpt[styleName] = null;
+        }
+    }
+}
+
+function convertNormalEmphasis(opt, optType, useExtend) {
+    if (opt && opt[optType] && (opt[optType].normal || opt[optType].emphasis)) {
+        var normalOpt = opt[optType].normal;
+        var emphasisOpt = opt[optType].emphasis;
+
+        if (normalOpt) {
+            // Timeline controlStyle has other properties besides normal and emphasis
+            if (useExtend) {
+                opt[optType].normal = opt[optType].emphasis = null;
+                defaults(opt[optType], normalOpt);
+            }
+            else {
+                opt[optType] = normalOpt;
+            }
+        }
+        if (emphasisOpt) {
+            opt.emphasis = opt.emphasis || {};
+            opt.emphasis[optType] = emphasisOpt;
+        }
+    }
+}
+function removeEC3NormalStatus(opt) {
+    convertNormalEmphasis(opt, 'itemStyle');
+    convertNormalEmphasis(opt, 'lineStyle');
+    convertNormalEmphasis(opt, 'areaStyle');
+    convertNormalEmphasis(opt, 'label');
+    convertNormalEmphasis(opt, 'labelLine');
+    // treemap
+    convertNormalEmphasis(opt, 'upperLabel');
+    // graph
