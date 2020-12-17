@@ -23155,3 +23155,249 @@ var dataFormatMixin = {
         var color = data.getItemVisual(dataIndex, 'color');
         var tooltipModel = this.ecModel.getComponent('tooltip');
         var renderModeOption = tooltipModel && tooltipModel.get('renderMode');
+        var renderMode = getTooltipRenderMode(renderModeOption);
+        var mainType = this.mainType;
+        var isSeries = mainType === 'series';
+
+        return {
+            componentType: mainType,
+            componentSubType: this.subType,
+            componentIndex: this.componentIndex,
+            seriesType: isSeries ? this.subType : null,
+            seriesIndex: this.seriesIndex,
+            seriesId: isSeries ? this.id : null,
+            seriesName: isSeries ? this.name : null,
+            name: name,
+            dataIndex: rawDataIndex,
+            data: itemOpt,
+            dataType: dataType,
+            value: rawValue,
+            color: color,
+            marker: getTooltipMarker({
+                color: color,
+                renderMode: renderMode
+            }),
+
+            // Param name list for mapping `a`, `b`, `c`, `d`, `e`
+            $vars: ['seriesName', 'name', 'value']
+        };
+    },
+
+    /**
+     * Format label
+     * @param {number} dataIndex
+     * @param {string} [status='normal'] 'normal' or 'emphasis'
+     * @param {string} [dataType]
+     * @param {number} [dimIndex]
+     * @param {string} [labelProp='label']
+     * @return {string} If not formatter, return null/undefined
+     */
+    getFormattedLabel: function (dataIndex, status, dataType, dimIndex, labelProp) {
+        status = status || 'normal';
+        var data = this.getData(dataType);
+        var itemModel = data.getItemModel(dataIndex);
+
+        var params = this.getDataParams(dataIndex, dataType);
+        if (dimIndex != null && (params.value instanceof Array)) {
+            params.value = params.value[dimIndex];
+        }
+
+        var formatter = itemModel.get(
+            status === 'normal'
+            ? [labelProp || 'label', 'formatter']
+            : [status, labelProp || 'label', 'formatter']
+        );
+
+        if (typeof formatter === 'function') {
+            params.status = status;
+            return formatter(params);
+        }
+        else if (typeof formatter === 'string') {
+            var str = formatTpl(formatter, params);
+
+            // Support 'aaa{@[3]}bbb{@product}ccc'.
+            // Do not support '}' in dim name util have to.
+            return str.replace(DIMENSION_LABEL_REG, function (origin, dim) {
+                var len = dim.length;
+                if (dim.charAt(0) === '[' && dim.charAt(len - 1) === ']') {
+                    dim = +dim.slice(1, len - 1); // Also: '[]' => 0
+                }
+                return retrieveRawValue(data, dataIndex, dim);
+            });
+        }
+    },
+
+    /**
+     * Get raw value in option
+     * @param {number} idx
+     * @param {string} [dataType]
+     * @return {Array|number|string}
+     */
+    getRawValue: function (idx, dataType) {
+        return retrieveRawValue(this.getData(dataType), idx);
+    },
+
+    /**
+     * Should be implemented.
+     * @param {number} dataIndex
+     * @param {boolean} [multipleSeries=false]
+     * @param {number} [dataType]
+     * @return {string} tooltip string
+     */
+    formatTooltip: function () {
+        // Empty function
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @param {Object} define
+ * @return See the return of `createTask`.
+ */
+function createTask(define) {
+    return new Task(define);
+}
+
+/**
+ * @constructor
+ * @param {Object} define
+ * @param {Function} define.reset Custom reset
+ * @param {Function} [define.plan] Returns 'reset' indicate reset immediately.
+ * @param {Function} [define.count] count is used to determin data task.
+ * @param {Function} [define.onDirty] count is used to determin data task.
+ */
+function Task(define) {
+    define = define || {};
+
+    this._reset = define.reset;
+    this._plan = define.plan;
+    this._count = define.count;
+    this._onDirty = define.onDirty;
+
+    this._dirty = true;
+
+    // Context must be specified implicitly, to
+    // avoid miss update context when model changed.
+    this.context;
+}
+
+var taskProto = Task.prototype;
+
+/**
+ * @param {Object} performArgs
+ * @param {number} [performArgs.step] Specified step.
+ * @param {number} [performArgs.skip] Skip customer perform call.
+ * @param {number} [performArgs.modBy] Sampling window size.
+ * @param {number} [performArgs.modDataCount] Sampling count.
+ */
+taskProto.perform = function (performArgs) {
+    var upTask = this._upstream;
+    var skip = performArgs && performArgs.skip;
+
+    // TODO some refactor.
+    // Pull data. Must pull data each time, because context.data
+    // may be updated by Series.setData.
+    if (this._dirty && upTask) {
+        var context = this.context;
+        context.data = context.outputData = upTask.context.outputData;
+    }
+
+    if (this.__pipeline) {
+        this.__pipeline.currentTask = this;
+    }
+
+    var planResult;
+    if (this._plan && !skip) {
+        planResult = this._plan(this.context);
+    }
+
+    // Support sharding by mod, which changes the render sequence and makes the rendered graphic
+    // elements uniformed distributed when progress, especially when moving or zooming.
+    var lastModBy = normalizeModBy(this._modBy);
+    var lastModDataCount = this._modDataCount || 0;
+    var modBy = normalizeModBy(performArgs && performArgs.modBy);
+    var modDataCount = performArgs && performArgs.modDataCount || 0;
+    if (lastModBy !== modBy || lastModDataCount !== modDataCount) {
+        planResult = 'reset';
+    }
+
+    function normalizeModBy(val) {
+        !(val >= 1) && (val = 1); // jshint ignore:line
+        return val;
+    }
+
+    var forceFirstProgress;
+    if (this._dirty || planResult === 'reset') {
+        this._dirty = false;
+        forceFirstProgress = reset(this, skip);
+    }
+
+    this._modBy = modBy;
+    this._modDataCount = modDataCount;
+
+    var step = performArgs && performArgs.step;
+
+    if (upTask) {
+
+        if (__DEV__) {
+            assert$1(upTask._outputDueEnd != null);
+        }
+        this._dueEnd = upTask._outputDueEnd;
+    }
+    // DataTask or overallTask
+    else {
+        if (__DEV__) {
+            assert$1(!this._progress || this._count);
+        }
+        this._dueEnd = this._count ? this._count(this.context) : Infinity;
+    }
+
+    // Note: Stubs, that its host overall task let it has progress, has progress.
+    // If no progress, pass index from upstream to downstream each time plan called.
+    if (this._progress) {
+        var start = this._dueIndex;
+        var end = Math.min(
+            step != null ? this._dueIndex + step : Infinity,
+            this._dueEnd
+        );
+
+        if (!skip && (forceFirstProgress || start < end)) {
+            var progress = this._progress;
+            if (isArray(progress)) {
+                for (var i = 0; i < progress.length; i++) {
+                    doProgress(this, progress[i], start, end, modBy, modDataCount);
+                }
+            }
+            else {
+                doProgress(this, progress, start, end, modBy, modDataCount);
+            }
+        }
+
+        this._dueIndex = end;
+        // If no `outputDueEnd`, assume that output data and
+        // input data is the same, so use `dueIndex` as `outputDueEnd`.
+        var outputDueEnd = this._settedOutputEnd != null
+            ? this._settedOutputEnd : end;
+
+        if (__DEV__) {
+            // ??? Can not rollback.
+            assert$1(outputDueEnd >= this._outputDueEnd);
+        }
