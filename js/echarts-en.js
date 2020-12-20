@@ -24499,3 +24499,288 @@ Chart.markUpdateMethod = function (payload, methodName) {
 };
 
 function renderTaskPlan(context) {
+    return renderPlanner(context.model);
+}
+
+function renderTaskReset(context) {
+    var seriesModel = context.model;
+    var ecModel = context.ecModel;
+    var api = context.api;
+    var payload = context.payload;
+    // ???! remove updateView updateVisual
+    var progressiveRender = seriesModel.pipelineContext.progressiveRender;
+    var view = context.view;
+
+    var updateMethod = payload && inner$5(payload).updateMethod;
+    var methodName = progressiveRender
+        ? 'incrementalPrepareRender'
+        : (updateMethod && view[updateMethod])
+        ? updateMethod
+        // `appendData` is also supported when data amount
+        // is less than progressive threshold.
+        : 'render';
+
+    if (methodName !== 'render') {
+        view[methodName](seriesModel, ecModel, api, payload);
+    }
+
+    return progressMethodMap[methodName];
+}
+
+var progressMethodMap = {
+    incrementalPrepareRender: {
+        progress: function (params, context) {
+            context.view.incrementalRender(
+                params, context.model, context.ecModel, context.api, context.payload
+            );
+        }
+    },
+    render: {
+        // Put view.render in `progress` to support appendData. But in this case
+        // view.render should not be called in reset, otherwise it will be called
+        // twise. Use `forceFirstProgress` to make sure that view.render is called
+        // in any cases.
+        forceFirstProgress: true,
+        progress: function (params, context) {
+            context.view.render(
+                context.model, context.ecModel, context.api, context.payload
+            );
+        }
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+var ORIGIN_METHOD = '\0__throttleOriginMethod';
+var RATE = '\0__throttleRate';
+var THROTTLE_TYPE = '\0__throttleType';
+
+/**
+ * @public
+ * @param {(Function)} fn
+ * @param {number} [delay=0] Unit: ms.
+ * @param {boolean} [debounce=false]
+ *        true: If call interval less than `delay`, only the last call works.
+ *        false: If call interval less than `delay, call works on fixed rate.
+ * @return {(Function)} throttled fn.
+ */
+function throttle(fn, delay, debounce) {
+
+    var currCall;
+    var lastCall = 0;
+    var lastExec = 0;
+    var timer = null;
+    var diff;
+    var scope;
+    var args;
+    var debounceNextCall;
+
+    delay = delay || 0;
+
+    function exec() {
+        lastExec = (new Date()).getTime();
+        timer = null;
+        fn.apply(scope, args || []);
+    }
+
+    var cb = function () {
+        currCall = (new Date()).getTime();
+        scope = this;
+        args = arguments;
+        var thisDelay = debounceNextCall || delay;
+        var thisDebounce = debounceNextCall || debounce;
+        debounceNextCall = null;
+        diff = currCall - (thisDebounce ? lastCall : lastExec) - thisDelay;
+
+        clearTimeout(timer);
+
+        // Here we should make sure that: the `exec` SHOULD NOT be called later
+        // than a new call of `cb`, that is, preserving the command order. Consider
+        // calculating "scale rate" when roaming as an example. When a call of `cb`
+        // happens, either the `exec` is called dierectly, or the call is delayed.
+        // But the delayed call should never be later than next call of `cb`. Under
+        // this assurance, we can simply update view state each time `dispatchAction`
+        // triggered by user roaming, but not need to add extra code to avoid the
+        // state being "rolled-back".
+        if (thisDebounce) {
+            timer = setTimeout(exec, thisDelay);
+        }
+        else {
+            if (diff >= 0) {
+                exec();
+            }
+            else {
+                timer = setTimeout(exec, -diff);
+            }
+        }
+
+        lastCall = currCall;
+    };
+
+    /**
+     * Clear throttle.
+     * @public
+     */
+    cb.clear = function () {
+        if (timer) {
+            clearTimeout(timer);
+            timer = null;
+        }
+    };
+
+    /**
+     * Enable debounce once.
+     */
+    cb.debounceNextCall = function (debounceDelay) {
+        debounceNextCall = debounceDelay;
+    };
+
+    return cb;
+}
+
+/**
+ * Create throttle method or update throttle rate.
+ *
+ * @example
+ * ComponentView.prototype.render = function () {
+ *     ...
+ *     throttle.createOrUpdate(
+ *         this,
+ *         '_dispatchAction',
+ *         this.model.get('throttle'),
+ *         'fixRate'
+ *     );
+ * };
+ * ComponentView.prototype.remove = function () {
+ *     throttle.clear(this, '_dispatchAction');
+ * };
+ * ComponentView.prototype.dispose = function () {
+ *     throttle.clear(this, '_dispatchAction');
+ * };
+ *
+ * @public
+ * @param {Object} obj
+ * @param {string} fnAttr
+ * @param {number} [rate]
+ * @param {string} [throttleType='fixRate'] 'fixRate' or 'debounce'
+ * @return {Function} throttled function.
+ */
+function createOrUpdate(obj, fnAttr, rate, throttleType) {
+    var fn = obj[fnAttr];
+
+    if (!fn) {
+        return;
+    }
+
+    var originFn = fn[ORIGIN_METHOD] || fn;
+    var lastThrottleType = fn[THROTTLE_TYPE];
+    var lastRate = fn[RATE];
+
+    if (lastRate !== rate || lastThrottleType !== throttleType) {
+        if (rate == null || !throttleType) {
+            return (obj[fnAttr] = originFn);
+        }
+
+        fn = obj[fnAttr] = throttle(
+            originFn, rate, throttleType === 'debounce'
+        );
+        fn[ORIGIN_METHOD] = originFn;
+        fn[THROTTLE_TYPE] = throttleType;
+        fn[RATE] = rate;
+    }
+
+    return fn;
+}
+
+/**
+ * Clear throttle. Example see throttle.createOrUpdate.
+ *
+ * @public
+ * @param {Object} obj
+ * @param {string} fnAttr
+ */
+function clear(obj, fnAttr) {
+    var fn = obj[fnAttr];
+    if (fn && fn[ORIGIN_METHOD]) {
+        obj[fnAttr] = fn[ORIGIN_METHOD];
+    }
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var seriesColor = {
+    createOnAllSeries: true,
+    performRawSeries: true,
+    reset: function (seriesModel, ecModel) {
+        var data = seriesModel.getData();
+        var colorAccessPath = (seriesModel.visualColorAccessPath || 'itemStyle.color').split('.');
+        var color = seriesModel.get(colorAccessPath) // Set in itemStyle
+            || seriesModel.getColorFromPalette(
+                // TODO series count changed.
+                seriesModel.name, null, ecModel.getSeriesCount()
+            );  // Default color
+
+        // FIXME Set color function or use the platte color
+        data.setVisual('color', color);
+
+        // Only visible series has each data be visual encoded
+        if (!ecModel.isSeriesFiltered(seriesModel)) {
+            if (typeof color === 'function' && !(color instanceof Gradient)) {
+                data.each(function (idx) {
+                    data.setItemVisual(
+                        idx, 'color', color(seriesModel.getDataParams(idx))
+                    );
+                });
+            }
+
+            // itemStyle in each data item
+            var dataEach = function (data, idx) {
+                var itemModel = data.getItemModel(idx);
+                var color = itemModel.get(colorAccessPath, true);
+                if (color != null) {
+                    data.setItemVisual(idx, 'color', color);
+                }
+            };
+
+            return { dataEach: data.hasItemOption ? dataEach : null };
+        }
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
