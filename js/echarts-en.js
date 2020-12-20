@@ -23956,3 +23956,283 @@ var SeriesModel = ComponentModel.extend({
         function formatSingleValue(val) {
             // return encodeHTML(addCommas(val));
             return {
+                renderMode: renderMode,
+                content: encodeHTML(addCommas(val)),
+                style: markers
+            };
+        }
+
+        var data = this.getData();
+        var tooltipDims = data.mapDimension('defaultedTooltip', true);
+        var tooltipDimLen = tooltipDims.length;
+        var value = this.getRawValue(dataIndex);
+        var isValueArr = isArray(value);
+
+        var color = data.getItemVisual(dataIndex, 'color');
+        if (isObject$1(color) && color.colorStops) {
+            color = (color.colorStops[0] || {}).color;
+        }
+        color = color || 'transparent';
+
+        // Complicated rule for pretty tooltip.
+        var formattedValue = (tooltipDimLen > 1 || (isValueArr && !tooltipDimLen))
+            ? formatArrayValue(value)
+            : tooltipDimLen
+            ? formatSingleValue(retrieveRawValue(data, dataIndex, tooltipDims[0]))
+            : formatSingleValue(isValueArr ? value[0] : value);
+        var content = formattedValue.content;
+
+        var markName = series.seriesIndex + 'at' + markerId;
+        var colorEl = getTooltipMarker({
+            color: color,
+            type: 'item',
+            renderMode: renderMode,
+            markerId: markName
+        });
+        markers[markName] = color;
+        ++markerId;
+
+        var name = data.getName(dataIndex);
+
+        var seriesName = this.name;
+        if (!isNameSpecified(this)) {
+            seriesName = '';
+        }
+        seriesName = seriesName
+            ? encodeHTML(seriesName) + (!multipleSeries ? newLine : ': ')
+            : '';
+
+        var colorStr = typeof colorEl === 'string' ? colorEl : colorEl.content;
+        var html = !multipleSeries
+            ? seriesName + colorStr
+                + (name
+                    ? encodeHTML(name) + ': ' + content
+                    : content
+                )
+            : colorStr + seriesName + content;
+
+        return {
+            html: html,
+            markers: markers
+        };
+    },
+
+    /**
+     * @return {boolean}
+     */
+    isAnimationEnabled: function () {
+        if (env$1.node) {
+            return false;
+        }
+
+        var animationEnabled = this.getShallow('animation');
+        if (animationEnabled) {
+            if (this.getData().count() > this.getShallow('animationThreshold')) {
+                animationEnabled = false;
+            }
+        }
+        return animationEnabled;
+    },
+
+    restoreData: function () {
+        this.dataTask.dirty();
+    },
+
+    getColorFromPalette: function (name, scope, requestColorNum) {
+        var ecModel = this.ecModel;
+        // PENDING
+        var color = colorPaletteMixin.getColorFromPalette.call(this, name, scope, requestColorNum);
+        if (!color) {
+            color = ecModel.getColorFromPalette(name, scope, requestColorNum);
+        }
+        return color;
+    },
+
+    /**
+     * Use `data.mapDimension(coordDim, true)` instead.
+     * @deprecated
+     */
+    coordDimToDataDim: function (coordDim) {
+        return this.getRawData().mapDimension(coordDim, true);
+    },
+
+    /**
+     * Get progressive rendering count each step
+     * @return {number}
+     */
+    getProgressive: function () {
+        return this.get('progressive');
+    },
+
+    /**
+     * Get progressive rendering count each step
+     * @return {number}
+     */
+    getProgressiveThreshold: function () {
+        return this.get('progressiveThreshold');
+    },
+
+    /**
+     * Get data indices for show tooltip content. See tooltip.
+     * @abstract
+     * @param {Array.<string>|string} dim
+     * @param {Array.<number>} value
+     * @param {module:echarts/coord/single/SingleAxis} baseAxis
+     * @return {Object} {dataIndices, nestestValue}.
+     */
+    getAxisTooltipData: null,
+
+    /**
+     * See tooltip.
+     * @abstract
+     * @param {number} dataIndex
+     * @return {Array.<number>} Point of tooltip. null/undefined can be returned.
+     */
+    getTooltipPosition: null,
+
+    /**
+     * @see {module:echarts/stream/Scheduler}
+     */
+    pipeTask: null,
+
+    /**
+     * Convinient for override in extended class.
+     * @protected
+     * @type {Function}
+     */
+    preventIncremental: null,
+
+    /**
+     * @public
+     * @readOnly
+     * @type {Object}
+     */
+    pipelineContext: null
+
+});
+
+
+mixin(SeriesModel, dataFormatMixin);
+mixin(SeriesModel, colorPaletteMixin);
+
+/**
+ * MUST be called after `prepareSource` called
+ * Here we need to make auto series, especially for auto legend. But we
+ * do not modify series.name in option to avoid side effects.
+ */
+function autoSeriesName(seriesModel) {
+    // User specified name has higher priority, otherwise it may cause
+    // series can not be queried unexpectedly.
+    var name = seriesModel.name;
+    if (!isNameSpecified(seriesModel)) {
+        seriesModel.name = getSeriesAutoName(seriesModel) || name;
+    }
+}
+
+function getSeriesAutoName(seriesModel) {
+    var data = seriesModel.getRawData();
+    var dataDims = data.mapDimension('seriesName', true);
+    var nameArr = [];
+    each$1(dataDims, function (dataDim) {
+        var dimInfo = data.getDimensionInfo(dataDim);
+        dimInfo.displayName && nameArr.push(dimInfo.displayName);
+    });
+    return nameArr.join(' ');
+}
+
+function dataTaskCount(context) {
+    return context.model.getRawData().count();
+}
+
+function dataTaskReset(context) {
+    var seriesModel = context.model;
+    seriesModel.setData(seriesModel.getRawData().cloneShallow());
+    return dataTaskProgress;
+}
+
+function dataTaskProgress(param, context) {
+    // Avoid repead cloneShallow when data just created in reset.
+    if (param.end > context.outputData.count()) {
+        context.model.getRawData().cloneShallow(context.outputData);
+    }
+}
+
+// TODO refactor
+function wrapData(data, seriesModel) {
+    each$1(data.CHANGABLE_METHODS, function (methodName) {
+        data.wrapMethod(methodName, curry(onDataSelfChange, seriesModel));
+    });
+}
+
+function onDataSelfChange(seriesModel) {
+    var task = getCurrentTask(seriesModel);
+    if (task) {
+        // Consider case: filter, selectRange
+        task.setOutputEnd(this.count());
+    }
+}
+
+function getCurrentTask(seriesModel) {
+    var scheduler = (seriesModel.ecModel || {}).scheduler;
+    var pipeline = scheduler && scheduler.getPipeline(seriesModel.uid);
+
+    if (pipeline) {
+        // When pipline finished, the currrentTask keep the last
+        // task (renderTask).
+        var task = pipeline.currentTask;
+        if (task) {
+            var agentStubMap = task.agentStubMap;
+            if (agentStubMap) {
+                task = agentStubMap.get(seriesModel.uid);
+            }
+        }
+        return task;
+    }
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var Component = function () {
+    /**
+     * @type {module:zrender/container/Group}
+     * @readOnly
+     */
+    this.group = new Group();
+
+    /**
+     * @type {string}
+     * @readOnly
+     */
+    this.uid = getUID('viewComponent');
+};
+
+Component.prototype = {
+
+    constructor: Component,
+
+    init: function (ecModel, api) {},
+
+    render: function (componentModel, ecModel, api, payload) {},
+
+    dispose: function () {},
+
+    /**
+     * @param {string} eventType
+     * @param {Object} query
