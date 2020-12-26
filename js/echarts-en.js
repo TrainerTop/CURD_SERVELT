@@ -25040,3 +25040,270 @@ var loadingDefault = function (api, opts) {
     opts = opts || {};
     defaults(opts, {
         text: 'loading',
+        color: '#c23531',
+        textColor: '#000',
+        maskColor: 'rgba(255, 255, 255, 0.8)',
+        zlevel: 0
+    });
+    var mask = new Rect({
+        style: {
+            fill: opts.maskColor
+        },
+        zlevel: opts.zlevel,
+        z: 10000
+    });
+    var arc = new Arc({
+        shape: {
+            startAngle: -PI$1 / 2,
+            endAngle: -PI$1 / 2 + 0.1,
+            r: 10
+        },
+        style: {
+            stroke: opts.color,
+            lineCap: 'round',
+            lineWidth: 5
+        },
+        zlevel: opts.zlevel,
+        z: 10001
+    });
+    var labelRect = new Rect({
+        style: {
+            fill: 'none',
+            text: opts.text,
+            textPosition: 'right',
+            textDistance: 10,
+            textFill: opts.textColor
+        },
+        zlevel: opts.zlevel,
+        z: 10001
+    });
+
+    arc.animateShape(true)
+        .when(1000, {
+            endAngle: PI$1 * 3 / 2
+        })
+        .start('circularInOut');
+    arc.animateShape(true)
+        .when(1000, {
+            startAngle: PI$1 * 3 / 2
+        })
+        .delay(300)
+        .start('circularInOut');
+
+    var group = new Group();
+    group.add(arc);
+    group.add(labelRect);
+    group.add(mask);
+    // Inject resize
+    group.resize = function () {
+        var cx = api.getWidth() / 2;
+        var cy = api.getHeight() / 2;
+        arc.setShape({
+            cx: cx,
+            cy: cy
+        });
+        var r = arc.shape.r;
+        labelRect.setShape({
+            x: cx - r,
+            y: cy - r,
+            width: r * 2,
+            height: r * 2
+        });
+
+        mask.setShape({
+            x: 0,
+            y: 0,
+            width: api.getWidth(),
+            height: api.getHeight()
+        });
+    };
+    group.resize();
+    return group;
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @module echarts/stream/Scheduler
+ */
+
+/**
+ * @constructor
+ */
+function Scheduler(ecInstance, api, dataProcessorHandlers, visualHandlers) {
+    this.ecInstance = ecInstance;
+    this.api = api;
+    this.unfinished;
+
+    // Fix current processors in case that in some rear cases that
+    // processors might be registered after echarts instance created.
+    // Register processors incrementally for a echarts instance is
+    // not supported by this stream architecture.
+    var dataProcessorHandlers = this._dataProcessorHandlers = dataProcessorHandlers.slice();
+    var visualHandlers = this._visualHandlers = visualHandlers.slice();
+    this._allHandlers = dataProcessorHandlers.concat(visualHandlers);
+
+    /**
+     * @private
+     * @type {
+     *     [handlerUID: string]: {
+     *         seriesTaskMap?: {
+     *             [seriesUID: string]: Task
+     *         },
+     *         overallTask?: Task
+     *     }
+     * }
+     */
+    this._stageTaskMap = createHashMap();
+}
+
+var proto = Scheduler.prototype;
+
+/**
+ * @param {module:echarts/model/Global} ecModel
+ * @param {Object} payload
+ */
+proto.restoreData = function (ecModel, payload) {
+    // TODO: Only restroe needed series and components, but not all components.
+    // Currently `restoreData` of all of the series and component will be called.
+    // But some independent components like `title`, `legend`, `graphic`, `toolbox`,
+    // `tooltip`, `axisPointer`, etc, do not need series refresh when `setOption`,
+    // and some components like coordinate system, axes, dataZoom, visualMap only
+    // need their target series refresh.
+    // (1) If we are implementing this feature some day, we should consider these cases:
+    // if a data processor depends on a component (e.g., dataZoomProcessor depends
+    // on the settings of `dataZoom`), it should be re-performed if the component
+    // is modified by `setOption`.
+    // (2) If a processor depends on sevral series, speicified by its `getTargetSeries`,
+    // it should be re-performed when the result array of `getTargetSeries` changed.
+    // We use `dependencies` to cover these issues.
+    // (3) How to update target series when coordinate system related components modified.
+
+    // TODO: simply the dirty mechanism? Check whether only the case here can set tasks dirty,
+    // and this case all of the tasks will be set as dirty.
+
+    ecModel.restoreData(payload);
+
+    // Theoretically an overall task not only depends on each of its target series, but also
+    // depends on all of the series.
+    // The overall task is not in pipeline, and `ecModel.restoreData` only set pipeline tasks
+    // dirty. If `getTargetSeries` of an overall task returns nothing, we should also ensure
+    // that the overall task is set as dirty and to be performed, otherwise it probably cause
+    // state chaos. So we have to set dirty of all of the overall tasks manually, otherwise it
+    // probably cause state chaos (consider `dataZoomProcessor`).
+    this._stageTaskMap.each(function (taskRecord) {
+        var overallTask = taskRecord.overallTask;
+        overallTask && overallTask.dirty();
+    });
+};
+
+// If seriesModel provided, incremental threshold is check by series data.
+proto.getPerformArgs = function (task, isBlock) {
+    // For overall task
+    if (!task.__pipeline) {
+        return;
+    }
+
+    var pipeline = this._pipelineMap.get(task.__pipeline.id);
+    var pCtx = pipeline.context;
+    var incremental = !isBlock
+        && pipeline.progressiveEnabled
+        && (!pCtx || pCtx.progressiveRender)
+        && task.__idxInPipeline > pipeline.blockIndex;
+
+    var step = incremental ? pipeline.step : null;
+    var modDataCount = pCtx && pCtx.modDataCount;
+    var modBy = modDataCount != null ? Math.ceil(modDataCount / step) : null;
+
+    return {step: step, modBy: modBy, modDataCount: modDataCount};
+};
+
+proto.getPipeline = function (pipelineId) {
+    return this._pipelineMap.get(pipelineId);
+};
+
+/**
+ * Current, progressive rendering starts from visual and layout.
+ * Always detect render mode in the same stage, avoiding that incorrect
+ * detection caused by data filtering.
+ * Caution:
+ * `updateStreamModes` use `seriesModel.getData()`.
+ */
+proto.updateStreamModes = function (seriesModel, view) {
+    var pipeline = this._pipelineMap.get(seriesModel.uid);
+    var data = seriesModel.getData();
+    var dataLen = data.count();
+
+    // `progressiveRender` means that can render progressively in each
+    // animation frame. Note that some types of series do not provide
+    // `view.incrementalPrepareRender` but support `chart.appendData`. We
+    // use the term `incremental` but not `progressive` to describe the
+    // case that `chart.appendData`.
+    var progressiveRender = pipeline.progressiveEnabled
+        && view.incrementalPrepareRender
+        && dataLen >= pipeline.threshold;
+
+    var large = seriesModel.get('large') && dataLen >= seriesModel.get('largeThreshold');
+
+    // TODO: modDataCount should not updated if `appendData`, otherwise cause whole repaint.
+    // see `test/candlestick-large3.html`
+    var modDataCount = seriesModel.get('progressiveChunkMode') === 'mod' ? dataLen : null;
+
+    seriesModel.pipelineContext = pipeline.context = {
+        progressiveRender: progressiveRender,
+        modDataCount: modDataCount,
+        large: large
+    };
+};
+
+proto.restorePipelines = function (ecModel) {
+    var scheduler = this;
+    var pipelineMap = scheduler._pipelineMap = createHashMap();
+
+    ecModel.eachSeries(function (seriesModel) {
+        var progressive = seriesModel.getProgressive();
+        var pipelineId = seriesModel.uid;
+
+        pipelineMap.set(pipelineId, {
+            id: pipelineId,
+            head: null,
+            tail: null,
+            threshold: seriesModel.getProgressiveThreshold(),
+            progressiveEnabled: progressive
+                && !(seriesModel.preventIncremental && seriesModel.preventIncremental()),
+            blockIndex: -1,
+            step: Math.round(progressive || 700),
+            count: 0
+        });
+
+        pipe(scheduler, seriesModel, seriesModel.dataTask);
+    });
+};
+
+proto.prepareStageTasks = function () {
+    var stageTaskMap = this._stageTaskMap;
+    var ecModel = this.ecInstance.getModel();
+    var api = this.api;
+
+    each$1(this._allHandlers, function (handler) {
+        var record = stageTaskMap.get(handler.uid) || stageTaskMap.set(handler.uid, []);
+
+        handler.reset && createSeriesStageTask(this, handler, record, ecModel, api);
+        handler.overallReset && createOverallStageTask(this, handler, record, ecModel, api);
