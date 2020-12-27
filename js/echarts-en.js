@@ -25578,3 +25578,294 @@ function seriesTaskReset(context) {
     }
     var resetDefines = context.resetDefines = normalizeToArray(context.reset(
         context.model, context.ecModel, context.api, context.payload
+    ));
+    return resetDefines.length > 1
+        ? map(resetDefines, function (v, idx) {
+            return makeSeriesTaskProgress(idx);
+        })
+        : singleSeriesTaskProgress;
+}
+
+var singleSeriesTaskProgress = makeSeriesTaskProgress(0);
+
+function makeSeriesTaskProgress(resetDefineIdx) {
+    return function (params, context) {
+        var data = context.data;
+        var resetDefine = context.resetDefines[resetDefineIdx];
+
+        if (resetDefine && resetDefine.dataEach) {
+            for (var i = params.start; i < params.end; i++) {
+                resetDefine.dataEach(data, i);
+            }
+        }
+        else if (resetDefine && resetDefine.progress) {
+            resetDefine.progress(params, data);
+        }
+    };
+}
+
+function seriesTaskCount(context) {
+    return context.data.count();
+}
+
+function pipe(scheduler, seriesModel, task) {
+    var pipelineId = seriesModel.uid;
+    var pipeline = scheduler._pipelineMap.get(pipelineId);
+    !pipeline.head && (pipeline.head = task);
+    pipeline.tail && pipeline.tail.pipe(task);
+    pipeline.tail = task;
+    task.__idxInPipeline = pipeline.count++;
+    task.__pipeline = pipeline;
+}
+
+Scheduler.wrapStageHandler = function (stageHandler, visualType) {
+    if (isFunction$1(stageHandler)) {
+        stageHandler = {
+            overallReset: stageHandler,
+            seriesType: detectSeriseType(stageHandler)
+        };
+    }
+
+    stageHandler.uid = getUID('stageHandler');
+    visualType && (stageHandler.visualType = visualType);
+
+    return stageHandler;
+};
+
+
+
+/**
+ * Only some legacy stage handlers (usually in echarts extensions) are pure function.
+ * To ensure that they can work normally, they should work in block mode, that is,
+ * they should not be started util the previous tasks finished. So they cause the
+ * progressive rendering disabled. We try to detect the series type, to narrow down
+ * the block range to only the series type they concern, but not all series.
+ */
+function detectSeriseType(legacyFunc) {
+    seriesType = null;
+    try {
+        // Assume there is no async when calling `eachSeriesByType`.
+        legacyFunc(ecModelMock, apiMock);
+    }
+    catch (e) {
+    }
+    return seriesType;
+}
+
+var ecModelMock = {};
+var apiMock = {};
+var seriesType;
+
+mockMethods(ecModelMock, GlobalModel);
+mockMethods(apiMock, ExtensionAPI);
+ecModelMock.eachSeriesByType = ecModelMock.eachRawSeriesByType = function (type) {
+    seriesType = type;
+};
+ecModelMock.eachComponent = function (cond) {
+    if (cond.mainType === 'series' && cond.subType) {
+        seriesType = cond.subType;
+    }
+};
+
+function mockMethods(target, Clz) {
+    /* eslint-disable */
+    for (var name in Clz.prototype) {
+        // Do not use hasOwnProperty
+        target[name] = noop;
+    }
+    /* eslint-enable */
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var colorAll = [
+    '#37A2DA', '#32C5E9', '#67E0E3', '#9FE6B8', '#FFDB5C', '#ff9f7f',
+    '#fb7293', '#E062AE', '#E690D1', '#e7bcf3', '#9d96f5', '#8378EA', '#96BFFF'
+];
+
+var lightTheme = {
+
+    color: colorAll,
+
+    colorLayer: [
+        ['#37A2DA', '#ffd85c', '#fd7b5f'],
+        ['#37A2DA', '#67E0E3', '#FFDB5C', '#ff9f7f', '#E062AE', '#9d96f5'],
+        ['#37A2DA', '#32C5E9', '#9FE6B8', '#FFDB5C', '#ff9f7f', '#fb7293', '#e7bcf3', '#8378EA', '#96BFFF'],
+        colorAll
+    ]
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var contrastColor = '#eee';
+var axisCommon = function () {
+    return {
+        axisLine: {
+            lineStyle: {
+                color: contrastColor
+            }
+        },
+        axisTick: {
+            lineStyle: {
+                color: contrastColor
+            }
+        },
+        axisLabel: {
+            textStyle: {
+                color: contrastColor
+            }
+        },
+        splitLine: {
+            lineStyle: {
+                type: 'dashed',
+                color: '#aaa'
+            }
+        },
+        splitArea: {
+            areaStyle: {
+                color: contrastColor
+            }
+        }
+    };
+};
+
+var colorPalette = [
+    '#dd6b66', '#759aa0', '#e69d87', '#8dc1a9', '#ea7e53',
+    '#eedd78', '#73a373', '#73b9bc', '#7289ab', '#91ca8c', '#f49f42'
+];
+var theme = {
+    color: colorPalette,
+    backgroundColor: '#333',
+    tooltip: {
+        axisPointer: {
+            lineStyle: {
+                color: contrastColor
+            },
+            crossStyle: {
+                color: contrastColor
+            }
+        }
+    },
+    legend: {
+        textStyle: {
+            color: contrastColor
+        }
+    },
+    textStyle: {
+        color: contrastColor
+    },
+    title: {
+        textStyle: {
+            color: contrastColor
+        }
+    },
+    toolbox: {
+        iconStyle: {
+            normal: {
+                borderColor: contrastColor
+            }
+        }
+    },
+    dataZoom: {
+        textStyle: {
+            color: contrastColor
+        }
+    },
+    visualMap: {
+        textStyle: {
+            color: contrastColor
+        }
+    },
+    timeline: {
+        lineStyle: {
+            color: contrastColor
+        },
+        itemStyle: {
+            normal: {
+                color: colorPalette[1]
+            }
+        },
+        label: {
+            normal: {
+                textStyle: {
+                    color: contrastColor
+                }
+            }
+        },
+        controlStyle: {
+            normal: {
+                color: contrastColor,
+                borderColor: contrastColor
+            }
+        }
+    },
+    timeAxis: axisCommon(),
+    logAxis: axisCommon(),
+    valueAxis: axisCommon(),
+    categoryAxis: axisCommon(),
+
+    line: {
+        symbol: 'circle'
+    },
+    graph: {
+        color: colorPalette
+    },
+    gauge: {
+        title: {
+            textStyle: {
+                color: contrastColor
+            }
+        }
+    },
+    candlestick: {
+        itemStyle: {
+            normal: {
+                color: '#FD1050',
+                color0: '#0CF49B',
+                borderColor: '#FD1050',
+                borderColor0: '#0CF49B'
+            }
+        }
+    }
+};
+theme.categoryAxis.splitLine.show = false;
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
