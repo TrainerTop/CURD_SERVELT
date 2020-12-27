@@ -25307,3 +25307,274 @@ proto.prepareStageTasks = function () {
 
         handler.reset && createSeriesStageTask(this, handler, record, ecModel, api);
         handler.overallReset && createOverallStageTask(this, handler, record, ecModel, api);
+    }, this);
+};
+
+proto.prepareView = function (view, model, ecModel, api) {
+    var renderTask = view.renderTask;
+    var context = renderTask.context;
+
+    context.model = model;
+    context.ecModel = ecModel;
+    context.api = api;
+
+    renderTask.__block = !view.incrementalPrepareRender;
+
+    pipe(this, model, renderTask);
+};
+
+
+proto.performDataProcessorTasks = function (ecModel, payload) {
+    // If we do not use `block` here, it should be considered when to update modes.
+    performStageTasks(this, this._dataProcessorHandlers, ecModel, payload, {block: true});
+};
+
+// opt
+// opt.visualType: 'visual' or 'layout'
+// opt.setDirty
+proto.performVisualTasks = function (ecModel, payload, opt) {
+    performStageTasks(this, this._visualHandlers, ecModel, payload, opt);
+};
+
+function performStageTasks(scheduler, stageHandlers, ecModel, payload, opt) {
+    opt = opt || {};
+    var unfinished;
+
+    each$1(stageHandlers, function (stageHandler, idx) {
+        if (opt.visualType && opt.visualType !== stageHandler.visualType) {
+            return;
+        }
+
+        var stageHandlerRecord = scheduler._stageTaskMap.get(stageHandler.uid);
+        var seriesTaskMap = stageHandlerRecord.seriesTaskMap;
+        var overallTask = stageHandlerRecord.overallTask;
+
+        if (overallTask) {
+            var overallNeedDirty;
+            var agentStubMap = overallTask.agentStubMap;
+            agentStubMap.each(function (stub) {
+                if (needSetDirty(opt, stub)) {
+                    stub.dirty();
+                    overallNeedDirty = true;
+                }
+            });
+            overallNeedDirty && overallTask.dirty();
+            updatePayload(overallTask, payload);
+            var performArgs = scheduler.getPerformArgs(overallTask, opt.block);
+            // Execute stubs firstly, which may set the overall task dirty,
+            // then execute the overall task. And stub will call seriesModel.setData,
+            // which ensures that in the overallTask seriesModel.getData() will not
+            // return incorrect data.
+            agentStubMap.each(function (stub) {
+                stub.perform(performArgs);
+            });
+            unfinished |= overallTask.perform(performArgs);
+        }
+        else if (seriesTaskMap) {
+            seriesTaskMap.each(function (task, pipelineId) {
+                if (needSetDirty(opt, task)) {
+                    task.dirty();
+                }
+                var performArgs = scheduler.getPerformArgs(task, opt.block);
+                performArgs.skip = !stageHandler.performRawSeries
+                    && ecModel.isSeriesFiltered(task.context.model);
+                updatePayload(task, payload);
+                unfinished |= task.perform(performArgs);
+            });
+        }
+    });
+
+    function needSetDirty(opt, task) {
+        return opt.setDirty && (!opt.dirtyMap || opt.dirtyMap.get(task.__pipeline.id));
+    }
+
+    scheduler.unfinished |= unfinished;
+}
+
+proto.performSeriesTasks = function (ecModel) {
+    var unfinished;
+
+    ecModel.eachSeries(function (seriesModel) {
+        // Progress to the end for dataInit and dataRestore.
+        unfinished |= seriesModel.dataTask.perform();
+    });
+
+    this.unfinished |= unfinished;
+};
+
+proto.plan = function () {
+    // Travel pipelines, check block.
+    this._pipelineMap.each(function (pipeline) {
+        var task = pipeline.tail;
+        do {
+            if (task.__block) {
+                pipeline.blockIndex = task.__idxInPipeline;
+                break;
+            }
+            task = task.getUpstream();
+        }
+        while (task);
+    });
+};
+
+var updatePayload = proto.updatePayload = function (task, payload) {
+    payload !== 'remain' && (task.context.payload = payload);
+};
+
+function createSeriesStageTask(scheduler, stageHandler, stageHandlerRecord, ecModel, api) {
+    var seriesTaskMap = stageHandlerRecord.seriesTaskMap
+        || (stageHandlerRecord.seriesTaskMap = createHashMap());
+    var seriesType = stageHandler.seriesType;
+    var getTargetSeries = stageHandler.getTargetSeries;
+
+    // If a stageHandler should cover all series, `createOnAllSeries` should be declared mandatorily,
+    // to avoid some typo or abuse. Otherwise if an extension do not specify a `seriesType`,
+    // it works but it may cause other irrelevant charts blocked.
+    if (stageHandler.createOnAllSeries) {
+        ecModel.eachRawSeries(create);
+    }
+    else if (seriesType) {
+        ecModel.eachRawSeriesByType(seriesType, create);
+    }
+    else if (getTargetSeries) {
+        getTargetSeries(ecModel, api).each(create);
+    }
+
+    function create(seriesModel) {
+        var pipelineId = seriesModel.uid;
+
+        // Init tasks for each seriesModel only once.
+        // Reuse original task instance.
+        var task = seriesTaskMap.get(pipelineId)
+            || seriesTaskMap.set(pipelineId, createTask({
+                plan: seriesTaskPlan,
+                reset: seriesTaskReset,
+                count: seriesTaskCount
+            }));
+        task.context = {
+            model: seriesModel,
+            ecModel: ecModel,
+            api: api,
+            useClearVisual: stageHandler.isVisual && !stageHandler.isLayout,
+            plan: stageHandler.plan,
+            reset: stageHandler.reset,
+            scheduler: scheduler
+        };
+        pipe(scheduler, seriesModel, task);
+    }
+
+    // Clear unused series tasks.
+    var pipelineMap = scheduler._pipelineMap;
+    seriesTaskMap.each(function (task, pipelineId) {
+        if (!pipelineMap.get(pipelineId)) {
+            task.dispose();
+            seriesTaskMap.removeKey(pipelineId);
+        }
+    });
+}
+
+function createOverallStageTask(scheduler, stageHandler, stageHandlerRecord, ecModel, api) {
+    var overallTask = stageHandlerRecord.overallTask = stageHandlerRecord.overallTask
+        // For overall task, the function only be called on reset stage.
+        || createTask({reset: overallTaskReset});
+
+    overallTask.context = {
+        ecModel: ecModel,
+        api: api,
+        overallReset: stageHandler.overallReset,
+        scheduler: scheduler
+    };
+
+    // Reuse orignal stubs.
+    var agentStubMap = overallTask.agentStubMap = overallTask.agentStubMap || createHashMap();
+
+    var seriesType = stageHandler.seriesType;
+    var getTargetSeries = stageHandler.getTargetSeries;
+    var overallProgress = true;
+    var modifyOutputEnd = stageHandler.modifyOutputEnd;
+
+    // An overall task with seriesType detected or has `getTargetSeries`, we add
+    // stub in each pipelines, it will set the overall task dirty when the pipeline
+    // progress. Moreover, to avoid call the overall task each frame (too frequent),
+    // we set the pipeline block.
+    if (seriesType) {
+        ecModel.eachRawSeriesByType(seriesType, createStub);
+    }
+    else if (getTargetSeries) {
+        getTargetSeries(ecModel, api).each(createStub);
+    }
+    // Otherwise, (usually it is legancy case), the overall task will only be
+    // executed when upstream dirty. Otherwise the progressive rendering of all
+    // pipelines will be disabled unexpectedly. But it still needs stubs to receive
+    // dirty info from upsteam.
+    else {
+        overallProgress = false;
+        each$1(ecModel.getSeries(), createStub);
+    }
+
+    function createStub(seriesModel) {
+        var pipelineId = seriesModel.uid;
+        var stub = agentStubMap.get(pipelineId);
+        if (!stub) {
+            stub = agentStubMap.set(pipelineId, createTask(
+                {reset: stubReset, onDirty: stubOnDirty}
+            ));
+            // When the result of `getTargetSeries` changed, the overallTask
+            // should be set as dirty and re-performed.
+            overallTask.dirty();
+        }
+        stub.context = {
+            model: seriesModel,
+            overallProgress: overallProgress,
+            modifyOutputEnd: modifyOutputEnd
+        };
+        stub.agent = overallTask;
+        stub.__block = overallProgress;
+
+        pipe(scheduler, seriesModel, stub);
+    }
+
+    // Clear unused stubs.
+    var pipelineMap = scheduler._pipelineMap;
+    agentStubMap.each(function (stub, pipelineId) {
+        if (!pipelineMap.get(pipelineId)) {
+            stub.dispose();
+            // When the result of `getTargetSeries` changed, the overallTask
+            // should be set as dirty and re-performed.
+            overallTask.dirty();
+            agentStubMap.removeKey(pipelineId);
+        }
+    });
+}
+
+function overallTaskReset(context) {
+    context.overallReset(
+        context.ecModel, context.api, context.payload
+    );
+}
+
+function stubReset(context, upstreamContext) {
+    return context.overallProgress && stubProgress;
+}
+
+function stubProgress() {
+    this.agent.dirty();
+    this.getDownstream().dirty();
+}
+
+function stubOnDirty() {
+    this.agent && this.agent.dirty();
+}
+
+function seriesTaskPlan(context) {
+    return context.plan && context.plan(
+        context.model, context.ecModel, context.api, context.payload
+    );
+}
+
+function seriesTaskReset(context) {
+    if (context.useClearVisual) {
+        context.data.clearAllVisual();
+    }
+    var resetDefines = context.resetDefines = normalizeToArray(context.reset(
+        context.model, context.ecModel, context.api, context.payload
