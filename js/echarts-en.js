@@ -26392,3 +26392,284 @@ function inheritStyle(parent, child) {
         defaults(child.__inheritedStyle, parent.__inheritedStyle);
     }
 }
+
+function parsePoints(pointsString) {
+    var list = trim(pointsString).split(DILIMITER_REG);
+    var points = [];
+
+    for (var i = 0; i < list.length; i += 2) {
+        var x = parseFloat(list[i]);
+        var y = parseFloat(list[i + 1]);
+        points.push([x, y]);
+    }
+    return points;
+}
+
+var attributesMap = {
+    'fill': 'fill',
+    'stroke': 'stroke',
+    'stroke-width': 'lineWidth',
+    'opacity': 'opacity',
+    'fill-opacity': 'fillOpacity',
+    'stroke-opacity': 'strokeOpacity',
+    'stroke-dasharray': 'lineDash',
+    'stroke-dashoffset': 'lineDashOffset',
+    'stroke-linecap': 'lineCap',
+    'stroke-linejoin': 'lineJoin',
+    'stroke-miterlimit': 'miterLimit',
+    'font-family': 'fontFamily',
+    'font-size': 'fontSize',
+    'font-style': 'fontStyle',
+    'font-weight': 'fontWeight',
+
+    'text-align': 'textAlign',
+    'alignment-baseline': 'textBaseline'
+};
+
+function parseAttributes(xmlNode, el, defs, onlyInlineStyle) {
+    var zrStyle = el.__inheritedStyle || {};
+    var isTextEl = el.type === 'text';
+
+    // TODO Shadow
+    if (xmlNode.nodeType === 1) {
+        parseTransformAttribute(xmlNode, el);
+
+        extend(zrStyle, parseStyleAttribute(xmlNode));
+
+        if (!onlyInlineStyle) {
+            for (var svgAttrName in attributesMap) {
+                if (attributesMap.hasOwnProperty(svgAttrName)) {
+                    var attrValue = xmlNode.getAttribute(svgAttrName);
+                    if (attrValue != null) {
+                        zrStyle[attributesMap[svgAttrName]] = attrValue;
+                    }
+                }
+            }
+        }
+    }
+
+    var elFillProp = isTextEl ? 'textFill' : 'fill';
+    var elStrokeProp = isTextEl ? 'textStroke' : 'stroke';
+
+    el.style = el.style || new Style();
+    var elStyle = el.style;
+
+    zrStyle.fill != null && elStyle.set(elFillProp, getPaint(zrStyle.fill, defs));
+    zrStyle.stroke != null && elStyle.set(elStrokeProp, getPaint(zrStyle.stroke, defs));
+
+    each$1([
+        'lineWidth', 'opacity', 'fillOpacity', 'strokeOpacity', 'miterLimit', 'fontSize'
+    ], function (propName) {
+        var elPropName = (propName === 'lineWidth' && isTextEl) ? 'textStrokeWidth' : propName;
+        zrStyle[propName] != null && elStyle.set(elPropName, parseFloat(zrStyle[propName]));
+    });
+
+    if (!zrStyle.textBaseline || zrStyle.textBaseline === 'auto') {
+        zrStyle.textBaseline = 'alphabetic';
+    }
+    if (zrStyle.textBaseline === 'alphabetic') {
+        zrStyle.textBaseline = 'bottom';
+    }
+    if (zrStyle.textAlign === 'start') {
+        zrStyle.textAlign = 'left';
+    }
+    if (zrStyle.textAlign === 'end') {
+        zrStyle.textAlign = 'right';
+    }
+
+    each$1(['lineDashOffset', 'lineCap', 'lineJoin',
+        'fontWeight', 'fontFamily', 'fontStyle', 'textAlign', 'textBaseline'
+    ], function (propName) {
+        zrStyle[propName] != null && elStyle.set(propName, zrStyle[propName]);
+    });
+
+    if (zrStyle.lineDash) {
+        el.style.lineDash = trim(zrStyle.lineDash).split(DILIMITER_REG);
+    }
+
+    if (elStyle[elStrokeProp] && elStyle[elStrokeProp] !== 'none') {
+        // enable stroke
+        el[elStrokeProp] = true;
+    }
+
+    el.__inheritedStyle = zrStyle;
+}
+
+
+var urlRegex = /url\(\s*#(.*?)\)/;
+function getPaint(str, defs) {
+    // if (str === 'none') {
+    //     return;
+    // }
+    var urlMatch = defs && str && str.match(urlRegex);
+    if (urlMatch) {
+        var url = trim(urlMatch[1]);
+        var def = defs[url];
+        return def;
+    }
+    return str;
+}
+
+var transformRegex = /(translate|scale|rotate|skewX|skewY|matrix)\(([\-\s0-9\.e,]*)\)/g;
+
+function parseTransformAttribute(xmlNode, node) {
+    var transform = xmlNode.getAttribute('transform');
+    if (transform) {
+        transform = transform.replace(/,/g, ' ');
+        var m = null;
+        var transformOps = [];
+        transform.replace(transformRegex, function (str, type, value) {
+            transformOps.push(type, value);
+        });
+        for (var i = transformOps.length - 1; i > 0; i -= 2) {
+            var value = transformOps[i];
+            var type = transformOps[i - 1];
+            m = m || create$1();
+            switch (type) {
+                case 'translate':
+                    value = trim(value).split(DILIMITER_REG);
+                    translate(m, m, [parseFloat(value[0]), parseFloat(value[1] || 0)]);
+                    break;
+                case 'scale':
+                    value = trim(value).split(DILIMITER_REG);
+                    scale$1(m, m, [parseFloat(value[0]), parseFloat(value[1] || value[0])]);
+                    break;
+                case 'rotate':
+                    value = trim(value).split(DILIMITER_REG);
+                    rotate(m, m, parseFloat(value[0]));
+                    break;
+                case 'skew':
+                    value = trim(value).split(DILIMITER_REG);
+                    console.warn('Skew transform is not supported yet');
+                    break;
+                case 'matrix':
+                    var value = trim(value).split(DILIMITER_REG);
+                    m[0] = parseFloat(value[0]);
+                    m[1] = parseFloat(value[1]);
+                    m[2] = parseFloat(value[2]);
+                    m[3] = parseFloat(value[3]);
+                    m[4] = parseFloat(value[4]);
+                    m[5] = parseFloat(value[5]);
+                    break;
+            }
+        }
+        node.setLocalTransform(m);
+    }
+}
+
+// Value may contain space.
+var styleRegex = /([^\s:;]+)\s*:\s*([^:;]+)/g;
+function parseStyleAttribute(xmlNode) {
+    var style = xmlNode.getAttribute('style');
+    var result = {};
+
+    if (!style) {
+        return result;
+    }
+
+    var styleList = {};
+    styleRegex.lastIndex = 0;
+    var styleRegResult;
+    while ((styleRegResult = styleRegex.exec(style)) != null) {
+        styleList[styleRegResult[1]] = styleRegResult[2];
+    }
+
+    for (var svgAttrName in attributesMap) {
+        if (attributesMap.hasOwnProperty(svgAttrName) && styleList[svgAttrName] != null) {
+            result[attributesMap[svgAttrName]] = styleList[svgAttrName];
+        }
+    }
+
+    return result;
+}
+
+/**
+ * @param {Array.<number>} viewBoxRect
+ * @param {number} width
+ * @param {number} height
+ * @return {Object} {scale, position}
+ */
+function makeViewBoxTransform(viewBoxRect, width, height) {
+    var scaleX = width / viewBoxRect.width;
+    var scaleY = height / viewBoxRect.height;
+    var scale = Math.min(scaleX, scaleY);
+    // preserveAspectRatio 'xMidYMid'
+    var viewBoxScale = [scale, scale];
+    var viewBoxPosition = [
+        -(viewBoxRect.x + viewBoxRect.width / 2) * scale + width / 2,
+        -(viewBoxRect.y + viewBoxRect.height / 2) * scale + height / 2
+    ];
+
+    return {
+        scale: viewBoxScale,
+        position: viewBoxPosition
+    };
+}
+
+/**
+ * @param {string|XMLElement} xml
+ * @param {Object} [opt]
+ * @param {number} [opt.width] Default width if svg width not specified or is a percent value.
+ * @param {number} [opt.height] Default height if svg height not specified or is a percent value.
+ * @param {boolean} [opt.ignoreViewBox]
+ * @param {boolean} [opt.ignoreRootClip]
+ * @return {Object} result:
+ * {
+ *     root: Group, The root of the the result tree of zrender shapes,
+ *     width: number, the viewport width of the SVG,
+ *     height: number, the viewport height of the SVG,
+ *     viewBoxRect: {x, y, width, height}, the declared viewBox rect of the SVG, if exists,
+ *     viewBoxTransform: the {scale, position} calculated by viewBox and viewport, is exists.
+ * }
+ */
+function parseSVG(xml, opt) {
+    var parser = new SVGParser();
+    return parser.parse(xml, opt);
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var storage = createHashMap();
+
+// For minimize the code size of common echarts package,
+// do not put too much logic in this module.
+
+var mapDataStorage = {
+
+    // The format of record: see `echarts.registerMap`.
+    // Compatible with previous `echarts.registerMap`.
+    registerMap: function (mapName, rawGeoJson, rawSpecialAreas) {
+
+        var records;
+
+        if (isArray(rawGeoJson)) {
+            records = rawGeoJson;
+        }
+        else if (rawGeoJson.svg) {
+            records = [{
+                type: 'svg',
+                source: rawGeoJson.svg,
+                specialAreas: rawGeoJson.specialAreas
+            }];
+        }
+        else {
+            // Backward compatibility.
+            if (rawGeoJson.geoJson && !rawGeoJson.features) {
+                rawSpecialAreas = rawGeoJson.specialAreas;
