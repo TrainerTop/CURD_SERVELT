@@ -26673,3 +26673,300 @@ var mapDataStorage = {
             // Backward compatibility.
             if (rawGeoJson.geoJson && !rawGeoJson.features) {
                 rawSpecialAreas = rawGeoJson.specialAreas;
+                rawGeoJson = rawGeoJson.geoJson;
+            }
+            records = [{
+                type: 'geoJSON',
+                source: rawGeoJson,
+                specialAreas: rawSpecialAreas
+            }];
+        }
+
+        each$1(records, function (record) {
+            var type = record.type;
+            type === 'geoJson' && (type = record.type = 'geoJSON');
+
+            var parse = parsers[type];
+
+            if (__DEV__) {
+                assert$1(parse, 'Illegal map type: ' + type);
+            }
+
+            parse(record);
+        });
+
+        return storage.set(mapName, records);
+    },
+
+    retrieveMap: function (mapName) {
+        return storage.get(mapName);
+    }
+
+};
+
+var parsers = {
+
+    geoJSON: function (record) {
+        var source = record.source;
+        record.geoJSON = !isString(source)
+            ? source
+            : (typeof JSON !== 'undefined' && JSON.parse)
+            ? JSON.parse(source)
+            : (new Function('return (' + source + ');'))();
+    },
+
+    // Only perform parse to XML object here, which might be time
+    // consiming for large SVG.
+    // Although convert XML to zrender element is also time consiming,
+    // if we do it here, the clone of zrender elements has to be
+    // required. So we do it once for each geo instance, util real
+    // performance issues call for optimizing it.
+    svg: function (record) {
+        record.svgXML = parseXML(record.source);
+    }
+
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+var assert = assert$1;
+var each = each$1;
+var isFunction = isFunction$1;
+var isObject = isObject$1;
+var parseClassType = ComponentModel.parseClassType;
+
+var version = '4.2.1';
+
+var dependencies = {
+    zrender: '4.0.6'
+};
+
+var TEST_FRAME_REMAIN_TIME = 1;
+
+var PRIORITY_PROCESSOR_FILTER = 1000;
+var PRIORITY_PROCESSOR_STATISTIC = 5000;
+
+var PRIORITY_VISUAL_LAYOUT = 1000;
+var PRIORITY_VISUAL_GLOBAL = 2000;
+var PRIORITY_VISUAL_CHART = 3000;
+var PRIORITY_VISUAL_COMPONENT = 4000;
+// FIXME
+// necessary?
+var PRIORITY_VISUAL_BRUSH = 5000;
+
+var PRIORITY = {
+    PROCESSOR: {
+        FILTER: PRIORITY_PROCESSOR_FILTER,
+        STATISTIC: PRIORITY_PROCESSOR_STATISTIC
+    },
+    VISUAL: {
+        LAYOUT: PRIORITY_VISUAL_LAYOUT,
+        GLOBAL: PRIORITY_VISUAL_GLOBAL,
+        CHART: PRIORITY_VISUAL_CHART,
+        COMPONENT: PRIORITY_VISUAL_COMPONENT,
+        BRUSH: PRIORITY_VISUAL_BRUSH
+    }
+};
+
+// Main process have three entries: `setOption`, `dispatchAction` and `resize`,
+// where they must not be invoked nestedly, except the only case: invoke
+// dispatchAction with updateMethod "none" in main process.
+// This flag is used to carry out this rule.
+// All events will be triggered out side main process (i.e. when !this[IN_MAIN_PROCESS]).
+var IN_MAIN_PROCESS = '__flagInMainProcess';
+var OPTION_UPDATED = '__optionUpdated';
+var ACTION_REG = /^[a-zA-Z0-9_]+$/;
+
+
+function createRegisterEventWithLowercaseName(method) {
+    return function (eventName, handler, context) {
+        // Event name is all lowercase
+        eventName = eventName && eventName.toLowerCase();
+        Eventful.prototype[method].call(this, eventName, handler, context);
+    };
+}
+
+/**
+ * @module echarts~MessageCenter
+ */
+function MessageCenter() {
+    Eventful.call(this);
+}
+MessageCenter.prototype.on = createRegisterEventWithLowercaseName('on');
+MessageCenter.prototype.off = createRegisterEventWithLowercaseName('off');
+MessageCenter.prototype.one = createRegisterEventWithLowercaseName('one');
+mixin(MessageCenter, Eventful);
+
+/**
+ * @module echarts~ECharts
+ */
+function ECharts(dom, theme$$1, opts) {
+    opts = opts || {};
+
+    // Get theme by name
+    if (typeof theme$$1 === 'string') {
+        theme$$1 = themeStorage[theme$$1];
+    }
+
+    /**
+     * @type {string}
+     */
+    this.id;
+
+    /**
+     * Group id
+     * @type {string}
+     */
+    this.group;
+
+    /**
+     * @type {HTMLElement}
+     * @private
+     */
+    this._dom = dom;
+
+    var defaultRenderer = 'canvas';
+    if (__DEV__) {
+        defaultRenderer = (
+            typeof window === 'undefined' ? global : window
+        ).__ECHARTS__DEFAULT__RENDERER__ || defaultRenderer;
+    }
+
+    /**
+     * @type {module:zrender/ZRender}
+     * @private
+     */
+    var zr = this._zr = init$1(dom, {
+        renderer: opts.renderer || defaultRenderer,
+        devicePixelRatio: opts.devicePixelRatio,
+        width: opts.width,
+        height: opts.height
+    });
+
+    /**
+     * Expect 60 pfs.
+     * @type {Function}
+     * @private
+     */
+    this._throttledZrFlush = throttle(bind(zr.flush, zr), 17);
+
+    var theme$$1 = clone(theme$$1);
+    theme$$1 && backwardCompat(theme$$1, true);
+    /**
+     * @type {Object}
+     * @private
+     */
+    this._theme = theme$$1;
+
+    /**
+     * @type {Array.<module:echarts/view/Chart>}
+     * @private
+     */
+    this._chartsViews = [];
+
+    /**
+     * @type {Object.<string, module:echarts/view/Chart>}
+     * @private
+     */
+    this._chartsMap = {};
+
+    /**
+     * @type {Array.<module:echarts/view/Component>}
+     * @private
+     */
+    this._componentsViews = [];
+
+    /**
+     * @type {Object.<string, module:echarts/view/Component>}
+     * @private
+     */
+    this._componentsMap = {};
+
+    /**
+     * @type {module:echarts/CoordinateSystem}
+     * @private
+     */
+    this._coordSysMgr = new CoordinateSystemManager();
+
+    /**
+     * @type {module:echarts/ExtensionAPI}
+     * @private
+     */
+    var api = this._api = createExtensionAPI(this);
+
+    // Sort on demand
+    function prioritySortFunc(a, b) {
+        return a.__prio - b.__prio;
+    }
+    sort(visualFuncs, prioritySortFunc);
+    sort(dataProcessorFuncs, prioritySortFunc);
+
+    /**
+     * @type {module:echarts/stream/Scheduler}
+     */
+    this._scheduler = new Scheduler(this, api, dataProcessorFuncs, visualFuncs);
+
+    Eventful.call(this, this._ecEventProcessor = new EventProcessor());
+
+    /**
+     * @type {module:echarts~MessageCenter}
+     * @private
+     */
+    this._messageCenter = new MessageCenter();
+
+    // Init mouse events
+    this._initEvents();
+
+    // In case some people write `window.onresize = chart.resize`
+    this.resize = bind(this.resize, this);
+
+    // Can't dispatch action during rendering procedure
+    this._pendingActions = [];
+
+    zr.animation.on('frame', this._onframe, this);
+
+    bindRenderedEvent(zr, this);
+
+    // ECharts instance can be used as value.
+    setAsPrimitive(this);
+}
+
+var echartsProto = ECharts.prototype;
+
+echartsProto._onframe = function () {
+    if (this._disposed) {
+        return;
+    }
+
+    var scheduler = this._scheduler;
+
+    // Lazy update
+    if (this[OPTION_UPDATED]) {
+        var silent = this[OPTION_UPDATED].silent;
+
+        this[IN_MAIN_PROCESS] = true;
+
+        prepare(this);
+        updateMethods.update.call(this);
+
+        this[IN_MAIN_PROCESS] = false;
+
+        this[OPTION_UPDATED] = false;
+
+        flushPendingActions.call(this, silent);
