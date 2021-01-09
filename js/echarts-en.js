@@ -27780,3 +27780,246 @@ function updateStreamModes(ecIns, ecModel) {
  */
 echartsProto.showLoading = function (name, cfg) {
     if (isObject(name)) {
+        cfg = name;
+        name = '';
+    }
+    name = name || 'default';
+
+    this.hideLoading();
+    if (!loadingEffects[name]) {
+        if (__DEV__) {
+            console.warn('Loading effects ' + name + ' not exists.');
+        }
+        return;
+    }
+    var el = loadingEffects[name](this._api, cfg);
+    var zr = this._zr;
+    this._loadingFX = el;
+
+    zr.add(el);
+};
+
+/**
+ * Hide loading effect
+ */
+echartsProto.hideLoading = function () {
+    this._loadingFX && this._zr.remove(this._loadingFX);
+    this._loadingFX = null;
+};
+
+/**
+ * @param {Object} eventObj
+ * @return {Object}
+ */
+echartsProto.makeActionFromEvent = function (eventObj) {
+    var payload = extend({}, eventObj);
+    payload.type = eventActionMap[eventObj.type];
+    return payload;
+};
+
+/**
+ * @pubilc
+ * @param {Object} payload
+ * @param {string} [payload.type] Action type
+ * @param {Object|boolean} [opt] If pass boolean, means opt.silent
+ * @param {boolean} [opt.silent=false] Whether trigger events.
+ * @param {boolean} [opt.flush=undefined]
+ *                  true: Flush immediately, and then pixel in canvas can be fetched
+ *                      immediately. Caution: it might affect performance.
+ *                  false: Not not flush.
+ *                  undefined: Auto decide whether perform flush.
+ */
+echartsProto.dispatchAction = function (payload, opt) {
+    if (!isObject(opt)) {
+        opt = {silent: !!opt};
+    }
+
+    if (!actions[payload.type]) {
+        return;
+    }
+
+    // Avoid dispatch action before setOption. Especially in `connect`.
+    if (!this._model) {
+        return;
+    }
+
+    // May dispatchAction in rendering procedure
+    if (this[IN_MAIN_PROCESS]) {
+        this._pendingActions.push(payload);
+        return;
+    }
+
+    doDispatchAction.call(this, payload, opt.silent);
+
+    if (opt.flush) {
+        this._zr.flush(true);
+    }
+    else if (opt.flush !== false && env$1.browser.weChat) {
+        // In WeChat embeded browser, `requestAnimationFrame` and `setInterval`
+        // hang when sliding page (on touch event), which cause that zr does not
+        // refresh util user interaction finished, which is not expected.
+        // But `dispatchAction` may be called too frequently when pan on touch
+        // screen, which impacts performance if do not throttle them.
+        this._throttledZrFlush();
+    }
+
+    flushPendingActions.call(this, opt.silent);
+
+    triggerUpdatedEvent.call(this, opt.silent);
+};
+
+function doDispatchAction(payload, silent) {
+    var payloadType = payload.type;
+    var escapeConnect = payload.escapeConnect;
+    var actionWrap = actions[payloadType];
+    var actionInfo = actionWrap.actionInfo;
+
+    var cptType = (actionInfo.update || 'update').split(':');
+    var updateMethod = cptType.pop();
+    cptType = cptType[0] != null && parseClassType(cptType[0]);
+
+    this[IN_MAIN_PROCESS] = true;
+
+    var payloads = [payload];
+    var batched = false;
+    // Batch action
+    if (payload.batch) {
+        batched = true;
+        payloads = map(payload.batch, function (item) {
+            item = defaults(extend({}, item), payload);
+            item.batch = null;
+            return item;
+        });
+    }
+
+    var eventObjBatch = [];
+    var eventObj;
+    var isHighDown = payloadType === 'highlight' || payloadType === 'downplay';
+
+    each(payloads, function (batchItem) {
+        // Action can specify the event by return it.
+        eventObj = actionWrap.action(batchItem, this._model, this._api);
+        // Emit event outside
+        eventObj = eventObj || extend({}, batchItem);
+        // Convert type to eventType
+        eventObj.type = actionInfo.event || eventObj.type;
+        eventObjBatch.push(eventObj);
+
+        // light update does not perform data process, layout and visual.
+        if (isHighDown) {
+            // method, payload, mainType, subType
+            updateDirectly(this, updateMethod, batchItem, 'series');
+        }
+        else if (cptType) {
+            updateDirectly(this, updateMethod, batchItem, cptType.main, cptType.sub);
+        }
+    }, this);
+
+    if (updateMethod !== 'none' && !isHighDown && !cptType) {
+        // Still dirty
+        if (this[OPTION_UPDATED]) {
+            // FIXME Pass payload ?
+            prepare(this);
+            updateMethods.update.call(this, payload);
+            this[OPTION_UPDATED] = false;
+        }
+        else {
+            updateMethods[updateMethod].call(this, payload);
+        }
+    }
+
+    // Follow the rule of action batch
+    if (batched) {
+        eventObj = {
+            type: actionInfo.event || payloadType,
+            escapeConnect: escapeConnect,
+            batch: eventObjBatch
+        };
+    }
+    else {
+        eventObj = eventObjBatch[0];
+    }
+
+    this[IN_MAIN_PROCESS] = false;
+
+    !silent && this._messageCenter.trigger(eventObj.type, eventObj);
+}
+
+function flushPendingActions(silent) {
+    var pendingActions = this._pendingActions;
+    while (pendingActions.length) {
+        var payload = pendingActions.shift();
+        doDispatchAction.call(this, payload, silent);
+    }
+}
+
+function triggerUpdatedEvent(silent) {
+    !silent && this.trigger('updated');
+}
+
+/**
+ * Event `rendered` is triggered when zr
+ * rendered. It is useful for realtime
+ * snapshot (reflect animation).
+ *
+ * Event `finished` is triggered when:
+ * (1) zrender rendering finished.
+ * (2) initial animation finished.
+ * (3) progressive rendering finished.
+ * (4) no pending action.
+ * (5) no delayed setOption needs to be processed.
+ */
+function bindRenderedEvent(zr, ecIns) {
+    zr.on('rendered', function () {
+
+        ecIns.trigger('rendered');
+
+        // The `finished` event should not be triggered repeatly,
+        // so it should only be triggered when rendering indeed happend
+        // in zrender. (Consider the case that dipatchAction is keep
+        // triggering when mouse move).
+        if (
+            // Although zr is dirty if initial animation is not finished
+            // and this checking is called on frame, we also check
+            // animation finished for robustness.
+            zr.animation.isFinished()
+            && !ecIns[OPTION_UPDATED]
+            && !ecIns._scheduler.unfinished
+            && !ecIns._pendingActions.length
+        ) {
+            ecIns.trigger('finished');
+        }
+    });
+}
+
+/**
+ * @param {Object} params
+ * @param {number} params.seriesIndex
+ * @param {Array|TypedArray} params.data
+ */
+echartsProto.appendData = function (params) {
+    var seriesIndex = params.seriesIndex;
+    var ecModel = this.getModel();
+    var seriesModel = ecModel.getSeriesByIndex(seriesIndex);
+
+    if (__DEV__) {
+        assert(params.data && seriesModel);
+    }
+
+    seriesModel.appendData(params);
+
+    // Note: `appendData` does not support that update extent of coordinate
+    // system, util some scenario require that. In the expected usage of
+    // `appendData`, the initial extent of coordinate system should better
+    // be fixed by axis `min`/`max` setting or initial data, otherwise if
+    // the extent changed while `appendData`, the location of the painted
+    // graphic elements have to be changed, which make the usage of
+    // `appendData` meaningless.
+
+    this._scheduler.unfinished = true;
+};
+
+/**
+ * Register event
+ * @method
+ */
