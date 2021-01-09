@@ -26970,3 +26970,260 @@ echartsProto._onframe = function () {
         this[OPTION_UPDATED] = false;
 
         flushPendingActions.call(this, silent);
+
+        triggerUpdatedEvent.call(this, silent);
+    }
+    // Avoid do both lazy update and progress in one frame.
+    else if (scheduler.unfinished) {
+        // Stream progress.
+        var remainTime = TEST_FRAME_REMAIN_TIME;
+        var ecModel = this._model;
+        var api = this._api;
+        scheduler.unfinished = false;
+        do {
+            var startTime = +new Date();
+
+            scheduler.performSeriesTasks(ecModel);
+
+            // Currently dataProcessorFuncs do not check threshold.
+            scheduler.performDataProcessorTasks(ecModel);
+
+            updateStreamModes(this, ecModel);
+
+            // Do not update coordinate system here. Because that coord system update in
+            // each frame is not a good user experience. So we follow the rule that
+            // the extent of the coordinate system is determin in the first frame (the
+            // frame is executed immedietely after task reset.
+            // this._coordSysMgr.update(ecModel, api);
+
+            // console.log('--- ec frame visual ---', remainTime);
+            scheduler.performVisualTasks(ecModel);
+
+            renderSeries(this, this._model, api, 'remain');
+
+            remainTime -= (+new Date() - startTime);
+        }
+        while (remainTime > 0 && scheduler.unfinished);
+
+        // Call flush explicitly for trigger finished event.
+        if (!scheduler.unfinished) {
+            this._zr.flush();
+        }
+        // Else, zr flushing be ensue within the same frame,
+        // because zr flushing is after onframe event.
+    }
+};
+
+/**
+ * @return {HTMLElement}
+ */
+echartsProto.getDom = function () {
+    return this._dom;
+};
+
+/**
+ * @return {module:zrender~ZRender}
+ */
+echartsProto.getZr = function () {
+    return this._zr;
+};
+
+/**
+ * Usage:
+ * chart.setOption(option, notMerge, lazyUpdate);
+ * chart.setOption(option, {
+ *     notMerge: ...,
+ *     lazyUpdate: ...,
+ *     silent: ...
+ * });
+ *
+ * @param {Object} option
+ * @param {Object|boolean} [opts] opts or notMerge.
+ * @param {boolean} [opts.notMerge=false]
+ * @param {boolean} [opts.lazyUpdate=false] Useful when setOption frequently.
+ */
+echartsProto.setOption = function (option, notMerge, lazyUpdate) {
+    if (__DEV__) {
+        assert(!this[IN_MAIN_PROCESS], '`setOption` should not be called during main process.');
+    }
+
+    var silent;
+    if (isObject(notMerge)) {
+        lazyUpdate = notMerge.lazyUpdate;
+        silent = notMerge.silent;
+        notMerge = notMerge.notMerge;
+    }
+
+    this[IN_MAIN_PROCESS] = true;
+
+    if (!this._model || notMerge) {
+        var optionManager = new OptionManager(this._api);
+        var theme$$1 = this._theme;
+        var ecModel = this._model = new GlobalModel(null, null, theme$$1, optionManager);
+        ecModel.scheduler = this._scheduler;
+        ecModel.init(null, null, theme$$1, optionManager);
+    }
+
+    this._model.setOption(option, optionPreprocessorFuncs);
+
+    if (lazyUpdate) {
+        this[OPTION_UPDATED] = {silent: silent};
+        this[IN_MAIN_PROCESS] = false;
+    }
+    else {
+        prepare(this);
+
+        updateMethods.update.call(this);
+
+        // Ensure zr refresh sychronously, and then pixel in canvas can be
+        // fetched after `setOption`.
+        this._zr.flush();
+
+        this[OPTION_UPDATED] = false;
+        this[IN_MAIN_PROCESS] = false;
+
+        flushPendingActions.call(this, silent);
+        triggerUpdatedEvent.call(this, silent);
+    }
+};
+
+/**
+ * @DEPRECATED
+ */
+echartsProto.setTheme = function () {
+    console.error('ECharts#setTheme() is DEPRECATED in ECharts 3.0');
+};
+
+/**
+ * @return {module:echarts/model/Global}
+ */
+echartsProto.getModel = function () {
+    return this._model;
+};
+
+/**
+ * @return {Object}
+ */
+echartsProto.getOption = function () {
+    return this._model && this._model.getOption();
+};
+
+/**
+ * @return {number}
+ */
+echartsProto.getWidth = function () {
+    return this._zr.getWidth();
+};
+
+/**
+ * @return {number}
+ */
+echartsProto.getHeight = function () {
+    return this._zr.getHeight();
+};
+
+/**
+ * @return {number}
+ */
+echartsProto.getDevicePixelRatio = function () {
+    return this._zr.painter.dpr || window.devicePixelRatio || 1;
+};
+
+/**
+ * Get canvas which has all thing rendered
+ * @param {Object} opts
+ * @param {string} [opts.backgroundColor]
+ * @return {string}
+ */
+echartsProto.getRenderedCanvas = function (opts) {
+    if (!env$1.canvasSupported) {
+        return;
+    }
+    opts = opts || {};
+    opts.pixelRatio = opts.pixelRatio || 1;
+    opts.backgroundColor = opts.backgroundColor
+        || this._model.get('backgroundColor');
+    var zr = this._zr;
+    // var list = zr.storage.getDisplayList();
+    // Stop animations
+    // Never works before in init animation, so remove it.
+    // zrUtil.each(list, function (el) {
+    //     el.stopAnimation(true);
+    // });
+    return zr.painter.getRenderedCanvas(opts);
+};
+
+/**
+ * Get svg data url
+ * @return {string}
+ */
+echartsProto.getSvgDataUrl = function () {
+    if (!env$1.svgSupported) {
+        return;
+    }
+
+    var zr = this._zr;
+    var list = zr.storage.getDisplayList();
+    // Stop animations
+    each$1(list, function (el) {
+        el.stopAnimation(true);
+    });
+
+    return zr.painter.pathToDataUrl();
+};
+
+/**
+ * @return {string}
+ * @param {Object} opts
+ * @param {string} [opts.type='png']
+ * @param {string} [opts.pixelRatio=1]
+ * @param {string} [opts.backgroundColor]
+ * @param {string} [opts.excludeComponents]
+ */
+echartsProto.getDataURL = function (opts) {
+    opts = opts || {};
+    var excludeComponents = opts.excludeComponents;
+    var ecModel = this._model;
+    var excludesComponentViews = [];
+    var self = this;
+
+    each(excludeComponents, function (componentType) {
+        ecModel.eachComponent({
+            mainType: componentType
+        }, function (component) {
+            var view = self._componentsMap[component.__viewId];
+            if (!view.group.ignore) {
+                excludesComponentViews.push(view);
+                view.group.ignore = true;
+            }
+        });
+    });
+
+    var url = this._zr.painter.getType() === 'svg'
+        ? this.getSvgDataUrl()
+        : this.getRenderedCanvas(opts).toDataURL(
+            'image/' + (opts && opts.type || 'png')
+        );
+
+    each(excludesComponentViews, function (view) {
+        view.group.ignore = false;
+    });
+
+    return url;
+};
+
+
+/**
+ * @return {string}
+ * @param {Object} opts
+ * @param {string} [opts.type='png']
+ * @param {string} [opts.pixelRatio=1]
+ * @param {string} [opts.backgroundColor]
+ */
+echartsProto.getConnectedDataURL = function (opts) {
+    if (!env$1.canvasSupported) {
+        return;
+    }
+    var groupId = this.group;
+    var mathMin = Math.min;
+    var mathMax = Math.max;
