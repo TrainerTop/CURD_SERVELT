@@ -27492,3 +27492,291 @@ var updateMethods = {
         // TODO
         // Save total ecModel here for undo/redo (after restoring data and before processing data).
         // Undo (restoration of total ecModel) can be carried out in 'action' or outside API call.
+
+        // Create new coordinate system each update
+        // In LineView may save the old coordinate system and use it to get the orignal point
+        coordSysMgr.create(ecModel, api);
+
+        scheduler.performDataProcessorTasks(ecModel, payload);
+
+        // Current stream render is not supported in data process. So we can update
+        // stream modes after data processing, where the filtered data is used to
+        // deteming whether use progressive rendering.
+        updateStreamModes(this, ecModel);
+
+        // We update stream modes before coordinate system updated, then the modes info
+        // can be fetched when coord sys updating (consider the barGrid extent fix). But
+        // the drawback is the full coord info can not be fetched. Fortunately this full
+        // coord is not requied in stream mode updater currently.
+        coordSysMgr.update(ecModel, api);
+
+        clearColorPalette(ecModel);
+        scheduler.performVisualTasks(ecModel, payload);
+
+        render(this, ecModel, api, payload);
+
+        // Set background
+        var backgroundColor = ecModel.get('backgroundColor') || 'transparent';
+
+        // In IE8
+        if (!env$1.canvasSupported) {
+            var colorArr = parse(backgroundColor);
+            backgroundColor = stringify(colorArr, 'rgb');
+            if (colorArr[3] === 0) {
+                backgroundColor = 'transparent';
+            }
+        }
+        else {
+            zr.setBackgroundColor(backgroundColor);
+        }
+
+        performPostUpdateFuncs(ecModel, api);
+
+        // console.profile && console.profileEnd('update');
+    },
+
+    /**
+     * @param {Object} payload
+     * @private
+     */
+    updateTransform: function (payload) {
+        var ecModel = this._model;
+        var ecIns = this;
+        var api = this._api;
+
+        // update before setOption
+        if (!ecModel) {
+            return;
+        }
+
+        // ChartView.markUpdateMethod(payload, 'updateTransform');
+
+        var componentDirtyList = [];
+        ecModel.eachComponent(function (componentType, componentModel) {
+            var componentView = ecIns.getViewOfComponentModel(componentModel);
+            if (componentView && componentView.__alive) {
+                if (componentView.updateTransform) {
+                    var result = componentView.updateTransform(componentModel, ecModel, api, payload);
+                    result && result.update && componentDirtyList.push(componentView);
+                }
+                else {
+                    componentDirtyList.push(componentView);
+                }
+            }
+        });
+
+        var seriesDirtyMap = createHashMap();
+        ecModel.eachSeries(function (seriesModel) {
+            var chartView = ecIns._chartsMap[seriesModel.__viewId];
+            if (chartView.updateTransform) {
+                var result = chartView.updateTransform(seriesModel, ecModel, api, payload);
+                result && result.update && seriesDirtyMap.set(seriesModel.uid, 1);
+            }
+            else {
+                seriesDirtyMap.set(seriesModel.uid, 1);
+            }
+        });
+
+        clearColorPalette(ecModel);
+        // Keep pipe to the exist pipeline because it depends on the render task of the full pipeline.
+        // this._scheduler.performVisualTasks(ecModel, payload, 'layout', true);
+        this._scheduler.performVisualTasks(
+            ecModel, payload, {setDirty: true, dirtyMap: seriesDirtyMap}
+        );
+
+        // Currently, not call render of components. Geo render cost a lot.
+        // renderComponents(ecIns, ecModel, api, payload, componentDirtyList);
+        renderSeries(ecIns, ecModel, api, payload, seriesDirtyMap);
+
+        performPostUpdateFuncs(ecModel, this._api);
+    },
+
+    /**
+     * @param {Object} payload
+     * @private
+     */
+    updateView: function (payload) {
+        var ecModel = this._model;
+
+        // update before setOption
+        if (!ecModel) {
+            return;
+        }
+
+        Chart.markUpdateMethod(payload, 'updateView');
+
+        clearColorPalette(ecModel);
+
+        // Keep pipe to the exist pipeline because it depends on the render task of the full pipeline.
+        this._scheduler.performVisualTasks(ecModel, payload, {setDirty: true});
+
+        render(this, this._model, this._api, payload);
+
+        performPostUpdateFuncs(ecModel, this._api);
+    },
+
+    /**
+     * @param {Object} payload
+     * @private
+     */
+    updateVisual: function (payload) {
+        updateMethods.update.call(this, payload);
+
+        // var ecModel = this._model;
+
+        // // update before setOption
+        // if (!ecModel) {
+        //     return;
+        // }
+
+        // ChartView.markUpdateMethod(payload, 'updateVisual');
+
+        // clearColorPalette(ecModel);
+
+        // // Keep pipe to the exist pipeline because it depends on the render task of the full pipeline.
+        // this._scheduler.performVisualTasks(ecModel, payload, {visualType: 'visual', setDirty: true});
+
+        // render(this, this._model, this._api, payload);
+
+        // performPostUpdateFuncs(ecModel, this._api);
+    },
+
+    /**
+     * @param {Object} payload
+     * @private
+     */
+    updateLayout: function (payload) {
+        updateMethods.update.call(this, payload);
+
+        // var ecModel = this._model;
+
+        // // update before setOption
+        // if (!ecModel) {
+        //     return;
+        // }
+
+        // ChartView.markUpdateMethod(payload, 'updateLayout');
+
+        // // Keep pipe to the exist pipeline because it depends on the render task of the full pipeline.
+        // // this._scheduler.performVisualTasks(ecModel, payload, 'layout', true);
+        // this._scheduler.performVisualTasks(ecModel, payload, {setDirty: true});
+
+        // render(this, this._model, this._api, payload);
+
+        // performPostUpdateFuncs(ecModel, this._api);
+    }
+};
+
+function prepare(ecIns) {
+    var ecModel = ecIns._model;
+    var scheduler = ecIns._scheduler;
+
+    scheduler.restorePipelines(ecModel);
+
+    scheduler.prepareStageTasks();
+
+    prepareView(ecIns, 'component', ecModel, scheduler);
+
+    prepareView(ecIns, 'chart', ecModel, scheduler);
+
+    scheduler.plan();
+}
+
+/**
+ * @private
+ */
+function updateDirectly(ecIns, method, payload, mainType, subType) {
+    var ecModel = ecIns._model;
+
+    // broadcast
+    if (!mainType) {
+        // FIXME
+        // Chart will not be update directly here, except set dirty.
+        // But there is no such scenario now.
+        each(ecIns._componentsViews.concat(ecIns._chartsViews), callView);
+        return;
+    }
+
+    var query = {};
+    query[mainType + 'Id'] = payload[mainType + 'Id'];
+    query[mainType + 'Index'] = payload[mainType + 'Index'];
+    query[mainType + 'Name'] = payload[mainType + 'Name'];
+
+    var condition = {mainType: mainType, query: query};
+    subType && (condition.subType = subType); // subType may be '' by parseClassType;
+
+    var excludeSeriesId = payload.excludeSeriesId;
+    if (excludeSeriesId != null) {
+        excludeSeriesId = createHashMap(normalizeToArray(excludeSeriesId));
+    }
+
+    // If dispatchAction before setOption, do nothing.
+    ecModel && ecModel.eachComponent(condition, function (model) {
+        if (!excludeSeriesId || excludeSeriesId.get(model.id) == null) {
+            callView(ecIns[
+                mainType === 'series' ? '_chartsMap' : '_componentsMap'
+            ][model.__viewId]);
+        }
+    }, ecIns);
+
+    function callView(view) {
+        view && view.__alive && view[method] && view[method](
+            view.__model, ecModel, ecIns._api, payload
+        );
+    }
+}
+
+/**
+ * Resize the chart
+ * @param {Object} opts
+ * @param {number} [opts.width] Can be 'auto' (the same as null/undefined)
+ * @param {number} [opts.height] Can be 'auto' (the same as null/undefined)
+ * @param {boolean} [opts.silent=false]
+ */
+echartsProto.resize = function (opts) {
+    if (__DEV__) {
+        assert(!this[IN_MAIN_PROCESS], '`resize` should not be called during main process.');
+    }
+
+    this._zr.resize(opts);
+
+    var ecModel = this._model;
+
+    // Resize loading effect
+    this._loadingFX && this._loadingFX.resize();
+
+    if (!ecModel) {
+        return;
+    }
+
+    var optionChanged = ecModel.resetOption('media');
+
+    var silent = opts && opts.silent;
+
+    this[IN_MAIN_PROCESS] = true;
+
+    optionChanged && prepare(this);
+    updateMethods.update.call(this);
+
+    this[IN_MAIN_PROCESS] = false;
+
+    flushPendingActions.call(this, silent);
+
+    triggerUpdatedEvent.call(this, silent);
+};
+
+function updateStreamModes(ecIns, ecModel) {
+    var chartsMap = ecIns._chartsMap;
+    var scheduler = ecIns._scheduler;
+    ecModel.eachSeries(function (seriesModel) {
+        scheduler.updateStreamModes(seriesModel, chartsMap[seriesModel.__viewId]);
+    });
+}
+
+/**
+ * Show loading effect
+ * @param  {string} [name='default']
+ * @param  {Object} [cfg]
+ */
+echartsProto.showLoading = function (name, cfg) {
+    if (isObject(name)) {
