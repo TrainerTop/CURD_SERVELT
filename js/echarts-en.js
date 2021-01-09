@@ -27227,3 +27227,268 @@ echartsProto.getConnectedDataURL = function (opts) {
     var groupId = this.group;
     var mathMin = Math.min;
     var mathMax = Math.max;
+    var MAX_NUMBER = Infinity;
+    if (connectedGroups[groupId]) {
+        var left = MAX_NUMBER;
+        var top = MAX_NUMBER;
+        var right = -MAX_NUMBER;
+        var bottom = -MAX_NUMBER;
+        var canvasList = [];
+        var dpr = (opts && opts.pixelRatio) || 1;
+
+        each$1(instances, function (chart, id) {
+            if (chart.group === groupId) {
+                var canvas = chart.getRenderedCanvas(
+                    clone(opts)
+                );
+                var boundingRect = chart.getDom().getBoundingClientRect();
+                left = mathMin(boundingRect.left, left);
+                top = mathMin(boundingRect.top, top);
+                right = mathMax(boundingRect.right, right);
+                bottom = mathMax(boundingRect.bottom, bottom);
+                canvasList.push({
+                    dom: canvas,
+                    left: boundingRect.left,
+                    top: boundingRect.top
+                });
+            }
+        });
+
+        left *= dpr;
+        top *= dpr;
+        right *= dpr;
+        bottom *= dpr;
+        var width = right - left;
+        var height = bottom - top;
+        var targetCanvas = createCanvas();
+        targetCanvas.width = width;
+        targetCanvas.height = height;
+        var zr = init$1(targetCanvas);
+
+        each(canvasList, function (item) {
+            var img = new ZImage({
+                style: {
+                    x: item.left * dpr - left,
+                    y: item.top * dpr - top,
+                    image: item.dom
+                }
+            });
+            zr.add(img);
+        });
+        zr.refreshImmediately();
+
+        return targetCanvas.toDataURL('image/' + (opts && opts.type || 'png'));
+    }
+    else {
+        return this.getDataURL(opts);
+    }
+};
+
+/**
+ * Convert from logical coordinate system to pixel coordinate system.
+ * See CoordinateSystem#convertToPixel.
+ * @param {string|Object} finder
+ *        If string, e.g., 'geo', means {geoIndex: 0}.
+ *        If Object, could contain some of these properties below:
+ *        {
+ *            seriesIndex / seriesId / seriesName,
+ *            geoIndex / geoId, geoName,
+ *            bmapIndex / bmapId / bmapName,
+ *            xAxisIndex / xAxisId / xAxisName,
+ *            yAxisIndex / yAxisId / yAxisName,
+ *            gridIndex / gridId / gridName,
+ *            ... (can be extended)
+ *        }
+ * @param {Array|number} value
+ * @return {Array|number} result
+ */
+echartsProto.convertToPixel = curry(doConvertPixel, 'convertToPixel');
+
+/**
+ * Convert from pixel coordinate system to logical coordinate system.
+ * See CoordinateSystem#convertFromPixel.
+ * @param {string|Object} finder
+ *        If string, e.g., 'geo', means {geoIndex: 0}.
+ *        If Object, could contain some of these properties below:
+ *        {
+ *            seriesIndex / seriesId / seriesName,
+ *            geoIndex / geoId / geoName,
+ *            bmapIndex / bmapId / bmapName,
+ *            xAxisIndex / xAxisId / xAxisName,
+ *            yAxisIndex / yAxisId / yAxisName
+ *            gridIndex / gridId / gridName,
+ *            ... (can be extended)
+ *        }
+ * @param {Array|number} value
+ * @return {Array|number} result
+ */
+echartsProto.convertFromPixel = curry(doConvertPixel, 'convertFromPixel');
+
+function doConvertPixel(methodName, finder, value) {
+    var ecModel = this._model;
+    var coordSysList = this._coordSysMgr.getCoordinateSystems();
+    var result;
+
+    finder = parseFinder(ecModel, finder);
+
+    for (var i = 0; i < coordSysList.length; i++) {
+        var coordSys = coordSysList[i];
+        if (coordSys[methodName]
+            && (result = coordSys[methodName](ecModel, finder, value)) != null
+        ) {
+            return result;
+        }
+    }
+
+    if (__DEV__) {
+        console.warn(
+            'No coordinate system that supports ' + methodName + ' found by the given finder.'
+        );
+    }
+}
+
+/**
+ * Is the specified coordinate systems or components contain the given pixel point.
+ * @param {string|Object} finder
+ *        If string, e.g., 'geo', means {geoIndex: 0}.
+ *        If Object, could contain some of these properties below:
+ *        {
+ *            seriesIndex / seriesId / seriesName,
+ *            geoIndex / geoId / geoName,
+ *            bmapIndex / bmapId / bmapName,
+ *            xAxisIndex / xAxisId / xAxisName,
+ *            yAxisIndex / yAxisId / yAxisName,
+ *            gridIndex / gridId / gridName,
+ *            ... (can be extended)
+ *        }
+ * @param {Array|number} value
+ * @return {boolean} result
+ */
+echartsProto.containPixel = function (finder, value) {
+    var ecModel = this._model;
+    var result;
+
+    finder = parseFinder(ecModel, finder);
+
+    each$1(finder, function (models, key) {
+        key.indexOf('Models') >= 0 && each$1(models, function (model) {
+            var coordSys = model.coordinateSystem;
+            if (coordSys && coordSys.containPoint) {
+                result |= !!coordSys.containPoint(value);
+            }
+            else if (key === 'seriesModels') {
+                var view = this._chartsMap[model.__viewId];
+                if (view && view.containPoint) {
+                    result |= view.containPoint(value, model);
+                }
+                else {
+                    if (__DEV__) {
+                        console.warn(key + ': ' + (view
+                            ? 'The found component do not support containPoint.'
+                            : 'No view mapping to the found component.'
+                        ));
+                    }
+                }
+            }
+            else {
+                if (__DEV__) {
+                    console.warn(key + ': containPoint is not supported');
+                }
+            }
+        }, this);
+    }, this);
+
+    return !!result;
+};
+
+/**
+ * Get visual from series or data.
+ * @param {string|Object} finder
+ *        If string, e.g., 'series', means {seriesIndex: 0}.
+ *        If Object, could contain some of these properties below:
+ *        {
+ *            seriesIndex / seriesId / seriesName,
+ *            dataIndex / dataIndexInside
+ *        }
+ *        If dataIndex is not specified, series visual will be fetched,
+ *        but not data item visual.
+ *        If all of seriesIndex, seriesId, seriesName are not specified,
+ *        visual will be fetched from first series.
+ * @param {string} visualType 'color', 'symbol', 'symbolSize'
+ */
+echartsProto.getVisual = function (finder, visualType) {
+    var ecModel = this._model;
+
+    finder = parseFinder(ecModel, finder, {defaultMainType: 'series'});
+
+    var seriesModel = finder.seriesModel;
+
+    if (__DEV__) {
+        if (!seriesModel) {
+            console.warn('There is no specified seires model');
+        }
+    }
+
+    var data = seriesModel.getData();
+
+    var dataIndexInside = finder.hasOwnProperty('dataIndexInside')
+        ? finder.dataIndexInside
+        : finder.hasOwnProperty('dataIndex')
+        ? data.indexOfRawIndex(finder.dataIndex)
+        : null;
+
+    return dataIndexInside != null
+        ? data.getItemVisual(dataIndexInside, visualType)
+        : data.getVisual(visualType);
+};
+
+/**
+ * Get view of corresponding component model
+ * @param  {module:echarts/model/Component} componentModel
+ * @return {module:echarts/view/Component}
+ */
+echartsProto.getViewOfComponentModel = function (componentModel) {
+    return this._componentsMap[componentModel.__viewId];
+};
+
+/**
+ * Get view of corresponding series model
+ * @param  {module:echarts/model/Series} seriesModel
+ * @return {module:echarts/view/Chart}
+ */
+echartsProto.getViewOfSeriesModel = function (seriesModel) {
+    return this._chartsMap[seriesModel.__viewId];
+};
+
+var updateMethods = {
+
+    prepareAndUpdate: function (payload) {
+        prepare(this);
+        updateMethods.update.call(this, payload);
+    },
+
+    /**
+     * @param {Object} payload
+     * @private
+     */
+    update: function (payload) {
+        // console.profile && console.profile('update');
+
+        var ecModel = this._model;
+        var api = this._api;
+        var zr = this._zr;
+        var coordSysMgr = this._coordSysMgr;
+        var scheduler = this._scheduler;
+
+        // update before setOption
+        if (!ecModel) {
+            return;
+        }
+
+        scheduler.restoreData(ecModel, payload);
+
+        scheduler.performSeriesTasks(ecModel);
+
+        // TODO
+        // Save total ecModel here for undo/redo (after restoring data and before processing data).
+        // Undo (restoration of total ecModel) can be carried out in 'action' or outside API call.
