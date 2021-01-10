@@ -28023,3 +28023,261 @@ echartsProto.appendData = function (params) {
  * Register event
  * @method
  */
+echartsProto.on = createRegisterEventWithLowercaseName('on');
+echartsProto.off = createRegisterEventWithLowercaseName('off');
+echartsProto.one = createRegisterEventWithLowercaseName('one');
+
+/**
+ * Prepare view instances of charts and components
+ * @param  {module:echarts/model/Global} ecModel
+ * @private
+ */
+function prepareView(ecIns, type, ecModel, scheduler) {
+    var isComponent = type === 'component';
+    var viewList = isComponent ? ecIns._componentsViews : ecIns._chartsViews;
+    var viewMap = isComponent ? ecIns._componentsMap : ecIns._chartsMap;
+    var zr = ecIns._zr;
+    var api = ecIns._api;
+
+    for (var i = 0; i < viewList.length; i++) {
+        viewList[i].__alive = false;
+    }
+
+    isComponent
+        ? ecModel.eachComponent(function (componentType, model) {
+            componentType !== 'series' && doPrepare(model);
+        })
+        : ecModel.eachSeries(doPrepare);
+
+    function doPrepare(model) {
+        // Consider: id same and type changed.
+        var viewId = '_ec_' + model.id + '_' + model.type;
+        var view = viewMap[viewId];
+        if (!view) {
+            var classType = parseClassType(model.type);
+            var Clazz = isComponent
+                ? Component.getClass(classType.main, classType.sub)
+                : Chart.getClass(classType.sub);
+
+            if (__DEV__) {
+                assert(Clazz, classType.sub + ' does not exist.');
+            }
+
+            view = new Clazz();
+            view.init(ecModel, api);
+            viewMap[viewId] = view;
+            viewList.push(view);
+            zr.add(view.group);
+        }
+
+        model.__viewId = view.__id = viewId;
+        view.__alive = true;
+        view.__model = model;
+        view.group.__ecComponentInfo = {
+            mainType: model.mainType,
+            index: model.componentIndex
+        };
+        !isComponent && scheduler.prepareView(view, model, ecModel, api);
+    }
+
+    for (var i = 0; i < viewList.length;) {
+        var view = viewList[i];
+        if (!view.__alive) {
+            !isComponent && view.renderTask.dispose();
+            zr.remove(view.group);
+            view.dispose(ecModel, api);
+            viewList.splice(i, 1);
+            delete viewMap[view.__id];
+            view.__id = view.group.__ecComponentInfo = null;
+        }
+        else {
+            i++;
+        }
+    }
+}
+
+// /**
+//  * Encode visual infomation from data after data processing
+//  *
+//  * @param {module:echarts/model/Global} ecModel
+//  * @param {object} layout
+//  * @param {boolean} [layoutFilter] `true`: only layout,
+//  *                                 `false`: only not layout,
+//  *                                 `null`/`undefined`: all.
+//  * @param {string} taskBaseTag
+//  * @private
+//  */
+// function startVisualEncoding(ecIns, ecModel, api, payload, layoutFilter) {
+//     each(visualFuncs, function (visual, index) {
+//         var isLayout = visual.isLayout;
+//         if (layoutFilter == null
+//             || (layoutFilter === false && !isLayout)
+//             || (layoutFilter === true && isLayout)
+//         ) {
+//             visual.func(ecModel, api, payload);
+//         }
+//     });
+// }
+
+function clearColorPalette(ecModel) {
+    ecModel.clearColorPalette();
+    ecModel.eachSeries(function (seriesModel) {
+        seriesModel.clearColorPalette();
+    });
+}
+
+function render(ecIns, ecModel, api, payload) {
+
+    renderComponents(ecIns, ecModel, api, payload);
+
+    each(ecIns._chartsViews, function (chart) {
+        chart.__alive = false;
+    });
+
+    renderSeries(ecIns, ecModel, api, payload);
+
+    // Remove groups of unrendered charts
+    each(ecIns._chartsViews, function (chart) {
+        if (!chart.__alive) {
+            chart.remove(ecModel, api);
+        }
+    });
+}
+
+function renderComponents(ecIns, ecModel, api, payload, dirtyList) {
+    each(dirtyList || ecIns._componentsViews, function (componentView) {
+        var componentModel = componentView.__model;
+        componentView.render(componentModel, ecModel, api, payload);
+
+        updateZ(componentModel, componentView);
+    });
+}
+
+/**
+ * Render each chart and component
+ * @private
+ */
+function renderSeries(ecIns, ecModel, api, payload, dirtyMap) {
+    // Render all charts
+    var scheduler = ecIns._scheduler;
+    var unfinished;
+    ecModel.eachSeries(function (seriesModel) {
+        var chartView = ecIns._chartsMap[seriesModel.__viewId];
+        chartView.__alive = true;
+
+        var renderTask = chartView.renderTask;
+        scheduler.updatePayload(renderTask, payload);
+
+        if (dirtyMap && dirtyMap.get(seriesModel.uid)) {
+            renderTask.dirty();
+        }
+
+        unfinished |= renderTask.perform(scheduler.getPerformArgs(renderTask));
+
+        chartView.group.silent = !!seriesModel.get('silent');
+
+        updateZ(seriesModel, chartView);
+
+        updateBlend(seriesModel, chartView);
+    });
+    scheduler.unfinished |= unfinished;
+
+    // If use hover layer
+    updateHoverLayerStatus(ecIns._zr, ecModel);
+
+    // Add aria
+    aria(ecIns._zr.dom, ecModel);
+}
+
+function performPostUpdateFuncs(ecModel, api) {
+    each(postUpdateFuncs, function (func) {
+        func(ecModel, api);
+    });
+}
+
+
+var MOUSE_EVENT_NAMES = [
+    'click', 'dblclick', 'mouseover', 'mouseout', 'mousemove',
+    'mousedown', 'mouseup', 'globalout', 'contextmenu'
+];
+
+/**
+ * @private
+ */
+echartsProto._initEvents = function () {
+    each(MOUSE_EVENT_NAMES, function (eveName) {
+        var handler = function (e) {
+            var ecModel = this.getModel();
+            var el = e.target;
+            var params;
+            var isGlobalOut = eveName === 'globalout';
+
+            // no e.target when 'globalout'.
+            if (isGlobalOut) {
+                params = {};
+            }
+            else if (el && el.dataIndex != null) {
+                var dataModel = el.dataModel || ecModel.getSeriesByIndex(el.seriesIndex);
+                params = dataModel && dataModel.getDataParams(el.dataIndex, el.dataType, el) || {};
+            }
+            // If element has custom eventData of components
+            else if (el && el.eventData) {
+                params = extend({}, el.eventData);
+            }
+
+            // Contract: if params prepared in mouse event,
+            // these properties must be specified:
+            // {
+            //    componentType: string (component main type)
+            //    componentIndex: number
+            // }
+            // Otherwise event query can not work.
+
+            if (params) {
+                var componentType = params.componentType;
+                var componentIndex = params.componentIndex;
+                // Special handling for historic reason: when trigger by
+                // markLine/markPoint/markArea, the componentType is
+                // 'markLine'/'markPoint'/'markArea', but we should better
+                // enable them to be queried by seriesIndex, since their
+                // option is set in each series.
+                if (componentType === 'markLine'
+                    || componentType === 'markPoint'
+                    || componentType === 'markArea'
+                ) {
+                    componentType = 'series';
+                    componentIndex = params.seriesIndex;
+                }
+                var model = componentType && componentIndex != null
+                    && ecModel.getComponent(componentType, componentIndex);
+                var view = model && this[
+                    model.mainType === 'series' ? '_chartsMap' : '_componentsMap'
+                ][model.__viewId];
+
+                if (__DEV__) {
+                    // `event.componentType` and `event[componentTpype + 'Index']` must not
+                    // be missed, otherwise there is no way to distinguish source component.
+                    // See `dataFormat.getDataParams`.
+                    if (!isGlobalOut && !(model && view)) {
+                        console.warn('model or view can not be found by params');
+                    }
+                }
+
+                params.event = e;
+                params.type = eveName;
+
+                this._ecEventProcessor.eventInfo = {
+                    targetEl: el,
+                    packedEvent: params,
+                    model: model,
+                    view: view
+                };
+
+                this.trigger(eveName, params);
+            }
+        };
+        // Consider that some component (like tooltip, brush, ...)
+        // register zr event handler, but user event handler might
+        // do anything, such as call `setOption` or `dispatchAction`,
+        // which probably update any of the content and probably
+        // cause problem if it is called previous other inner handlers.
