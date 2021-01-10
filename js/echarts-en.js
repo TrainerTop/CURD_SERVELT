@@ -28281,3 +28281,254 @@ echartsProto._initEvents = function () {
         // do anything, such as call `setOption` or `dispatchAction`,
         // which probably update any of the content and probably
         // cause problem if it is called previous other inner handlers.
+        handler.zrEventfulCallAtLast = true;
+        this._zr.on(eveName, handler, this);
+    }, this);
+
+    each(eventActionMap, function (actionType, eventType) {
+        this._messageCenter.on(eventType, function (event) {
+            this.trigger(eventType, event);
+        }, this);
+    }, this);
+};
+
+/**
+ * @return {boolean}
+ */
+echartsProto.isDisposed = function () {
+    return this._disposed;
+};
+
+/**
+ * Clear
+ */
+echartsProto.clear = function () {
+    this.setOption({ series: [] }, true);
+};
+
+/**
+ * Dispose instance
+ */
+echartsProto.dispose = function () {
+    if (this._disposed) {
+        if (__DEV__) {
+            console.warn('Instance ' + this.id + ' has been disposed');
+        }
+        return;
+    }
+    this._disposed = true;
+
+    setAttribute(this.getDom(), DOM_ATTRIBUTE_KEY, '');
+
+    var api = this._api;
+    var ecModel = this._model;
+
+    each(this._componentsViews, function (component) {
+        component.dispose(ecModel, api);
+    });
+    each(this._chartsViews, function (chart) {
+        chart.dispose(ecModel, api);
+    });
+
+    // Dispose after all views disposed
+    this._zr.dispose();
+
+    delete instances[this.id];
+};
+
+mixin(ECharts, Eventful);
+
+function updateHoverLayerStatus(zr, ecModel) {
+    var storage = zr.storage;
+    var elCount = 0;
+    storage.traverse(function (el) {
+        if (!el.isGroup) {
+            elCount++;
+        }
+    });
+    if (elCount > ecModel.get('hoverLayerThreshold') && !env$1.node) {
+        storage.traverse(function (el) {
+            if (!el.isGroup) {
+                // Don't switch back.
+                el.useHoverLayer = true;
+            }
+        });
+    }
+}
+
+/**
+ * Update chart progressive and blend.
+ * @param {module:echarts/model/Series|module:echarts/model/Component} model
+ * @param {module:echarts/view/Component|module:echarts/view/Chart} view
+ */
+function updateBlend(seriesModel, chartView) {
+    var blendMode = seriesModel.get('blendMode') || null;
+    if (__DEV__) {
+        if (!env$1.canvasSupported && blendMode && blendMode !== 'source-over') {
+            console.warn('Only canvas support blendMode');
+        }
+    }
+    chartView.group.traverse(function (el) {
+        // FIXME marker and other components
+        if (!el.isGroup) {
+            // Only set if blendMode is changed. In case element is incremental and don't wan't to rerender.
+            if (el.style.blend !== blendMode) {
+                el.setStyle('blend', blendMode);
+            }
+        }
+        if (el.eachPendingDisplayable) {
+            el.eachPendingDisplayable(function (displayable) {
+                displayable.setStyle('blend', blendMode);
+            });
+        }
+    });
+}
+
+/**
+ * @param {module:echarts/model/Series|module:echarts/model/Component} model
+ * @param {module:echarts/view/Component|module:echarts/view/Chart} view
+ */
+function updateZ(model, view) {
+    var z = model.get('z');
+    var zlevel = model.get('zlevel');
+    // Set z and zlevel
+    view.group.traverse(function (el) {
+        if (el.type !== 'group') {
+            z != null && (el.z = z);
+            zlevel != null && (el.zlevel = zlevel);
+        }
+    });
+}
+
+function createExtensionAPI(ecInstance) {
+    var coordSysMgr = ecInstance._coordSysMgr;
+    return extend(new ExtensionAPI(ecInstance), {
+        // Inject methods
+        getCoordinateSystems: bind(
+            coordSysMgr.getCoordinateSystems, coordSysMgr
+        ),
+        getComponentByElement: function (el) {
+            while (el) {
+                var modelInfo = el.__ecComponentInfo;
+                if (modelInfo != null) {
+                    return ecInstance._model.getComponent(modelInfo.mainType, modelInfo.index);
+                }
+                el = el.parent;
+            }
+        }
+    });
+}
+
+
+/**
+ * @class
+ * Usage of query:
+ * `chart.on('click', query, handler);`
+ * The `query` can be:
+ * + The component type query string, only `mainType` or `mainType.subType`,
+ *   like: 'xAxis', 'series', 'xAxis.category' or 'series.line'.
+ * + The component query object, like:
+ *   `{seriesIndex: 2}`, `{seriesName: 'xx'}`, `{seriesId: 'some'}`,
+ *   `{xAxisIndex: 2}`, `{xAxisName: 'xx'}`, `{xAxisId: 'some'}`.
+ * + The data query object, like:
+ *   `{dataIndex: 123}`, `{dataType: 'link'}`, `{name: 'some'}`.
+ * + The other query object (cmponent customized query), like:
+ *   `{element: 'some'}` (only available in custom series).
+ *
+ * Caveat: If a prop in the `query` object is `null/undefined`, it is the
+ * same as there is no such prop in the `query` object.
+ */
+function EventProcessor() {
+    // These info required: targetEl, packedEvent, model, view
+    this.eventInfo;
+}
+EventProcessor.prototype = {
+    constructor: EventProcessor,
+
+    normalizeQuery: function (query) {
+        var cptQuery = {};
+        var dataQuery = {};
+        var otherQuery = {};
+
+        // `query` is `mainType` or `mainType.subType` of component.
+        if (isString(query)) {
+            var condCptType = parseClassType(query);
+            // `.main` and `.sub` may be ''.
+            cptQuery.mainType = condCptType.main || null;
+            cptQuery.subType = condCptType.sub || null;
+        }
+        // `query` is an object, convert to {mainType, index, name, id}.
+        else {
+            // `xxxIndex`, `xxxName`, `xxxId`, `name`, `dataIndex`, `dataType` is reserved,
+            // can not be used in `compomentModel.filterForExposedEvent`.
+            var suffixes = ['Index', 'Name', 'Id'];
+            var dataKeys = {name: 1, dataIndex: 1, dataType: 1};
+            each$1(query, function (val, key) {
+                var reserved = false;
+                for (var i = 0; i < suffixes.length; i++) {
+                    var propSuffix = suffixes[i];
+                    var suffixPos = key.lastIndexOf(propSuffix);
+                    if (suffixPos > 0 && suffixPos === key.length - propSuffix.length) {
+                        var mainType = key.slice(0, suffixPos);
+                        // Consider `dataIndex`.
+                        if (mainType !== 'data') {
+                            cptQuery.mainType = mainType;
+                            cptQuery[propSuffix.toLowerCase()] = val;
+                            reserved = true;
+                        }
+                    }
+                }
+                if (dataKeys.hasOwnProperty(key)) {
+                    dataQuery[key] = val;
+                    reserved = true;
+                }
+                if (!reserved) {
+                    otherQuery[key] = val;
+                }
+            });
+        }
+
+        return {
+            cptQuery: cptQuery,
+            dataQuery: dataQuery,
+            otherQuery: otherQuery
+        };
+    },
+
+    filter: function (eventType, query, args) {
+        // They should be assigned before each trigger call.
+        var eventInfo = this.eventInfo;
+
+        if (!eventInfo) {
+            return true;
+        }
+
+        var targetEl = eventInfo.targetEl;
+        var packedEvent = eventInfo.packedEvent;
+        var model = eventInfo.model;
+        var view = eventInfo.view;
+
+        // For event like 'globalout'.
+        if (!model || !view) {
+            return true;
+        }
+
+        var cptQuery = query.cptQuery;
+        var dataQuery = query.dataQuery;
+
+        return check(cptQuery, model, 'mainType')
+            && check(cptQuery, model, 'subType')
+            && check(cptQuery, model, 'index', 'componentIndex')
+            && check(cptQuery, model, 'name')
+            && check(cptQuery, model, 'id')
+            && check(dataQuery, packedEvent, 'name')
+            && check(dataQuery, packedEvent, 'dataIndex')
+            && check(dataQuery, packedEvent, 'dataType')
+            && (!view.filterForExposedEvent || view.filterForExposedEvent(
+                eventType, query.otherQuery, targetEl, packedEvent
+            ));
+
+        function check(query, host, prop, propOnHost) {
+            return query[prop] == null || host[propOnHost || prop] === query[prop];
+        }
+    },
