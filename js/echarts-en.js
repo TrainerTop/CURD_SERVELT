@@ -28532,3 +28532,273 @@ EventProcessor.prototype = {
             return query[prop] == null || host[propOnHost || prop] === query[prop];
         }
     },
+
+    afterTrigger: function () {
+        // Make sure the eventInfo wont be used in next trigger.
+        this.eventInfo = null;
+    }
+};
+
+
+/**
+ * @type {Object} key: actionType.
+ * @inner
+ */
+var actions = {};
+
+/**
+ * Map eventType to actionType
+ * @type {Object}
+ */
+var eventActionMap = {};
+
+/**
+ * Data processor functions of each stage
+ * @type {Array.<Object.<string, Function>>}
+ * @inner
+ */
+var dataProcessorFuncs = [];
+
+/**
+ * @type {Array.<Function>}
+ * @inner
+ */
+var optionPreprocessorFuncs = [];
+
+/**
+ * @type {Array.<Function>}
+ * @inner
+ */
+var postUpdateFuncs = [];
+
+/**
+ * Visual encoding functions of each stage
+ * @type {Array.<Object.<string, Function>>}
+ */
+var visualFuncs = [];
+
+/**
+ * Theme storage
+ * @type {Object.<key, Object>}
+ */
+var themeStorage = {};
+/**
+ * Loading effects
+ */
+var loadingEffects = {};
+
+var instances = {};
+var connectedGroups = {};
+
+var idBase = new Date() - 0;
+var groupIdBase = new Date() - 0;
+var DOM_ATTRIBUTE_KEY = '_echarts_instance_';
+
+function enableConnect(chart) {
+    var STATUS_PENDING = 0;
+    var STATUS_UPDATING = 1;
+    var STATUS_UPDATED = 2;
+    var STATUS_KEY = '__connectUpdateStatus';
+
+    function updateConnectedChartsStatus(charts, status) {
+        for (var i = 0; i < charts.length; i++) {
+            var otherChart = charts[i];
+            otherChart[STATUS_KEY] = status;
+        }
+    }
+
+    each(eventActionMap, function (actionType, eventType) {
+        chart._messageCenter.on(eventType, function (event) {
+            if (connectedGroups[chart.group] && chart[STATUS_KEY] !== STATUS_PENDING) {
+                if (event && event.escapeConnect) {
+                    return;
+                }
+
+                var action = chart.makeActionFromEvent(event);
+                var otherCharts = [];
+
+                each(instances, function (otherChart) {
+                    if (otherChart !== chart && otherChart.group === chart.group) {
+                        otherCharts.push(otherChart);
+                    }
+                });
+
+                updateConnectedChartsStatus(otherCharts, STATUS_PENDING);
+                each(otherCharts, function (otherChart) {
+                    if (otherChart[STATUS_KEY] !== STATUS_UPDATING) {
+                        otherChart.dispatchAction(action);
+                    }
+                });
+                updateConnectedChartsStatus(otherCharts, STATUS_UPDATED);
+            }
+        });
+    });
+}
+
+/**
+ * @param {HTMLElement} dom
+ * @param {Object} [theme]
+ * @param {Object} opts
+ * @param {number} [opts.devicePixelRatio] Use window.devicePixelRatio by default
+ * @param {string} [opts.renderer] Currently only 'canvas' is supported.
+ * @param {number} [opts.width] Use clientWidth of the input `dom` by default.
+ *                              Can be 'auto' (the same as null/undefined)
+ * @param {number} [opts.height] Use clientHeight of the input `dom` by default.
+ *                               Can be 'auto' (the same as null/undefined)
+ */
+function init(dom, theme$$1, opts) {
+    if (__DEV__) {
+        // Check version
+        if ((version$1.replace('.', '') - 0) < (dependencies.zrender.replace('.', '') - 0)) {
+            throw new Error(
+                'zrender/src ' + version$1
+                + ' is too old for ECharts ' + version
+                + '. Current version need ZRender '
+                + dependencies.zrender + '+'
+            );
+        }
+
+        if (!dom) {
+            throw new Error('Initialize failed: invalid dom.');
+        }
+    }
+
+    var existInstance = getInstanceByDom(dom);
+    if (existInstance) {
+        if (__DEV__) {
+            console.warn('There is a chart instance already initialized on the dom.');
+        }
+        return existInstance;
+    }
+
+    if (__DEV__) {
+        if (isDom(dom)
+            && dom.nodeName.toUpperCase() !== 'CANVAS'
+            && (
+                (!dom.clientWidth && (!opts || opts.width == null))
+                || (!dom.clientHeight && (!opts || opts.height == null))
+            )
+        ) {
+            console.warn('Can\'t get dom width or height');
+        }
+    }
+
+    var chart = new ECharts(dom, theme$$1, opts);
+    chart.id = 'ec_' + idBase++;
+    instances[chart.id] = chart;
+
+    setAttribute(dom, DOM_ATTRIBUTE_KEY, chart.id);
+
+    enableConnect(chart);
+
+    return chart;
+}
+
+/**
+ * @return {string|Array.<module:echarts~ECharts>} groupId
+ */
+function connect(groupId) {
+    // Is array of charts
+    if (isArray(groupId)) {
+        var charts = groupId;
+        groupId = null;
+        // If any chart has group
+        each(charts, function (chart) {
+            if (chart.group != null) {
+                groupId = chart.group;
+            }
+        });
+        groupId = groupId || ('g_' + groupIdBase++);
+        each(charts, function (chart) {
+            chart.group = groupId;
+        });
+    }
+    connectedGroups[groupId] = true;
+    return groupId;
+}
+
+/**
+ * @DEPRECATED
+ * @return {string} groupId
+ */
+function disConnect(groupId) {
+    connectedGroups[groupId] = false;
+}
+
+/**
+ * @return {string} groupId
+ */
+var disconnect = disConnect;
+
+/**
+ * Dispose a chart instance
+ * @param  {module:echarts~ECharts|HTMLDomElement|string} chart
+ */
+function dispose(chart) {
+    if (typeof chart === 'string') {
+        chart = instances[chart];
+    }
+    else if (!(chart instanceof ECharts)) {
+        // Try to treat as dom
+        chart = getInstanceByDom(chart);
+    }
+    if ((chart instanceof ECharts) && !chart.isDisposed()) {
+        chart.dispose();
+    }
+}
+
+/**
+ * @param  {HTMLElement} dom
+ * @return {echarts~ECharts}
+ */
+function getInstanceByDom(dom) {
+    return instances[getAttribute(dom, DOM_ATTRIBUTE_KEY)];
+}
+
+/**
+ * @param {string} key
+ * @return {echarts~ECharts}
+ */
+function getInstanceById(key) {
+    return instances[key];
+}
+
+/**
+ * Register theme
+ */
+function registerTheme(name, theme$$1) {
+    themeStorage[name] = theme$$1;
+}
+
+/**
+ * Register option preprocessor
+ * @param {Function} preprocessorFunc
+ */
+function registerPreprocessor(preprocessorFunc) {
+    optionPreprocessorFuncs.push(preprocessorFunc);
+}
+
+/**
+ * @param {number} [priority=1000]
+ * @param {Object|Function} processor
+ */
+function registerProcessor(priority, processor) {
+    normalizeRegister(dataProcessorFuncs, priority, processor, PRIORITY_PROCESSOR_FILTER);
+}
+
+/**
+ * Register postUpdater
+ * @param {Function} postUpdateFunc
+ */
+function registerPostUpdate(postUpdateFunc) {
+    postUpdateFuncs.push(postUpdateFunc);
+}
+
+/**
+ * Usage:
+ * registerAction('someAction', 'someEvent', function () { ... });
+ * registerAction('someAction', function () { ... });
+ * registerAction(
+ *     {type: 'someAction', event: 'someEvent', update: 'updateView'},
+ *     function () { ... }
+ * );
