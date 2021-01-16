@@ -29097,3 +29097,259 @@ function DataDiffer(oldArr, newArr, oldKeyGetter, newKeyGetter, context) {
 }
 
 DataDiffer.prototype = {
+
+    constructor: DataDiffer,
+
+    /**
+     * Callback function when add a data
+     */
+    add: function (func) {
+        this._add = func;
+        return this;
+    },
+
+    /**
+     * Callback function when update a data
+     */
+    update: function (func) {
+        this._update = func;
+        return this;
+    },
+
+    /**
+     * Callback function when remove a data
+     */
+    remove: function (func) {
+        this._remove = func;
+        return this;
+    },
+
+    execute: function () {
+        var oldArr = this._old;
+        var newArr = this._new;
+
+        var oldDataIndexMap = {};
+        var newDataIndexMap = {};
+        var oldDataKeyArr = [];
+        var newDataKeyArr = [];
+        var i;
+
+        initIndexMap(oldArr, oldDataIndexMap, oldDataKeyArr, '_oldKeyGetter', this);
+        initIndexMap(newArr, newDataIndexMap, newDataKeyArr, '_newKeyGetter', this);
+
+        // Travel by inverted order to make sure order consistency
+        // when duplicate keys exists (consider newDataIndex.pop() below).
+        // For performance consideration, these code below do not look neat.
+        for (i = 0; i < oldArr.length; i++) {
+            var key = oldDataKeyArr[i];
+            var idx = newDataIndexMap[key];
+
+            // idx can never be empty array here. see 'set null' logic below.
+            if (idx != null) {
+                // Consider there is duplicate key (for example, use dataItem.name as key).
+                // We should make sure every item in newArr and oldArr can be visited.
+                var len = idx.length;
+                if (len) {
+                    len === 1 && (newDataIndexMap[key] = null);
+                    idx = idx.unshift();
+                }
+                else {
+                    newDataIndexMap[key] = null;
+                }
+                this._update && this._update(idx, i);
+            }
+            else {
+                this._remove && this._remove(i);
+            }
+        }
+
+        for (var i = 0; i < newDataKeyArr.length; i++) {
+            var key = newDataKeyArr[i];
+            if (newDataIndexMap.hasOwnProperty(key)) {
+                var idx = newDataIndexMap[key];
+                if (idx == null) {
+                    continue;
+                }
+                // idx can never be empty array here. see 'set null' logic above.
+                if (!idx.length) {
+                    this._add && this._add(idx);
+                }
+                else {
+                    for (var j = 0, len = idx.length; j < len; j++) {
+                        this._add && this._add(idx[j]);
+                    }
+                }
+            }
+        }
+    }
+};
+
+function initIndexMap(arr, map, keyArr, keyGetterName, dataDiffer) {
+    for (var i = 0; i < arr.length; i++) {
+        // Add prefix to avoid conflict with Object.prototype.
+        var key = '_ec_' + dataDiffer[keyGetterName](arr[i], i);
+        var existence = map[key];
+        if (existence == null) {
+            keyArr.push(key);
+            map[key] = i;
+        }
+        else {
+            if (!existence.length) {
+                map[key] = existence = [existence];
+            }
+            existence.push(i);
+        }
+    }
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var OTHER_DIMENSIONS = createHashMap([
+    'tooltip', 'label', 'itemName', 'itemId', 'seriesName'
+]);
+
+function summarizeDimensions(data) {
+    var summary = {};
+    var encode = summary.encode = {};
+    var notExtraCoordDimMap = createHashMap();
+    var defaultedLabel = [];
+    var defaultedTooltip = [];
+
+    each$1(data.dimensions, function (dimName) {
+        var dimItem = data.getDimensionInfo(dimName);
+
+        var coordDim = dimItem.coordDim;
+        if (coordDim) {
+            if (__DEV__) {
+                assert$1(OTHER_DIMENSIONS.get(coordDim) == null);
+            }
+            var coordDimArr = encode[coordDim];
+            if (!encode.hasOwnProperty(coordDim)) {
+                coordDimArr = encode[coordDim] = [];
+            }
+            coordDimArr[dimItem.coordDimIndex] = dimName;
+
+            if (!dimItem.isExtraCoord) {
+                notExtraCoordDimMap.set(coordDim, 1);
+
+                // Use the last coord dim (and label friendly) as default label,
+                // because when dataset is used, it is hard to guess which dimension
+                // can be value dimension. If both show x, y on label is not look good,
+                // and conventionally y axis is focused more.
+                if (mayLabelDimType(dimItem.type)) {
+                    defaultedLabel[0] = dimName;
+                }
+            }
+            if (dimItem.defaultTooltip) {
+                defaultedTooltip.push(dimName);
+            }
+        }
+
+        OTHER_DIMENSIONS.each(function (v, otherDim) {
+            var otherDimArr = encode[otherDim];
+            if (!encode.hasOwnProperty(otherDim)) {
+                otherDimArr = encode[otherDim] = [];
+            }
+
+            var dimIndex = dimItem.otherDims[otherDim];
+            if (dimIndex != null && dimIndex !== false) {
+                otherDimArr[dimIndex] = dimItem.name;
+            }
+        });
+    });
+
+    var dataDimsOnCoord = [];
+    var encodeFirstDimNotExtra = {};
+
+    notExtraCoordDimMap.each(function (v, coordDim) {
+        var dimArr = encode[coordDim];
+        // ??? FIXME extra coord should not be set in dataDimsOnCoord.
+        // But should fix the case that radar axes: simplify the logic
+        // of `completeDimension`, remove `extraPrefix`.
+        encodeFirstDimNotExtra[coordDim] = dimArr[0];
+        // Not necessary to remove duplicate, because a data
+        // dim canot on more than one coordDim.
+        dataDimsOnCoord = dataDimsOnCoord.concat(dimArr);
+    });
+
+    summary.dataDimsOnCoord = dataDimsOnCoord;
+    summary.encodeFirstDimNotExtra = encodeFirstDimNotExtra;
+
+    var encodeLabel = encode.label;
+    // FIXME `encode.label` is not recommanded, because formatter can not be set
+    // in this way. Use label.formatter instead. May be remove this approach someday.
+    if (encodeLabel && encodeLabel.length) {
+        defaultedLabel = encodeLabel.slice();
+    }
+
+    var encodeTooltip = encode.tooltip;
+    if (encodeTooltip && encodeTooltip.length) {
+        defaultedTooltip = encodeTooltip.slice();
+    }
+    else if (!defaultedTooltip.length) {
+        defaultedTooltip = defaultedLabel.slice();
+    }
+
+    encode.defaultedLabel = defaultedLabel;
+    encode.defaultedTooltip = defaultedTooltip;
+
+    return summary;
+}
+
+function getDimensionTypeByAxis(axisType) {
+    return axisType === 'category'
+        ? 'ordinal'
+        : axisType === 'time'
+        ? 'time'
+        : 'float';
+}
+
+function mayLabelDimType(dimType) {
+    // In most cases, ordinal and time do not suitable for label.
+    // Ordinal info can be displayed on axis. Time is too long.
+    return !(dimType === 'ordinal' || dimType === 'time');
+}
+
+// function findTheLastDimMayLabel(data) {
+//     // Get last value dim
+//     var dimensions = data.dimensions.slice();
+//     var valueType;
+//     var valueDim;
+//     while (dimensions.length && (
+//         valueDim = dimensions.pop(),
+//         valueType = data.getDimensionInfo(valueDim).type,
+//         valueType === 'ordinal' || valueType === 'time'
+//     )) {} // jshint ignore:line
+//     return valueDim;
+// }
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
