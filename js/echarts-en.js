@@ -28802,3 +28802,298 @@ function registerPostUpdate(postUpdateFunc) {
  *     {type: 'someAction', event: 'someEvent', update: 'updateView'},
  *     function () { ... }
  * );
+ *
+ * @param {(string|Object)} actionInfo
+ * @param {string} actionInfo.type
+ * @param {string} [actionInfo.event]
+ * @param {string} [actionInfo.update]
+ * @param {string} [eventName]
+ * @param {Function} action
+ */
+function registerAction(actionInfo, eventName, action) {
+    if (typeof eventName === 'function') {
+        action = eventName;
+        eventName = '';
+    }
+    var actionType = isObject(actionInfo)
+        ? actionInfo.type
+        : ([actionInfo, actionInfo = {
+            event: eventName
+        }][0]);
+
+    // Event name is all lowercase
+    actionInfo.event = (actionInfo.event || actionType).toLowerCase();
+    eventName = actionInfo.event;
+
+    // Validate action type and event name.
+    assert(ACTION_REG.test(actionType) && ACTION_REG.test(eventName));
+
+    if (!actions[actionType]) {
+        actions[actionType] = {action: action, actionInfo: actionInfo};
+    }
+    eventActionMap[eventName] = actionType;
+}
+
+/**
+ * @param {string} type
+ * @param {*} CoordinateSystem
+ */
+function registerCoordinateSystem(type, CoordinateSystem$$1) {
+    CoordinateSystemManager.register(type, CoordinateSystem$$1);
+}
+
+/**
+ * Get dimensions of specified coordinate system.
+ * @param {string} type
+ * @return {Array.<string|Object>}
+ */
+function getCoordinateSystemDimensions(type) {
+    var coordSysCreator = CoordinateSystemManager.get(type);
+    if (coordSysCreator) {
+        return coordSysCreator.getDimensionsInfo
+                ? coordSysCreator.getDimensionsInfo()
+                : coordSysCreator.dimensions.slice();
+    }
+}
+
+/**
+ * Layout is a special stage of visual encoding
+ * Most visual encoding like color are common for different chart
+ * But each chart has it's own layout algorithm
+ *
+ * @param {number} [priority=1000]
+ * @param {Function} layoutTask
+ */
+function registerLayout(priority, layoutTask) {
+    normalizeRegister(visualFuncs, priority, layoutTask, PRIORITY_VISUAL_LAYOUT, 'layout');
+}
+
+/**
+ * @param {number} [priority=3000]
+ * @param {module:echarts/stream/Task} visualTask
+ */
+function registerVisual(priority, visualTask) {
+    normalizeRegister(visualFuncs, priority, visualTask, PRIORITY_VISUAL_CHART, 'visual');
+}
+
+/**
+ * @param {Object|Function} fn: {seriesType, createOnAllSeries, performRawSeries, reset}
+ */
+function normalizeRegister(targetList, priority, fn, defaultPriority, visualType) {
+    if (isFunction(priority) || isObject(priority)) {
+        fn = priority;
+        priority = defaultPriority;
+    }
+
+    if (__DEV__) {
+        if (isNaN(priority) || priority == null) {
+            throw new Error('Illegal priority');
+        }
+        // Check duplicate
+        each(targetList, function (wrap) {
+            assert(wrap.__raw !== fn);
+        });
+    }
+
+    var stageHandler = Scheduler.wrapStageHandler(fn, visualType);
+
+    stageHandler.__prio = priority;
+    stageHandler.__raw = fn;
+    targetList.push(stageHandler);
+
+    return stageHandler;
+}
+
+/**
+ * @param {string} name
+ */
+function registerLoading(name, loadingFx) {
+    loadingEffects[name] = loadingFx;
+}
+
+/**
+ * @param {Object} opts
+ * @param {string} [superClass]
+ */
+function extendComponentModel(opts/*, superClass*/) {
+    // var Clazz = ComponentModel;
+    // if (superClass) {
+    //     var classType = parseClassType(superClass);
+    //     Clazz = ComponentModel.getClass(classType.main, classType.sub, true);
+    // }
+    return ComponentModel.extend(opts);
+}
+
+/**
+ * @param {Object} opts
+ * @param {string} [superClass]
+ */
+function extendComponentView(opts/*, superClass*/) {
+    // var Clazz = ComponentView;
+    // if (superClass) {
+    //     var classType = parseClassType(superClass);
+    //     Clazz = ComponentView.getClass(classType.main, classType.sub, true);
+    // }
+    return Component.extend(opts);
+}
+
+/**
+ * @param {Object} opts
+ * @param {string} [superClass]
+ */
+function extendSeriesModel(opts/*, superClass*/) {
+    // var Clazz = SeriesModel;
+    // if (superClass) {
+    //     superClass = 'series.' + superClass.replace('series.', '');
+    //     var classType = parseClassType(superClass);
+    //     Clazz = ComponentModel.getClass(classType.main, classType.sub, true);
+    // }
+    return SeriesModel.extend(opts);
+}
+
+/**
+ * @param {Object} opts
+ * @param {string} [superClass]
+ */
+function extendChartView(opts/*, superClass*/) {
+    // var Clazz = ChartView;
+    // if (superClass) {
+    //     superClass = superClass.replace('series.', '');
+    //     var classType = parseClassType(superClass);
+    //     Clazz = ChartView.getClass(classType.main, true);
+    // }
+    return Chart.extend(opts);
+}
+
+/**
+ * ZRender need a canvas context to do measureText.
+ * But in node environment canvas may be created by node-canvas.
+ * So we need to specify how to create a canvas instead of using document.createElement('canvas')
+ *
+ * Be careful of using it in the browser.
+ *
+ * @param {Function} creator
+ * @example
+ *     var Canvas = require('canvas');
+ *     var echarts = require('echarts');
+ *     echarts.setCanvasCreator(function () {
+ *         // Small size is enough.
+ *         return new Canvas(32, 32);
+ *     });
+ */
+function setCanvasCreator(creator) {
+    $override('createCanvas', creator);
+}
+
+/**
+ * @param {string} mapName
+ * @param {Array.<Object>|Object|string} geoJson
+ * @param {Object} [specialAreas]
+ *
+ * @example GeoJSON
+ *     $.get('USA.json', function (geoJson) {
+ *         echarts.registerMap('USA', geoJson);
+ *         // Or
+ *         echarts.registerMap('USA', {
+ *             geoJson: geoJson,
+ *             specialAreas: {}
+ *         })
+ *     });
+ *
+ *     $.get('airport.svg', function (svg) {
+ *         echarts.registerMap('airport', {
+ *             svg: svg
+ *         }
+ *     });
+ *
+ *     echarts.registerMap('eu', [
+ *         {svg: eu-topographic.svg},
+ *         {geoJSON: eu.json}
+ *     ])
+ */
+function registerMap(mapName, geoJson, specialAreas) {
+    mapDataStorage.registerMap(mapName, geoJson, specialAreas);
+}
+
+/**
+ * @param {string} mapName
+ * @return {Object}
+ */
+function getMap(mapName) {
+    // For backward compatibility, only return the first one.
+    var records = mapDataStorage.retrieveMap(mapName);
+    return records && records[0] && {
+        geoJson: records[0].geoJSON,
+        specialAreas: records[0].specialAreas
+    };
+}
+
+registerVisual(PRIORITY_VISUAL_GLOBAL, seriesColor);
+registerPreprocessor(backwardCompat);
+registerProcessor(PRIORITY_PROCESSOR_STATISTIC, dataStack);
+registerLoading('default', loadingDefault);
+
+// Default actions
+
+registerAction({
+    type: 'highlight',
+    event: 'highlight',
+    update: 'highlight'
+}, noop);
+
+registerAction({
+    type: 'downplay',
+    event: 'downplay',
+    update: 'downplay'
+}, noop);
+
+// Default theme
+registerTheme('light', lightTheme);
+registerTheme('dark', theme);
+
+// For backward compatibility, where the namespace `dataTool` will
+// be mounted on `echarts` is the extension `dataTool` is imported.
+var dataTool = {};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+function defaultKeyGetter(item) {
+    return item;
+}
+
+/**
+ * @param {Array} oldArr
+ * @param {Array} newArr
+ * @param {Function} oldKeyGetter
+ * @param {Function} newKeyGetter
+ * @param {Object} [context] Can be visited by this.context in callback.
+ */
+function DataDiffer(oldArr, newArr, oldKeyGetter, newKeyGetter, context) {
+    this._old = oldArr;
+    this._new = newArr;
+
+    this._oldKeyGetter = oldKeyGetter || defaultKeyGetter;
+    this._newKeyGetter = newKeyGetter || defaultKeyGetter;
+
+    this.context = context;
+}
+
+DataDiffer.prototype = {
