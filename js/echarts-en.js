@@ -29353,3 +29353,258 @@ function mayLabelDimType(dimType) {
 *
 * Unless required by applicable law or agreed to in writing,
 * software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/* global Float64Array, Int32Array, Uint32Array, Uint16Array */
+
+/**
+ * List for data storage
+ * @module echarts/data/List
+ */
+
+var isObject$4 = isObject$1;
+
+var UNDEFINED = 'undefined';
+var INDEX_NOT_FOUND = -1;
+
+// Use prefix to avoid index to be the same as otherIdList[idx],
+// which will cause weird udpate animation.
+var ID_PREFIX = 'e\0\0';
+
+var dataCtors = {
+    'float': typeof Float64Array === UNDEFINED
+        ? Array : Float64Array,
+    'int': typeof Int32Array === UNDEFINED
+        ? Array : Int32Array,
+    // Ordinal data type can be string or int
+    'ordinal': Array,
+    'number': Array,
+    'time': Array
+};
+
+// Caution: MUST not use `new CtorUint32Array(arr, 0, len)`, because the Ctor of array is
+// different from the Ctor of typed array.
+var CtorUint32Array = typeof Uint32Array === UNDEFINED ? Array : Uint32Array;
+var CtorInt32Array = typeof Int32Array === UNDEFINED ? Array : Int32Array;
+var CtorUint16Array = typeof Uint16Array === UNDEFINED ? Array : Uint16Array;
+
+function getIndicesCtor(list) {
+    // The possible max value in this._indicies is always this._rawCount despite of filtering.
+    return list._rawCount > 65535 ? CtorUint32Array : CtorUint16Array;
+}
+
+function cloneChunk(originalChunk) {
+    var Ctor = originalChunk.constructor;
+    // Only shallow clone is enough when Array.
+    return Ctor === Array ? originalChunk.slice() : new Ctor(originalChunk);
+}
+
+var TRANSFERABLE_PROPERTIES = [
+    'hasItemOption', '_nameList', '_idList', '_invertedIndicesMap',
+    '_rawData', '_chunkSize', '_chunkCount', '_dimValueGetter',
+    '_count', '_rawCount', '_nameDimIdx', '_idDimIdx'
+];
+var CLONE_PROPERTIES = [
+    '_extent', '_approximateExtent', '_rawExtent'
+];
+
+function transferProperties(target, source) {
+    each$1(TRANSFERABLE_PROPERTIES.concat(source.__wrappedMethods || []), function (propName) {
+        if (source.hasOwnProperty(propName)) {
+            target[propName] = source[propName];
+        }
+    });
+
+    target.__wrappedMethods = source.__wrappedMethods;
+
+    each$1(CLONE_PROPERTIES, function (propName) {
+        target[propName] = clone(source[propName]);
+    });
+
+    target._calculationInfo = extend(source._calculationInfo);
+}
+
+
+
+
+
+/**
+ * @constructor
+ * @alias module:echarts/data/List
+ *
+ * @param {Array.<string|Object>} dimensions
+ *      For example, ['someDimName', {name: 'someDimName', type: 'someDimType'}, ...].
+ *      Dimensions should be concrete names like x, y, z, lng, lat, angle, radius
+ *      Spetial fields: {
+ *          ordinalMeta: <module:echarts/data/OrdinalMeta>
+ *          createInvertedIndices: <boolean>
+ *      }
+ * @param {module:echarts/model/Model} hostModel
+ */
+var List = function (dimensions, hostModel) {
+
+    dimensions = dimensions || ['x', 'y'];
+
+    var dimensionInfos = {};
+    var dimensionNames = [];
+    var invertedIndicesMap = {};
+
+    for (var i = 0; i < dimensions.length; i++) {
+        // Use the original dimensions[i], where other flag props may exists.
+        var dimensionInfo = dimensions[i];
+
+        if (isString(dimensionInfo)) {
+            dimensionInfo = {name: dimensionInfo};
+        }
+
+        var dimensionName = dimensionInfo.name;
+        dimensionInfo.type = dimensionInfo.type || 'float';
+        if (!dimensionInfo.coordDim) {
+            dimensionInfo.coordDim = dimensionName;
+            dimensionInfo.coordDimIndex = 0;
+        }
+
+        dimensionInfo.otherDims = dimensionInfo.otherDims || {};
+        dimensionNames.push(dimensionName);
+        dimensionInfos[dimensionName] = dimensionInfo;
+
+        dimensionInfo.index = i;
+
+        if (dimensionInfo.createInvertedIndices) {
+            invertedIndicesMap[dimensionName] = [];
+        }
+    }
+
+    /**
+     * @readOnly
+     * @type {Array.<string>}
+     */
+    this.dimensions = dimensionNames;
+
+    /**
+     * Infomation of each data dimension, like data type.
+     * @type {Object}
+     */
+    this._dimensionInfos = dimensionInfos;
+
+    /**
+     * @type {module:echarts/model/Model}
+     */
+    this.hostModel = hostModel;
+
+    /**
+     * @type {module:echarts/model/Model}
+     */
+    this.dataType;
+
+    /**
+     * Indices stores the indices of data subset after filtered.
+     * This data subset will be used in chart.
+     * @type {Array.<number>}
+     * @readOnly
+     */
+    this._indices = null;
+
+    this._count = 0;
+    this._rawCount = 0;
+
+    /**
+     * Data storage
+     * @type {Object.<key, Array.<TypedArray|Array>>}
+     * @private
+     */
+    this._storage = {};
+
+    /**
+     * @type {Array.<string>}
+     */
+    this._nameList = [];
+    /**
+     * @type {Array.<string>}
+     */
+    this._idList = [];
+
+    /**
+     * Models of data option is stored sparse for optimizing memory cost
+     * @type {Array.<module:echarts/model/Model>}
+     * @private
+     */
+    this._optionModels = [];
+
+    /**
+     * Global visual properties after visual coding
+     * @type {Object}
+     * @private
+     */
+    this._visual = {};
+
+    /**
+     * Globel layout properties.
+     * @type {Object}
+     * @private
+     */
+    this._layout = {};
+
+    /**
+     * Item visual properties after visual coding
+     * @type {Array.<Object>}
+     * @private
+     */
+    this._itemVisuals = [];
+
+    /**
+     * Key: visual type, Value: boolean
+     * @type {Object}
+     * @readOnly
+     */
+    this.hasItemVisual = {};
+
+    /**
+     * Item layout properties after layout
+     * @type {Array.<Object>}
+     * @private
+     */
+    this._itemLayouts = [];
+
+    /**
+     * Graphic elemnents
+     * @type {Array.<module:zrender/Element>}
+     * @private
+     */
+    this._graphicEls = [];
+
+    /**
+     * Max size of each chunk.
+     * @type {number}
+     * @private
+     */
+    this._chunkSize = 1e5;
+
+    /**
+     * @type {number}
+     * @private
+     */
+    this._chunkCount = 0;
+
+    /**
+     * @type {Array.<Array|Object>}
+     * @private
+     */
+    this._rawData;
+
+    /**
+     * Raw extent will not be cloned, but only transfered.
+     * It will not be calculated util needed.
+     * key: dim,
+     * value: {end: number, extent: Array.<number>}
+     * @type {Object}
+     * @private
+     */
+    this._rawExtent = {};
+
+    /**
+     * @type {Object}
