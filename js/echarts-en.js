@@ -29608,3 +29608,278 @@ var List = function (dimensions, hostModel) {
 
     /**
      * @type {Object}
+     * @private
+     */
+    this._extent = {};
+
+    /**
+     * key: dim
+     * value: extent
+     * @type {Object}
+     * @private
+     */
+    this._approximateExtent = {};
+
+    /**
+     * Cache summary info for fast visit. See "dimensionHelper".
+     * @type {Object}
+     * @private
+     */
+    this._dimensionsSummary = summarizeDimensions(this);
+
+    /**
+     * @type {Object.<Array|TypedArray>}
+     * @private
+     */
+    this._invertedIndicesMap = invertedIndicesMap;
+
+    /**
+     * @type {Object}
+     * @private
+     */
+    this._calculationInfo = {};
+};
+
+var listProto = List.prototype;
+
+listProto.type = 'list';
+
+/**
+ * If each data item has it's own option
+ * @type {boolean}
+ */
+listProto.hasItemOption = true;
+
+/**
+ * Get dimension name
+ * @param {string|number} dim
+ *        Dimension can be concrete names like x, y, z, lng, lat, angle, radius
+ *        Or a ordinal number. For example getDimensionInfo(0) will return 'x' or 'lng' or 'radius'
+ * @return {string} Concrete dim name.
+ */
+listProto.getDimension = function (dim) {
+    if (!isNaN(dim)) {
+        dim = this.dimensions[dim] || dim;
+    }
+    return dim;
+};
+
+/**
+ * Get type and calculation info of particular dimension
+ * @param {string|number} dim
+ *        Dimension can be concrete names like x, y, z, lng, lat, angle, radius
+ *        Or a ordinal number. For example getDimensionInfo(0) will return 'x' or 'lng' or 'radius'
+ */
+listProto.getDimensionInfo = function (dim) {
+    // Do not clone, because there may be categories in dimInfo.
+    return this._dimensionInfos[this.getDimension(dim)];
+};
+
+/**
+ * @return {Array.<string>} concrete dimension name list on coord.
+ */
+listProto.getDimensionsOnCoord = function () {
+    return this._dimensionsSummary.dataDimsOnCoord.slice();
+};
+
+/**
+ * @param {string} coordDim
+ * @param {number} [idx] A coordDim may map to more than one data dim.
+ *        If idx is `true`, return a array of all mapped dims.
+ *        If idx is not specified, return the first dim not extra.
+ * @return {string|Array.<string>} concrete data dim.
+ *        If idx is number, and not found, return null/undefined.
+ *        If idx is `true`, and not found, return empty array (always return array).
+ */
+listProto.mapDimension = function (coordDim, idx) {
+    var dimensionsSummary = this._dimensionsSummary;
+
+    if (idx == null) {
+        return dimensionsSummary.encodeFirstDimNotExtra[coordDim];
+    }
+
+    var dims = dimensionsSummary.encode[coordDim];
+    return idx === true
+        // always return array if idx is `true`
+        ? (dims || []).slice()
+        : (dims && dims[idx]);
+};
+
+/**
+ * Initialize from data
+ * @param {Array.<Object|number|Array>} data source or data or data provider.
+ * @param {Array.<string>} [nameLIst] The name of a datum is used on data diff and
+ *        defualt label/tooltip.
+ *        A name can be specified in encode.itemName,
+ *        or dataItem.name (only for series option data),
+ *        or provided in nameList from outside.
+ * @param {Function} [dimValueGetter] (dataItem, dimName, dataIndex, dimIndex) => number
+ */
+listProto.initData = function (data, nameList, dimValueGetter) {
+
+    var notProvider = Source.isInstance(data) || isArrayLike(data);
+    if (notProvider) {
+        data = new DefaultDataProvider(data, this.dimensions.length);
+    }
+
+    if (__DEV__) {
+        if (!notProvider && (typeof data.getItem !== 'function' || typeof data.count !== 'function')) {
+            throw new Error('Inavlid data provider.');
+        }
+    }
+
+    this._rawData = data;
+
+    // Clear
+    this._storage = {};
+    this._indices = null;
+
+    this._nameList = nameList || [];
+
+    this._idList = [];
+
+    this._nameRepeatCount = {};
+
+    if (!dimValueGetter) {
+        this.hasItemOption = false;
+    }
+
+    /**
+     * @readOnly
+     */
+    this.defaultDimValueGetter = defaultDimValueGetters[
+        this._rawData.getSource().sourceFormat
+    ];
+    // Default dim value getter
+    this._dimValueGetter = dimValueGetter = dimValueGetter
+        || this.defaultDimValueGetter;
+    this._dimValueGetterArrayRows = defaultDimValueGetters.arrayRows;
+
+    // Reset raw extent.
+    this._rawExtent = {};
+
+    this._initDataFromProvider(0, data.count());
+
+    // If data has no item option.
+    if (data.pure) {
+        this.hasItemOption = false;
+    }
+};
+
+listProto.getProvider = function () {
+    return this._rawData;
+};
+
+/**
+ * Caution: Can be only called on raw data (before `this._indices` created).
+ */
+listProto.appendData = function (data) {
+    if (__DEV__) {
+        assert$1(!this._indices, 'appendData can only be called on raw data.');
+    }
+
+    var rawData = this._rawData;
+    var start = this.count();
+    rawData.appendData(data);
+    var end = rawData.count();
+    if (!rawData.persistent) {
+        end += start;
+    }
+    this._initDataFromProvider(start, end);
+};
+
+/**
+ * Caution: Can be only called on raw data (before `this._indices` created).
+ * This method does not modify `rawData` (`dataProvider`), but only
+ * add values to storage.
+ *
+ * The final count will be increased by `Math.max(values.length, names.length)`.
+ *
+ * @param {Array.<Array.<*>>} values That is the SourceType: 'arrayRows', like
+ *        [
+ *            [12, 33, 44],
+ *            [NaN, 43, 1],
+ *            ['-', 'asdf', 0]
+ *        ]
+ *        Each item is exaclty cooresponding to a dimension.
+ * @param {Array.<string>} [names]
+ */
+listProto.appendValues = function (values, names) {
+    var chunkSize = this._chunkSize;
+    var storage = this._storage;
+    var dimensions = this.dimensions;
+    var dimLen = dimensions.length;
+    var rawExtent = this._rawExtent;
+
+    var start = this.count();
+    var end = start + Math.max(values.length, names ? names.length : 0);
+    var originalChunkCount = this._chunkCount;
+
+    for (var i = 0; i < dimLen; i++) {
+        var dim = dimensions[i];
+        if (!rawExtent[dim]) {
+            rawExtent[dim] = getInitialExtent();
+        }
+        if (!storage[dim]) {
+            storage[dim] = [];
+        }
+        prepareChunks(storage, this._dimensionInfos[dim], chunkSize, originalChunkCount, end);
+        this._chunkCount = storage[dim].length;
+    }
+
+    var emptyDataItem = new Array(dimLen);
+    for (var idx = start; idx < end; idx++) {
+        var sourceIdx = idx - start;
+        var chunkIndex = Math.floor(idx / chunkSize);
+        var chunkOffset = idx % chunkSize;
+
+        // Store the data by dimensions
+        for (var k = 0; k < dimLen; k++) {
+            var dim = dimensions[k];
+            var val = this._dimValueGetterArrayRows(
+                values[sourceIdx] || emptyDataItem, dim, sourceIdx, k
+            );
+            storage[dim][chunkIndex][chunkOffset] = val;
+
+            var dimRawExtent = rawExtent[dim];
+            val < dimRawExtent[0] && (dimRawExtent[0] = val);
+            val > dimRawExtent[1] && (dimRawExtent[1] = val);
+        }
+
+        if (names) {
+            this._nameList[idx] = names[sourceIdx];
+        }
+    }
+
+    this._rawCount = this._count = end;
+
+    // Reset data extent
+    this._extent = {};
+
+    prepareInvertedIndex(this);
+};
+
+listProto._initDataFromProvider = function (start, end) {
+    // Optimize.
+    if (start >= end) {
+        return;
+    }
+
+    var chunkSize = this._chunkSize;
+    var rawData = this._rawData;
+    var storage = this._storage;
+    var dimensions = this.dimensions;
+    var dimLen = dimensions.length;
+    var dimensionInfoMap = this._dimensionInfos;
+    var nameList = this._nameList;
+    var idList = this._idList;
+    var rawExtent = this._rawExtent;
+    var nameRepeatCount = this._nameRepeatCount = {};
+    var nameDimIdx;
+
+    var originalChunkCount = this._chunkCount;
+    for (var i = 0; i < dimLen; i++) {
+        var dim = dimensions[i];
+        if (!rawExtent[dim]) {
+            rawExtent[dim] = getInitialExtent();
+        }
