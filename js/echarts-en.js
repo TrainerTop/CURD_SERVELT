@@ -30138,3 +30138,257 @@ listProto.getByRawIndex = function (dim, rawIdx) {
     if (!(rawIdx >= 0 && rawIdx < this._rawCount)) {
         return NaN;
     }
+    var dimStore = this._storage[dim];
+    if (!dimStore) {
+        // TODO Warn ?
+        return NaN;
+    }
+
+    var chunkIndex = Math.floor(rawIdx / this._chunkSize);
+    var chunkOffset = rawIdx % this._chunkSize;
+    var chunkStore = dimStore[chunkIndex];
+    return chunkStore[chunkOffset];
+};
+
+/**
+ * FIXME Use `get` on chrome maybe slow(in filterSelf and selectRange).
+ * Hack a much simpler _getFast
+ * @private
+ */
+listProto._getFast = function (dim, rawIdx) {
+    var chunkIndex = Math.floor(rawIdx / this._chunkSize);
+    var chunkOffset = rawIdx % this._chunkSize;
+    var chunkStore = this._storage[dim][chunkIndex];
+    return chunkStore[chunkOffset];
+};
+
+/**
+ * Get value for multi dimensions.
+ * @param {Array.<string>} [dimensions] If ignored, using all dimensions.
+ * @param {number} idx
+ * @return {number}
+ */
+listProto.getValues = function (dimensions, idx /*, stack */) {
+    var values = [];
+
+    if (!isArray(dimensions)) {
+        // stack = idx;
+        idx = dimensions;
+        dimensions = this.dimensions;
+    }
+
+    for (var i = 0, len = dimensions.length; i < len; i++) {
+        values.push(this.get(dimensions[i], idx /*, stack */));
+    }
+
+    return values;
+};
+
+/**
+ * If value is NaN. Inlcuding '-'
+ * Only check the coord dimensions.
+ * @param {string} dim
+ * @param {number} idx
+ * @return {number}
+ */
+listProto.hasValue = function (idx) {
+    var dataDimsOnCoord = this._dimensionsSummary.dataDimsOnCoord;
+    var dimensionInfos = this._dimensionInfos;
+    for (var i = 0, len = dataDimsOnCoord.length; i < len; i++) {
+        if (
+            // Ordinal type can be string or number
+            dimensionInfos[dataDimsOnCoord[i]].type !== 'ordinal'
+            // FIXME check ordinal when using index?
+            && isNaN(this.get(dataDimsOnCoord[i], idx))
+        ) {
+            return false;
+        }
+    }
+    return true;
+};
+
+/**
+ * Get extent of data in one dimension
+ * @param {string} dim
+ * @param {boolean} stack
+ */
+listProto.getDataExtent = function (dim /*, stack */) {
+    // Make sure use concrete dim as cache name.
+    dim = this.getDimension(dim);
+    var dimData = this._storage[dim];
+    var initialExtent = getInitialExtent();
+
+    // stack = !!((stack || false) && this.getCalculationInfo(dim));
+
+    if (!dimData) {
+        return initialExtent;
+    }
+
+    // Make more strict checkings to ensure hitting cache.
+    var currEnd = this.count();
+    // var cacheName = [dim, !!stack].join('_');
+    // var cacheName = dim;
+
+    // Consider the most cases when using data zoom, `getDataExtent`
+    // happened before filtering. We cache raw extent, which is not
+    // necessary to be cleared and recalculated when restore data.
+    var useRaw = !this._indices; // && !stack;
+    var dimExtent;
+
+    if (useRaw) {
+        return this._rawExtent[dim].slice();
+    }
+    dimExtent = this._extent[dim];
+    if (dimExtent) {
+        return dimExtent.slice();
+    }
+    dimExtent = initialExtent;
+
+    var min = dimExtent[0];
+    var max = dimExtent[1];
+
+    for (var i = 0; i < currEnd; i++) {
+        // var value = stack ? this.get(dim, i, true) : this._getFast(dim, this.getRawIndex(i));
+        var value = this._getFast(dim, this.getRawIndex(i));
+        value < min && (min = value);
+        value > max && (max = value);
+    }
+
+    dimExtent = [min, max];
+
+    this._extent[dim] = dimExtent;
+
+    return dimExtent;
+};
+
+/**
+ * Optimize for the scenario that data is filtered by a given extent.
+ * Consider that if data amount is more than hundreds of thousand,
+ * extent calculation will cost more than 10ms and the cache will
+ * be erased because of the filtering.
+ */
+listProto.getApproximateExtent = function (dim /*, stack */) {
+    dim = this.getDimension(dim);
+    return this._approximateExtent[dim] || this.getDataExtent(dim /*, stack */);
+};
+
+listProto.setApproximateExtent = function (extent, dim /*, stack */) {
+    dim = this.getDimension(dim);
+    this._approximateExtent[dim] = extent.slice();
+};
+
+/**
+ * @param {string} key
+ * @return {*}
+ */
+listProto.getCalculationInfo = function (key) {
+    return this._calculationInfo[key];
+};
+
+/**
+ * @param {string|Object} key or k-v object
+ * @param {*} [value]
+ */
+listProto.setCalculationInfo = function (key, value) {
+    isObject$4(key)
+        ? extend(this._calculationInfo, key)
+        : (this._calculationInfo[key] = value);
+};
+
+/**
+ * Get sum of data in one dimension
+ * @param {string} dim
+ */
+listProto.getSum = function (dim /*, stack */) {
+    var dimData = this._storage[dim];
+    var sum = 0;
+    if (dimData) {
+        for (var i = 0, len = this.count(); i < len; i++) {
+            var value = this.get(dim, i /*, stack */);
+            if (!isNaN(value)) {
+                sum += value;
+            }
+        }
+    }
+    return sum;
+};
+
+/**
+ * Get median of data in one dimension
+ * @param {string} dim
+ */
+listProto.getMedian = function (dim /*, stack */) {
+    var dimDataArray = [];
+    // map all data of one dimension
+    this.each(dim, function (val, idx) {
+        if (!isNaN(val)) {
+            dimDataArray.push(val);
+        }
+    });
+
+    // TODO
+    // Use quick select?
+
+    // immutability & sort
+    var sortedDimDataArray = [].concat(dimDataArray).sort(function (a, b) {
+        return a - b;
+    });
+    var len = this.count();
+    // calculate median
+    return len === 0
+        ? 0
+        : len % 2 === 1
+        ? sortedDimDataArray[(len - 1) / 2]
+        : (sortedDimDataArray[len / 2] + sortedDimDataArray[len / 2 - 1]) / 2;
+};
+
+// /**
+//  * Retreive the index with given value
+//  * @param {string} dim Concrete dimension.
+//  * @param {number} value
+//  * @return {number}
+//  */
+// Currently incorrect: should return dataIndex but not rawIndex.
+// Do not fix it until this method is to be used somewhere.
+// FIXME Precision of float value
+// listProto.indexOf = function (dim, value) {
+//     var storage = this._storage;
+//     var dimData = storage[dim];
+//     var chunkSize = this._chunkSize;
+//     if (dimData) {
+//         for (var i = 0, len = this.count(); i < len; i++) {
+//             var chunkIndex = Math.floor(i / chunkSize);
+//             var chunkOffset = i % chunkSize;
+//             if (dimData[chunkIndex][chunkOffset] === value) {
+//                 return i;
+//             }
+//         }
+//     }
+//     return -1;
+// };
+
+/**
+ * Only support the dimension which inverted index created.
+ * Do not support other cases until required.
+ * @param {string} concrete dim
+ * @param {number|string} value
+ * @return {number} rawIndex
+ */
+listProto.rawIndexOf = function (dim, value) {
+    var invertedIndices = dim && this._invertedIndicesMap[dim];
+    if (__DEV__) {
+        if (!invertedIndices) {
+            throw new Error('Do not supported yet');
+        }
+    }
+    var rawIndex = invertedIndices[value];
+    if (rawIndex == null || isNaN(rawIndex)) {
+        return INDEX_NOT_FOUND;
+    }
+    return rawIndex;
+};
+
+/**
+ * Retreive the index with given name
+ * @param {number} idx
+ * @param {number} name
