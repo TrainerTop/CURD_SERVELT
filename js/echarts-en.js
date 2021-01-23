@@ -29883,3 +29883,258 @@ listProto._initDataFromProvider = function (start, end) {
         if (!rawExtent[dim]) {
             rawExtent[dim] = getInitialExtent();
         }
+
+        var dimInfo = dimensionInfoMap[dim];
+        if (dimInfo.otherDims.itemName === 0) {
+            nameDimIdx = this._nameDimIdx = i;
+        }
+        if (dimInfo.otherDims.itemId === 0) {
+            this._idDimIdx = i;
+        }
+
+        if (!storage[dim]) {
+            storage[dim] = [];
+        }
+
+        prepareChunks(storage, dimInfo, chunkSize, originalChunkCount, end);
+
+        this._chunkCount = storage[dim].length;
+    }
+
+    var dataItem = new Array(dimLen);
+    for (var idx = start; idx < end; idx++) {
+        // NOTICE: Try not to write things into dataItem
+        dataItem = rawData.getItem(idx, dataItem);
+        // Each data item is value
+        // [1, 2]
+        // 2
+        // Bar chart, line chart which uses category axis
+        // only gives the 'y' value. 'x' value is the indices of category
+        // Use a tempValue to normalize the value to be a (x, y) value
+        var chunkIndex = Math.floor(idx / chunkSize);
+        var chunkOffset = idx % chunkSize;
+
+        // Store the data by dimensions
+        for (var k = 0; k < dimLen; k++) {
+            var dim = dimensions[k];
+            var dimStorage = storage[dim][chunkIndex];
+            // PENDING NULL is empty or zero
+            var val = this._dimValueGetter(dataItem, dim, idx, k);
+            dimStorage[chunkOffset] = val;
+
+            var dimRawExtent = rawExtent[dim];
+            val < dimRawExtent[0] && (dimRawExtent[0] = val);
+            val > dimRawExtent[1] && (dimRawExtent[1] = val);
+        }
+
+        // ??? FIXME not check by pure but sourceFormat?
+        // TODO refactor these logic.
+        if (!rawData.pure) {
+            var name = nameList[idx];
+
+            if (dataItem && name == null) {
+                // If dataItem is {name: ...}, it has highest priority.
+                // That is appropriate for many common cases.
+                if (dataItem.name != null) {
+                    // There is no other place to persistent dataItem.name,
+                    // so save it to nameList.
+                    nameList[idx] = name = dataItem.name;
+                }
+                else if (nameDimIdx != null) {
+                    var nameDim = dimensions[nameDimIdx];
+                    var nameDimChunk = storage[nameDim][chunkIndex];
+                    if (nameDimChunk) {
+                        name = nameDimChunk[chunkOffset];
+                        var ordinalMeta = dimensionInfoMap[nameDim].ordinalMeta;
+                        if (ordinalMeta && ordinalMeta.categories.length) {
+                            name = ordinalMeta.categories[name];
+                        }
+                    }
+                }
+            }
+
+            // Try using the id in option
+            // id or name is used on dynamical data, mapping old and new items.
+            var id = dataItem == null ? null : dataItem.id;
+
+            if (id == null && name != null) {
+                // Use name as id and add counter to avoid same name
+                nameRepeatCount[name] = nameRepeatCount[name] || 0;
+                id = name;
+                if (nameRepeatCount[name] > 0) {
+                    id += '__ec__' + nameRepeatCount[name];
+                }
+                nameRepeatCount[name]++;
+            }
+            id != null && (idList[idx] = id);
+        }
+    }
+
+    if (!rawData.persistent && rawData.clean) {
+        // Clean unused data if data source is typed array.
+        rawData.clean();
+    }
+
+    this._rawCount = this._count = end;
+
+    // Reset data extent
+    this._extent = {};
+
+    prepareInvertedIndex(this);
+};
+
+function prepareChunks(storage, dimInfo, chunkSize, chunkCount, end) {
+    var DataCtor = dataCtors[dimInfo.type];
+    var lastChunkIndex = chunkCount - 1;
+    var dim = dimInfo.name;
+    var resizeChunkArray = storage[dim][lastChunkIndex];
+    if (resizeChunkArray && resizeChunkArray.length < chunkSize) {
+        var newStore = new DataCtor(Math.min(end - lastChunkIndex * chunkSize, chunkSize));
+        // The cost of the copy is probably inconsiderable
+        // within the initial chunkSize.
+        for (var j = 0; j < resizeChunkArray.length; j++) {
+            newStore[j] = resizeChunkArray[j];
+        }
+        storage[dim][lastChunkIndex] = newStore;
+    }
+
+    // Create new chunks.
+    for (var k = chunkCount * chunkSize; k < end; k += chunkSize) {
+        storage[dim].push(new DataCtor(Math.min(end - k, chunkSize)));
+    }
+}
+
+function prepareInvertedIndex(list) {
+    var invertedIndicesMap = list._invertedIndicesMap;
+    each$1(invertedIndicesMap, function (invertedIndices, dim) {
+        var dimInfo = list._dimensionInfos[dim];
+
+        // Currently, only dimensions that has ordinalMeta can create inverted indices.
+        var ordinalMeta = dimInfo.ordinalMeta;
+        if (ordinalMeta) {
+            invertedIndices = invertedIndicesMap[dim] = new CtorInt32Array(
+                ordinalMeta.categories.length
+            );
+            // The default value of TypedArray is 0. To avoid miss
+            // mapping to 0, we should set it as INDEX_NOT_FOUND.
+            for (var i = 0; i < invertedIndices.length; i++) {
+                invertedIndices[i] = INDEX_NOT_FOUND;
+            }
+            for (var i = 0; i < list._count; i++) {
+                // Only support the case that all values are distinct.
+                invertedIndices[list.get(dim, i)] = i;
+            }
+        }
+    });
+}
+
+function getRawValueFromStore(list, dimIndex, rawIndex) {
+    var val;
+    if (dimIndex != null) {
+        var chunkSize = list._chunkSize;
+        var chunkIndex = Math.floor(rawIndex / chunkSize);
+        var chunkOffset = rawIndex % chunkSize;
+        var dim = list.dimensions[dimIndex];
+        var chunk = list._storage[dim][chunkIndex];
+        if (chunk) {
+            val = chunk[chunkOffset];
+            var ordinalMeta = list._dimensionInfos[dim].ordinalMeta;
+            if (ordinalMeta && ordinalMeta.categories.length) {
+                val = ordinalMeta.categories[val];
+            }
+        }
+    }
+    return val;
+}
+
+/**
+ * @return {number}
+ */
+listProto.count = function () {
+    return this._count;
+};
+
+listProto.getIndices = function () {
+    var newIndices;
+
+    var indices = this._indices;
+    if (indices) {
+        var Ctor = indices.constructor;
+        var thisCount = this._count;
+        // `new Array(a, b, c)` is different from `new Uint32Array(a, b, c)`.
+        if (Ctor === Array) {
+            newIndices = new Ctor(thisCount);
+            for (var i = 0; i < thisCount; i++) {
+                newIndices[i] = indices[i];
+            }
+        }
+        else {
+            newIndices = new Ctor(indices.buffer, 0, thisCount);
+        }
+    }
+    else {
+        var Ctor = getIndicesCtor(this);
+        var newIndices = new Ctor(this.count());
+        for (var i = 0; i < newIndices.length; i++) {
+            newIndices[i] = i;
+        }
+    }
+
+    return newIndices;
+};
+
+/**
+ * Get value. Return NaN if idx is out of range.
+ * @param {string} dim Dim must be concrete name.
+ * @param {number} idx
+ * @param {boolean} stack
+ * @return {number}
+ */
+listProto.get = function (dim, idx /*, stack */) {
+    if (!(idx >= 0 && idx < this._count)) {
+        return NaN;
+    }
+    var storage = this._storage;
+    if (!storage[dim]) {
+        // TODO Warn ?
+        return NaN;
+    }
+
+    idx = this.getRawIndex(idx);
+
+    var chunkIndex = Math.floor(idx / this._chunkSize);
+    var chunkOffset = idx % this._chunkSize;
+
+    var chunkStore = storage[dim][chunkIndex];
+    var value = chunkStore[chunkOffset];
+    // FIXME ordinal data type is not stackable
+    // if (stack) {
+    //     var dimensionInfo = this._dimensionInfos[dim];
+    //     if (dimensionInfo && dimensionInfo.stackable) {
+    //         var stackedOn = this.stackedOn;
+    //         while (stackedOn) {
+    //             // Get no stacked data of stacked on
+    //             var stackedValue = stackedOn.get(dim, idx);
+    //             // Considering positive stack, negative stack and empty data
+    //             if ((value >= 0 && stackedValue > 0)  // Positive stack
+    //                 || (value <= 0 && stackedValue < 0) // Negative stack
+    //             ) {
+    //                 value += stackedValue;
+    //             }
+    //             stackedOn = stackedOn.stackedOn;
+    //         }
+    //     }
+    // }
+
+    return value;
+};
+
+/**
+ * @param {string} dim concrete dim
+ * @param {number} rawIndex
+ * @return {number|string}
+ */
+listProto.getByRawIndex = function (dim, rawIdx) {
+    if (!(rawIdx >= 0 && rawIdx < this._rawCount)) {
+        return NaN;
+    }
