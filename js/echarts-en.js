@@ -31176,3 +31176,291 @@ listProto.clearItemLayouts = function () {
 /**
  * Get visual property of single data item
  * @param {number} idx
+ * @param {string} key
+ * @param {boolean} [ignoreParent=false]
+ */
+listProto.getItemVisual = function (idx, key, ignoreParent) {
+    var itemVisual = this._itemVisuals[idx];
+    var val = itemVisual && itemVisual[key];
+    if (val == null && !ignoreParent) {
+        // Use global visual property
+        return this.getVisual(key);
+    }
+    return val;
+};
+
+/**
+ * Set visual property of single data item
+ *
+ * @param {number} idx
+ * @param {string|Object} key
+ * @param {*} [value]
+ *
+ * @example
+ *  setItemVisual(0, 'color', color);
+ *  setItemVisual(0, {
+ *      'color': color
+ *  });
+ */
+listProto.setItemVisual = function (idx, key, value) {
+    var itemVisual = this._itemVisuals[idx] || {};
+    var hasItemVisual = this.hasItemVisual;
+    this._itemVisuals[idx] = itemVisual;
+
+    if (isObject$4(key)) {
+        for (var name in key) {
+            if (key.hasOwnProperty(name)) {
+                itemVisual[name] = key[name];
+                hasItemVisual[name] = true;
+            }
+        }
+        return;
+    }
+    itemVisual[key] = value;
+    hasItemVisual[key] = true;
+};
+
+/**
+ * Clear itemVisuals and list visual.
+ */
+listProto.clearAllVisual = function () {
+    this._visual = {};
+    this._itemVisuals = [];
+    this.hasItemVisual = {};
+};
+
+var setItemDataAndSeriesIndex = function (child) {
+    child.seriesIndex = this.seriesIndex;
+    child.dataIndex = this.dataIndex;
+    child.dataType = this.dataType;
+};
+/**
+ * Set graphic element relative to data. It can be set as null
+ * @param {number} idx
+ * @param {module:zrender/Element} [el]
+ */
+listProto.setItemGraphicEl = function (idx, el) {
+    var hostModel = this.hostModel;
+
+    if (el) {
+        // Add data index and series index for indexing the data by element
+        // Useful in tooltip
+        el.dataIndex = idx;
+        el.dataType = this.dataType;
+        el.seriesIndex = hostModel && hostModel.seriesIndex;
+        if (el.type === 'group') {
+            el.traverse(setItemDataAndSeriesIndex, el);
+        }
+    }
+
+    this._graphicEls[idx] = el;
+};
+
+/**
+ * @param {number} idx
+ * @return {module:zrender/Element}
+ */
+listProto.getItemGraphicEl = function (idx) {
+    return this._graphicEls[idx];
+};
+
+/**
+ * @param {Function} cb
+ * @param {*} context
+ */
+listProto.eachItemGraphicEl = function (cb, context) {
+    each$1(this._graphicEls, function (el, idx) {
+        if (el) {
+            cb && cb.call(context, el, idx);
+        }
+    });
+};
+
+/**
+ * Shallow clone a new list except visual and layout properties, and graph elements.
+ * New list only change the indices.
+ */
+listProto.cloneShallow = function (list) {
+    if (!list) {
+        var dimensionInfoList = map(this.dimensions, this.getDimensionInfo, this);
+        list = new List(dimensionInfoList, this.hostModel);
+    }
+
+    // FIXME
+    list._storage = this._storage;
+
+    transferProperties(list, this);
+
+    // Clone will not change the data extent and indices
+    if (this._indices) {
+        var Ctor = this._indices.constructor;
+        list._indices = new Ctor(this._indices);
+    }
+    else {
+        list._indices = null;
+    }
+    list.getRawIndex = list._indices ? getRawIndexWithIndices : getRawIndexWithoutIndices;
+
+    return list;
+};
+
+/**
+ * Wrap some method to add more feature
+ * @param {string} methodName
+ * @param {Function} injectFunction
+ */
+listProto.wrapMethod = function (methodName, injectFunction) {
+    var originalMethod = this[methodName];
+    if (typeof originalMethod !== 'function') {
+        return;
+    }
+    this.__wrappedMethods = this.__wrappedMethods || [];
+    this.__wrappedMethods.push(methodName);
+    this[methodName] = function () {
+        var res = originalMethod.apply(this, arguments);
+        return injectFunction.apply(this, [res].concat(slice(arguments)));
+    };
+};
+
+// Methods that create a new list based on this list should be listed here.
+// Notice that those method should `RETURN` the new list.
+listProto.TRANSFERABLE_METHODS = ['cloneShallow', 'downSample', 'map'];
+// Methods that change indices of this list should be listed here.
+listProto.CHANGABLE_METHODS = ['filterSelf', 'selectRange'];
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @deprecated
+ * Use `echarts/data/helper/createDimensions` instead.
+ */
+
+/**
+ * @see {module:echarts/test/ut/spec/data/completeDimensions}
+ *
+ * Complete the dimensions array, by user defined `dimension` and `encode`,
+ * and guessing from the data structure.
+ * If no 'value' dimension specified, the first no-named dimension will be
+ * named as 'value'.
+ *
+ * @param {Array.<string>} sysDims Necessary dimensions, like ['x', 'y'], which
+ *      provides not only dim template, but also default order.
+ *      properties: 'name', 'type', 'displayName'.
+ *      `name` of each item provides default coord name.
+ *      [{dimsDef: [string|Object, ...]}, ...] dimsDef of sysDim item provides default dim name, and
+ *                                    provide dims count that the sysDim required.
+ *      [{ordinalMeta}] can be specified.
+ * @param {module:echarts/data/Source|Array|Object} source or data (for compatibal with pervious)
+ * @param {Object} [opt]
+ * @param {Array.<Object|string>} [opt.dimsDef] option.series.dimensions User defined dimensions
+ *      For example: ['asdf', {name, type}, ...].
+ * @param {Object|HashMap} [opt.encodeDef] option.series.encode {x: 2, y: [3, 1], tooltip: [1, 2], label: 3}
+ * @param {string} [opt.generateCoord] Generate coord dim with the given name.
+ *                 If not specified, extra dim names will be:
+ *                 'value', 'value0', 'value1', ...
+ * @param {number} [opt.generateCoordCount] By default, the generated dim name is `generateCoord`.
+ *                 If `generateCoordCount` specified, the generated dim names will be:
+ *                 `generateCoord` + 0, `generateCoord` + 1, ...
+ *                 can be Infinity, indicate that use all of the remain columns.
+ * @param {number} [opt.dimCount] If not specified, guess by the first data item.
+ * @param {number} [opt.encodeDefaulter] If not specified, auto find the next available data dim.
+ * @return {Array.<Object>} [{
+ *      name: string mandatory,
+ *      displayName: string, the origin name in dimsDef, see source helper.
+ *                 If displayName given, the tooltip will displayed vertically.
+ *      coordDim: string mandatory,
+ *      coordDimIndex: number mandatory,
+ *      type: string optional,
+ *      otherDims: { never null/undefined
+ *          tooltip: number optional,
+ *          label: number optional,
+ *          itemName: number optional,
+ *          seriesName: number optional,
+ *      },
+ *      isExtraCoord: boolean true if coord is generated
+ *          (not specified in encode and not series specified)
+ *      other props ...
+ * }]
+ */
+function completeDimensions(sysDims, source, opt) {
+    if (!Source.isInstance(source)) {
+        source = Source.seriesDataToSource(source);
+    }
+
+    opt = opt || {};
+    sysDims = (sysDims || []).slice();
+    var dimsDef = (opt.dimsDef || []).slice();
+    var encodeDef = createHashMap(opt.encodeDef);
+    var dataDimNameMap = createHashMap();
+    var coordDimNameMap = createHashMap();
+    // var valueCandidate;
+    var result = [];
+
+    var dimCount = getDimCount(source, sysDims, dimsDef, opt.dimCount);
+
+    // Apply user defined dims (`name` and `type`) and init result.
+    for (var i = 0; i < dimCount; i++) {
+        var dimDefItem = dimsDef[i] = extend(
+            {}, isObject$1(dimsDef[i]) ? dimsDef[i] : {name: dimsDef[i]}
+        );
+        var userDimName = dimDefItem.name;
+        var resultItem = result[i] = {otherDims: {}};
+        // Name will be applied later for avoiding duplication.
+        if (userDimName != null && dataDimNameMap.get(userDimName) == null) {
+            // Only if `series.dimensions` is defined in option
+            // displayName, will be set, and dimension will be diplayed vertically in
+            // tooltip by default.
+            resultItem.name = resultItem.displayName = userDimName;
+            dataDimNameMap.set(userDimName, i);
+        }
+        dimDefItem.type != null && (resultItem.type = dimDefItem.type);
+        dimDefItem.displayName != null && (resultItem.displayName = dimDefItem.displayName);
+    }
+
+    // Set `coordDim` and `coordDimIndex` by `encodeDef` and normalize `encodeDef`.
+    encodeDef.each(function (dataDims, coordDim) {
+        dataDims = normalizeToArray(dataDims).slice();
+
+        // Note: It is allowed that `dataDims.length` is `0`, e.g., options is
+        // `{encode: {x: -1, y: 1}}`. Should not filter anything in
+        // this case.
+        if (dataDims.length === 1 && dataDims[0] < 0) {
+            encodeDef.set(coordDim, false);
+            return;
+        }
+
+        var validDataDims = encodeDef.set(coordDim, []);
+        each$1(dataDims, function (resultDimIdx, idx) {
+            // The input resultDimIdx can be dim name or index.
+            isString(resultDimIdx) && (resultDimIdx = dataDimNameMap.get(resultDimIdx));
+            if (resultDimIdx != null && resultDimIdx < dimCount) {
+                validDataDims[idx] = resultDimIdx;
+                applyDim(result[resultDimIdx], coordDim, idx);
+            }
+        });
+    });
+
+    // Apply templetes and default order from `sysDims`.
+    var availDimIdx = 0;
+    each$1(sysDims, function (sysDimItem, sysDimIndex) {
+        var coordDim;
+        var sysDimItem;
+        var sysDimItemDimsDef;
+        var sysDimItemOtherDims;
