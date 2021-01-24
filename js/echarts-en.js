@@ -30632,3 +30632,279 @@ listProto.each = function (dims, cb, context, contextCompat) {
         }
     }
 };
+
+/**
+ * Data filter
+ * @param {string|Array.<string>}
+ * @param {Function} cb
+ * @param {*} [context=this]
+ */
+listProto.filterSelf = function (dimensions, cb, context, contextCompat) {
+    'use strict';
+
+    if (!this._count) {
+        return;
+    }
+
+    if (typeof dimensions === 'function') {
+        contextCompat = context;
+        context = cb;
+        cb = dimensions;
+        dimensions = [];
+    }
+
+    // contextCompat just for compat echarts3
+    context = context || contextCompat || this;
+
+    dimensions = map(
+        normalizeDimensions(dimensions), this.getDimension, this
+    );
+
+    if (__DEV__) {
+        validateDimensions(this, dimensions);
+    }
+
+
+    var count = this.count();
+    var Ctor = getIndicesCtor(this);
+    var newIndices = new Ctor(count);
+    var value = [];
+    var dimSize = dimensions.length;
+
+    var offset = 0;
+    var dim0 = dimensions[0];
+
+    for (var i = 0; i < count; i++) {
+        var keep;
+        var rawIdx = this.getRawIndex(i);
+        // Simple optimization
+        if (dimSize === 0) {
+            keep = cb.call(context, i);
+        }
+        else if (dimSize === 1) {
+            var val = this._getFast(dim0, rawIdx);
+            keep = cb.call(context, val, i);
+        }
+        else {
+            for (var k = 0; k < dimSize; k++) {
+                value[k] = this._getFast(dim0, rawIdx);
+            }
+            value[k] = i;
+            keep = cb.apply(context, value);
+        }
+        if (keep) {
+            newIndices[offset++] = rawIdx;
+        }
+    }
+
+    // Set indices after filtered.
+    if (offset < count) {
+        this._indices = newIndices;
+    }
+    this._count = offset;
+    // Reset data extent
+    this._extent = {};
+
+    this.getRawIndex = this._indices ? getRawIndexWithIndices : getRawIndexWithoutIndices;
+
+    return this;
+};
+
+/**
+ * Select data in range. (For optimization of filter)
+ * (Manually inline code, support 5 million data filtering in data zoom.)
+ */
+listProto.selectRange = function (range) {
+    'use strict';
+
+    if (!this._count) {
+        return;
+    }
+
+    var dimensions = [];
+    for (var dim in range) {
+        if (range.hasOwnProperty(dim)) {
+            dimensions.push(dim);
+        }
+    }
+
+    if (__DEV__) {
+        validateDimensions(this, dimensions);
+    }
+
+    var dimSize = dimensions.length;
+    if (!dimSize) {
+        return;
+    }
+
+    var originalCount = this.count();
+    var Ctor = getIndicesCtor(this);
+    var newIndices = new Ctor(originalCount);
+
+    var offset = 0;
+    var dim0 = dimensions[0];
+
+    var min = range[dim0][0];
+    var max = range[dim0][1];
+
+    var quickFinished = false;
+    if (!this._indices) {
+        // Extreme optimization for common case. About 2x faster in chrome.
+        var idx = 0;
+        if (dimSize === 1) {
+            var dimStorage = this._storage[dimensions[0]];
+            for (var k = 0; k < this._chunkCount; k++) {
+                var chunkStorage = dimStorage[k];
+                var len = Math.min(this._count - k * this._chunkSize, this._chunkSize);
+                for (var i = 0; i < len; i++) {
+                    var val = chunkStorage[i];
+                    // NaN will not be filtered. Consider the case, in line chart, empty
+                    // value indicates the line should be broken. But for the case like
+                    // scatter plot, a data item with empty value will not be rendered,
+                    // but the axis extent may be effected if some other dim of the data
+                    // item has value. Fortunately it is not a significant negative effect.
+                    if (
+                        (val >= min && val <= max) || isNaN(val)
+                    ) {
+                        newIndices[offset++] = idx;
+                    }
+                    idx++;
+                }
+            }
+            quickFinished = true;
+        }
+        else if (dimSize === 2) {
+            var dimStorage = this._storage[dim0];
+            var dimStorage2 = this._storage[dimensions[1]];
+            var min2 = range[dimensions[1]][0];
+            var max2 = range[dimensions[1]][1];
+            for (var k = 0; k < this._chunkCount; k++) {
+                var chunkStorage = dimStorage[k];
+                var chunkStorage2 = dimStorage2[k];
+                var len = Math.min(this._count - k * this._chunkSize, this._chunkSize);
+                for (var i = 0; i < len; i++) {
+                    var val = chunkStorage[i];
+                    var val2 = chunkStorage2[i];
+                    // Do not filter NaN, see comment above.
+                    if ((
+                            (val >= min && val <= max) || isNaN(val)
+                        )
+                        && (
+                            (val2 >= min2 && val2 <= max2) || isNaN(val2)
+                        )
+                    ) {
+                        newIndices[offset++] = idx;
+                    }
+                    idx++;
+                }
+            }
+            quickFinished = true;
+        }
+    }
+    if (!quickFinished) {
+        if (dimSize === 1) {
+            for (var i = 0; i < originalCount; i++) {
+                var rawIndex = this.getRawIndex(i);
+                var val = this._getFast(dim0, rawIndex);
+                // Do not filter NaN, see comment above.
+                if (
+                    (val >= min && val <= max) || isNaN(val)
+                ) {
+                    newIndices[offset++] = rawIndex;
+                }
+            }
+        }
+        else {
+            for (var i = 0; i < originalCount; i++) {
+                var keep = true;
+                var rawIndex = this.getRawIndex(i);
+                for (var k = 0; k < dimSize; k++) {
+                    var dimk = dimensions[k];
+                    var val = this._getFast(dim, rawIndex);
+                    // Do not filter NaN, see comment above.
+                    if (val < range[dimk][0] || val > range[dimk][1]) {
+                        keep = false;
+                    }
+                }
+                if (keep) {
+                    newIndices[offset++] = this.getRawIndex(i);
+                }
+            }
+        }
+    }
+
+    // Set indices after filtered.
+    if (offset < originalCount) {
+        this._indices = newIndices;
+    }
+    this._count = offset;
+    // Reset data extent
+    this._extent = {};
+
+    this.getRawIndex = this._indices ? getRawIndexWithIndices : getRawIndexWithoutIndices;
+
+    return this;
+};
+
+/**
+ * Data mapping to a plain array
+ * @param {string|Array.<string>} [dimensions]
+ * @param {Function} cb
+ * @param {*} [context=this]
+ * @return {Array}
+ */
+listProto.mapArray = function (dimensions, cb, context, contextCompat) {
+    'use strict';
+
+    if (typeof dimensions === 'function') {
+        contextCompat = context;
+        context = cb;
+        cb = dimensions;
+        dimensions = [];
+    }
+
+    // contextCompat just for compat echarts3
+    context = context || contextCompat || this;
+
+    var result = [];
+    this.each(dimensions, function () {
+        result.push(cb && cb.apply(this, arguments));
+    }, context);
+    return result;
+};
+
+// Data in excludeDimensions is copied, otherwise transfered.
+function cloneListForMapAndSample(original, excludeDimensions) {
+    var allDimensions = original.dimensions;
+    var list = new List(
+        map(allDimensions, original.getDimensionInfo, original),
+        original.hostModel
+    );
+    // FIXME If needs stackedOn, value may already been stacked
+    transferProperties(list, original);
+
+    var storage = list._storage = {};
+    var originalStorage = original._storage;
+
+    // Init storage
+    for (var i = 0; i < allDimensions.length; i++) {
+        var dim = allDimensions[i];
+        if (originalStorage[dim]) {
+            // Notice that we do not reset invertedIndicesMap here, becuase
+            // there is no scenario of mapping or sampling ordinal dimension.
+            if (indexOf(excludeDimensions, dim) >= 0) {
+                storage[dim] = cloneDimStore(originalStorage[dim]);
+                list._rawExtent[dim] = getInitialExtent();
+                list._extent[dim] = null;
+            }
+            else {
+                // Direct reference for other dimensions
+                storage[dim] = originalStorage[dim];
+            }
+        }
+    }
+    return list;
+}
+
+function cloneDimStore(originalDimStore) {
+    var newDimStore = new Array(originalDimStore.length);
