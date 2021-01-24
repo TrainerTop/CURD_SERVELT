@@ -31464,3 +31464,254 @@ function completeDimensions(sysDims, source, opt) {
         var sysDimItem;
         var sysDimItemDimsDef;
         var sysDimItemOtherDims;
+        if (isString(sysDimItem)) {
+            coordDim = sysDimItem;
+            sysDimItem = {};
+        }
+        else {
+            coordDim = sysDimItem.name;
+            var ordinalMeta = sysDimItem.ordinalMeta;
+            sysDimItem.ordinalMeta = null;
+            sysDimItem = clone(sysDimItem);
+            sysDimItem.ordinalMeta = ordinalMeta;
+            // `coordDimIndex` should not be set directly.
+            sysDimItemDimsDef = sysDimItem.dimsDef;
+            sysDimItemOtherDims = sysDimItem.otherDims;
+            sysDimItem.name = sysDimItem.coordDim = sysDimItem.coordDimIndex
+                = sysDimItem.dimsDef = sysDimItem.otherDims = null;
+        }
+
+        var dataDims = encodeDef.get(coordDim);
+
+        // negative resultDimIdx means no need to mapping.
+        if (dataDims === false) {
+            return;
+        }
+
+        var dataDims = normalizeToArray(dataDims);
+
+        // dimensions provides default dim sequences.
+        if (!dataDims.length) {
+            for (var i = 0; i < (sysDimItemDimsDef && sysDimItemDimsDef.length || 1); i++) {
+                while (availDimIdx < result.length && result[availDimIdx].coordDim != null) {
+                    availDimIdx++;
+                }
+                availDimIdx < result.length && dataDims.push(availDimIdx++);
+            }
+        }
+
+        // Apply templates.
+        each$1(dataDims, function (resultDimIdx, coordDimIndex) {
+            var resultItem = result[resultDimIdx];
+            applyDim(defaults(resultItem, sysDimItem), coordDim, coordDimIndex);
+            if (resultItem.name == null && sysDimItemDimsDef) {
+                var sysDimItemDimsDefItem = sysDimItemDimsDef[coordDimIndex];
+                !isObject$1(sysDimItemDimsDefItem) && (sysDimItemDimsDefItem = {name: sysDimItemDimsDefItem});
+                resultItem.name = resultItem.displayName = sysDimItemDimsDefItem.name;
+                resultItem.defaultTooltip = sysDimItemDimsDefItem.defaultTooltip;
+            }
+            // FIXME refactor, currently only used in case: {otherDims: {tooltip: false}}
+            sysDimItemOtherDims && defaults(resultItem.otherDims, sysDimItemOtherDims);
+        });
+    });
+
+    function applyDim(resultItem, coordDim, coordDimIndex) {
+        if (OTHER_DIMENSIONS.get(coordDim) != null) {
+            resultItem.otherDims[coordDim] = coordDimIndex;
+        }
+        else {
+            resultItem.coordDim = coordDim;
+            resultItem.coordDimIndex = coordDimIndex;
+            coordDimNameMap.set(coordDim, true);
+        }
+    }
+
+    // Make sure the first extra dim is 'value'.
+    var generateCoord = opt.generateCoord;
+    var generateCoordCount = opt.generateCoordCount;
+    var fromZero = generateCoordCount != null;
+    generateCoordCount = generateCoord ? (generateCoordCount || 1) : 0;
+    var extra = generateCoord || 'value';
+
+    // Set dim `name` and other `coordDim` and other props.
+    for (var resultDimIdx = 0; resultDimIdx < dimCount; resultDimIdx++) {
+        var resultItem = result[resultDimIdx] = result[resultDimIdx] || {};
+        var coordDim = resultItem.coordDim;
+
+        if (coordDim == null) {
+            resultItem.coordDim = genName(
+                extra, coordDimNameMap, fromZero
+            );
+            resultItem.coordDimIndex = 0;
+            if (!generateCoord || generateCoordCount <= 0) {
+                resultItem.isExtraCoord = true;
+            }
+            generateCoordCount--;
+        }
+
+        resultItem.name == null && (resultItem.name = genName(
+            resultItem.coordDim,
+            dataDimNameMap
+        ));
+
+        if (resultItem.type == null && guessOrdinal(source, resultDimIdx, resultItem.name)) {
+            resultItem.type = 'ordinal';
+        }
+    }
+
+    return result;
+}
+
+// ??? TODO
+// Originally detect dimCount by data[0]. Should we
+// optimize it to only by sysDims and dimensions and encode.
+// So only necessary dims will be initialized.
+// But
+// (1) custom series should be considered. where other dims
+// may be visited.
+// (2) sometimes user need to calcualte bubble size or use visualMap
+// on other dimensions besides coordSys needed.
+// So, dims that is not used by system, should be shared in storage?
+function getDimCount(source, sysDims, dimsDef, optDimCount) {
+    // Note that the result dimCount should not small than columns count
+    // of data, otherwise `dataDimNameMap` checking will be incorrect.
+    var dimCount = Math.max(
+        source.dimensionsDetectCount || 1,
+        sysDims.length,
+        dimsDef.length,
+        optDimCount || 0
+    );
+    each$1(sysDims, function (sysDimItem) {
+        var sysDimItemDimsDef = sysDimItem.dimsDef;
+        sysDimItemDimsDef && (dimCount = Math.max(dimCount, sysDimItemDimsDef.length));
+    });
+    return dimCount;
+}
+
+function genName(name, map$$1, fromZero) {
+    if (fromZero || map$$1.get(name) != null) {
+        var i = 0;
+        while (map$$1.get(name + i) != null) {
+            i++;
+        }
+        name += i;
+    }
+    map$$1.set(name, true);
+    return name;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Substitute `completeDimensions`.
+ * `completeDimensions` is to be deprecated.
+ */
+/**
+ * @param {module:echarts/data/Source|module:echarts/data/List} source or data.
+ * @param {Object|Array} [opt]
+ * @param {Array.<string|Object>} [opt.coordDimensions=[]]
+ * @param {number} [opt.dimensionsCount]
+ * @param {string} [opt.generateCoord]
+ * @param {string} [opt.generateCoordCount]
+ * @param {Array.<string|Object>} [opt.dimensionsDefine=source.dimensionsDefine] Overwrite source define.
+ * @param {Object|HashMap} [opt.encodeDefine=source.encodeDefine] Overwrite source define.
+ * @return {Array.<Object>} dimensionsInfo
+ */
+var createDimensions = function (source, opt) {
+    opt = opt || {};
+    return completeDimensions(opt.coordDimensions || [], source, {
+        dimsDef: opt.dimensionsDefine || source.dimensionsDefine,
+        encodeDef: opt.encodeDefine || source.encodeDefine,
+        dimCount: opt.dimensionsCount,
+        generateCoord: opt.generateCoord,
+        generateCoordCount: opt.generateCoordCount
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Note that it is too complicated to support 3d stack by value
+ * (have to create two-dimension inverted index), so in 3d case
+ * we just support that stacked by index.
+ *
+ * @param {module:echarts/model/Series} seriesModel
+ * @param {Array.<string|Object>} dimensionInfoList The same as the input of <module:echarts/data/List>.
+ *        The input dimensionInfoList will be modified.
+ * @param {Object} [opt]
+ * @param {boolean} [opt.stackedCoordDimension=''] Specify a coord dimension if needed.
+ * @param {boolean} [opt.byIndex=false]
+ * @return {Object} calculationInfo
+ * {
+ *     stackedDimension: string
+ *     stackedByDimension: string
+ *     isStackedByIndex: boolean
+ *     stackedOverDimension: string
+ *     stackResultDimension: string
+ * }
+ */
+function enableDataStack(seriesModel, dimensionInfoList, opt) {
+    opt = opt || {};
+    var byIndex = opt.byIndex;
+    var stackedCoordDimension = opt.stackedCoordDimension;
+
+    // Compatibal: when `stack` is set as '', do not stack.
+    var mayStack = !!(seriesModel && seriesModel.get('stack'));
+    var stackedByDimInfo;
+    var stackedDimInfo;
+    var stackResultDimension;
+    var stackedOverDimension;
+
+    each$1(dimensionInfoList, function (dimensionInfo, index) {
+        if (isString(dimensionInfo)) {
+            dimensionInfoList[index] = dimensionInfo = {name: dimensionInfo};
+        }
+
+        if (mayStack && !dimensionInfo.isExtraCoord) {
+            // Find the first ordinal dimension as the stackedByDimInfo.
+            if (!byIndex && !stackedByDimInfo && dimensionInfo.ordinalMeta) {
+                stackedByDimInfo = dimensionInfo;
+            }
+            // Find the first stackable dimension as the stackedDimInfo.
+            if (!stackedDimInfo
+                && dimensionInfo.type !== 'ordinal'
+                && dimensionInfo.type !== 'time'
+                && (!stackedCoordDimension || stackedCoordDimension === dimensionInfo.coordDim)
+            ) {
+                stackedDimInfo = dimensionInfo;
+            }
+        }
