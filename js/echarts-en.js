@@ -30908,3 +30908,271 @@ function cloneListForMapAndSample(original, excludeDimensions) {
 
 function cloneDimStore(originalDimStore) {
     var newDimStore = new Array(originalDimStore.length);
+    for (var j = 0; j < originalDimStore.length; j++) {
+        newDimStore[j] = cloneChunk(originalDimStore[j]);
+    }
+    return newDimStore;
+}
+
+function getInitialExtent() {
+    return [Infinity, -Infinity];
+}
+
+/**
+ * Data mapping to a new List with given dimensions
+ * @param {string|Array.<string>} dimensions
+ * @param {Function} cb
+ * @param {*} [context=this]
+ * @return {Array}
+ */
+listProto.map = function (dimensions, cb, context, contextCompat) {
+    'use strict';
+
+    // contextCompat just for compat echarts3
+    context = context || contextCompat || this;
+
+    dimensions = map(
+        normalizeDimensions(dimensions), this.getDimension, this
+    );
+
+    if (__DEV__) {
+        validateDimensions(this, dimensions);
+    }
+
+    var list = cloneListForMapAndSample(this, dimensions);
+
+    // Following properties are all immutable.
+    // So we can reference to the same value
+    list._indices = this._indices;
+    list.getRawIndex = list._indices ? getRawIndexWithIndices : getRawIndexWithoutIndices;
+
+    var storage = list._storage;
+
+    var tmpRetValue = [];
+    var chunkSize = this._chunkSize;
+    var dimSize = dimensions.length;
+    var dataCount = this.count();
+    var values = [];
+    var rawExtent = list._rawExtent;
+
+    for (var dataIndex = 0; dataIndex < dataCount; dataIndex++) {
+        for (var dimIndex = 0; dimIndex < dimSize; dimIndex++) {
+            values[dimIndex] = this.get(dimensions[dimIndex], dataIndex /*, stack */);
+        }
+        values[dimSize] = dataIndex;
+
+        var retValue = cb && cb.apply(context, values);
+        if (retValue != null) {
+            // a number or string (in oridinal dimension)?
+            if (typeof retValue !== 'object') {
+                tmpRetValue[0] = retValue;
+                retValue = tmpRetValue;
+            }
+
+            var rawIndex = this.getRawIndex(dataIndex);
+            var chunkIndex = Math.floor(rawIndex / chunkSize);
+            var chunkOffset = rawIndex % chunkSize;
+
+            for (var i = 0; i < retValue.length; i++) {
+                var dim = dimensions[i];
+                var val = retValue[i];
+                var rawExtentOnDim = rawExtent[dim];
+
+                var dimStore = storage[dim];
+                if (dimStore) {
+                    dimStore[chunkIndex][chunkOffset] = val;
+                }
+
+                if (val < rawExtentOnDim[0]) {
+                    rawExtentOnDim[0] = val;
+                }
+                if (val > rawExtentOnDim[1]) {
+                    rawExtentOnDim[1] = val;
+                }
+            }
+        }
+    }
+
+    return list;
+};
+
+/**
+ * Large data down sampling on given dimension
+ * @param {string} dimension
+ * @param {number} rate
+ * @param {Function} sampleValue
+ * @param {Function} sampleIndex Sample index for name and id
+ */
+listProto.downSample = function (dimension, rate, sampleValue, sampleIndex) {
+    var list = cloneListForMapAndSample(this, [dimension]);
+    var targetStorage = list._storage;
+
+    var frameValues = [];
+    var frameSize = Math.floor(1 / rate);
+
+    var dimStore = targetStorage[dimension];
+    var len = this.count();
+    var chunkSize = this._chunkSize;
+    var rawExtentOnDim = list._rawExtent[dimension];
+
+    var newIndices = new (getIndicesCtor(this))(len);
+
+    var offset = 0;
+    for (var i = 0; i < len; i += frameSize) {
+        // Last frame
+        if (frameSize > len - i) {
+            frameSize = len - i;
+            frameValues.length = frameSize;
+        }
+        for (var k = 0; k < frameSize; k++) {
+            var dataIdx = this.getRawIndex(i + k);
+            var originalChunkIndex = Math.floor(dataIdx / chunkSize);
+            var originalChunkOffset = dataIdx % chunkSize;
+            frameValues[k] = dimStore[originalChunkIndex][originalChunkOffset];
+        }
+        var value = sampleValue(frameValues);
+        var sampleFrameIdx = this.getRawIndex(
+            Math.min(i + sampleIndex(frameValues, value) || 0, len - 1)
+        );
+        var sampleChunkIndex = Math.floor(sampleFrameIdx / chunkSize);
+        var sampleChunkOffset = sampleFrameIdx % chunkSize;
+        // Only write value on the filtered data
+        dimStore[sampleChunkIndex][sampleChunkOffset] = value;
+
+        if (value < rawExtentOnDim[0]) {
+            rawExtentOnDim[0] = value;
+        }
+        if (value > rawExtentOnDim[1]) {
+            rawExtentOnDim[1] = value;
+        }
+
+        newIndices[offset++] = sampleFrameIdx;
+    }
+
+    list._count = offset;
+    list._indices = newIndices;
+
+    list.getRawIndex = getRawIndexWithIndices;
+
+    return list;
+};
+
+/**
+ * Get model of one data item.
+ *
+ * @param {number} idx
+ */
+// FIXME Model proxy ?
+listProto.getItemModel = function (idx) {
+    var hostModel = this.hostModel;
+    return new Model(this.getRawDataItem(idx), hostModel, hostModel && hostModel.ecModel);
+};
+
+/**
+ * Create a data differ
+ * @param {module:echarts/data/List} otherList
+ * @return {module:echarts/data/DataDiffer}
+ */
+listProto.diff = function (otherList) {
+    var thisList = this;
+
+    return new DataDiffer(
+        otherList ? otherList.getIndices() : [],
+        this.getIndices(),
+        function (idx) {
+            return getId(otherList, idx);
+        },
+        function (idx) {
+            return getId(thisList, idx);
+        }
+    );
+};
+/**
+ * Get visual property.
+ * @param {string} key
+ */
+listProto.getVisual = function (key) {
+    var visual = this._visual;
+    return visual && visual[key];
+};
+
+/**
+ * Set visual property
+ * @param {string|Object} key
+ * @param {*} [value]
+ *
+ * @example
+ *  setVisual('color', color);
+ *  setVisual({
+ *      'color': color
+ *  });
+ */
+listProto.setVisual = function (key, val) {
+    if (isObject$4(key)) {
+        for (var name in key) {
+            if (key.hasOwnProperty(name)) {
+                this.setVisual(name, key[name]);
+            }
+        }
+        return;
+    }
+    this._visual = this._visual || {};
+    this._visual[key] = val;
+};
+
+/**
+ * Set layout property.
+ * @param {string|Object} key
+ * @param {*} [val]
+ */
+listProto.setLayout = function (key, val) {
+    if (isObject$4(key)) {
+        for (var name in key) {
+            if (key.hasOwnProperty(name)) {
+                this.setLayout(name, key[name]);
+            }
+        }
+        return;
+    }
+    this._layout[key] = val;
+};
+
+/**
+ * Get layout property.
+ * @param  {string} key.
+ * @return {*}
+ */
+listProto.getLayout = function (key) {
+    return this._layout[key];
+};
+
+/**
+ * Get layout of single data item
+ * @param {number} idx
+ */
+listProto.getItemLayout = function (idx) {
+    return this._itemLayouts[idx];
+};
+
+/**
+ * Set layout of single data item
+ * @param {number} idx
+ * @param {Object} layout
+ * @param {boolean=} [merge=false]
+ */
+listProto.setItemLayout = function (idx, layout, merge$$1) {
+    this._itemLayouts[idx] = merge$$1
+        ? extend(this._itemLayouts[idx] || {}, layout)
+        : layout;
+};
+
+/**
+ * Clear all layout of single data item
+ */
+listProto.clearItemLayouts = function () {
+    this._itemLayouts.length = 0;
+};
+
+/**
+ * Get visual property of single data item
+ * @param {number} idx
