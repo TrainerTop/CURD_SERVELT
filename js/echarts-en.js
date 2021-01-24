@@ -30392,3 +30392,243 @@ listProto.rawIndexOf = function (dim, value) {
  * Retreive the index with given name
  * @param {number} idx
  * @param {number} name
+ * @return {number}
+ */
+listProto.indexOfName = function (name) {
+    for (var i = 0, len = this.count(); i < len; i++) {
+        if (this.getName(i) === name) {
+            return i;
+        }
+    }
+
+    return -1;
+};
+
+/**
+ * Retreive the index with given raw data index
+ * @param {number} idx
+ * @param {number} name
+ * @return {number}
+ */
+listProto.indexOfRawIndex = function (rawIndex) {
+    if (!this._indices) {
+        return rawIndex;
+    }
+
+    if (rawIndex >= this._rawCount || rawIndex < 0) {
+        return -1;
+    }
+
+    // Indices are ascending
+    var indices = this._indices;
+
+    // If rawIndex === dataIndex
+    var rawDataIndex = indices[rawIndex];
+    if (rawDataIndex != null && rawDataIndex < this._count && rawDataIndex === rawIndex) {
+        return rawIndex;
+    }
+
+    var left = 0;
+    var right = this._count - 1;
+    while (left <= right) {
+        var mid = (left + right) / 2 | 0;
+        if (indices[mid] < rawIndex) {
+            left = mid + 1;
+        }
+        else if (indices[mid] > rawIndex) {
+            right = mid - 1;
+        }
+        else {
+            return mid;
+        }
+    }
+    return -1;
+};
+
+/**
+ * Retreive the index of nearest value
+ * @param {string} dim
+ * @param {number} value
+ * @param {number} [maxDistance=Infinity]
+ * @return {Array.<number>} Considere multiple points has the same value.
+ */
+listProto.indicesOfNearest = function (dim, value, maxDistance) {
+    var storage = this._storage;
+    var dimData = storage[dim];
+    var nearestIndices = [];
+
+    if (!dimData) {
+        return nearestIndices;
+    }
+
+    if (maxDistance == null) {
+        maxDistance = Infinity;
+    }
+
+    var minDist = Number.MAX_VALUE;
+    var minDiff = -1;
+    for (var i = 0, len = this.count(); i < len; i++) {
+        var diff = value - this.get(dim, i /*, stack */);
+        var dist = Math.abs(diff);
+        if (diff <= maxDistance && dist <= minDist) {
+            // For the case of two data are same on xAxis, which has sequence data.
+            // Show the nearest index
+            // https://github.com/ecomfe/echarts/issues/2869
+            if (dist < minDist || (diff >= 0 && minDiff < 0)) {
+                minDist = dist;
+                minDiff = diff;
+                nearestIndices.length = 0;
+            }
+            nearestIndices.push(i);
+        }
+    }
+    return nearestIndices;
+};
+
+/**
+ * Get raw data index
+ * @param {number} idx
+ * @return {number}
+ */
+listProto.getRawIndex = getRawIndexWithoutIndices;
+
+function getRawIndexWithoutIndices(idx) {
+    return idx;
+}
+
+function getRawIndexWithIndices(idx) {
+    if (idx < this._count && idx >= 0) {
+        return this._indices[idx];
+    }
+    return -1;
+}
+
+/**
+ * Get raw data item
+ * @param {number} idx
+ * @return {number}
+ */
+listProto.getRawDataItem = function (idx) {
+    if (!this._rawData.persistent) {
+        var val = [];
+        for (var i = 0; i < this.dimensions.length; i++) {
+            var dim = this.dimensions[i];
+            val.push(this.get(dim, idx));
+        }
+        return val;
+    }
+    else {
+        return this._rawData.getItem(this.getRawIndex(idx));
+    }
+};
+
+/**
+ * @param {number} idx
+ * @param {boolean} [notDefaultIdx=false]
+ * @return {string}
+ */
+listProto.getName = function (idx) {
+    var rawIndex = this.getRawIndex(idx);
+    return this._nameList[rawIndex]
+        || getRawValueFromStore(this, this._nameDimIdx, rawIndex)
+        || '';
+};
+
+/**
+ * @param {number} idx
+ * @param {boolean} [notDefaultIdx=false]
+ * @return {string}
+ */
+listProto.getId = function (idx) {
+    return getId(this, this.getRawIndex(idx));
+};
+
+function getId(list, rawIndex) {
+    var id = list._idList[rawIndex];
+    if (id == null) {
+        id = getRawValueFromStore(list, list._idDimIdx, rawIndex);
+    }
+    if (id == null) {
+        // FIXME Check the usage in graph, should not use prefix.
+        id = ID_PREFIX + rawIndex;
+    }
+    return id;
+}
+
+function normalizeDimensions(dimensions) {
+    if (!isArray(dimensions)) {
+        dimensions = [dimensions];
+    }
+    return dimensions;
+}
+
+function validateDimensions(list, dims) {
+    for (var i = 0; i < dims.length; i++) {
+        // stroage may be empty when no data, so use
+        // dimensionInfos to check.
+        if (!list._dimensionInfos[dims[i]]) {
+            console.error('Unkown dimension ' + dims[i]);
+        }
+    }
+}
+
+/**
+ * Data iteration
+ * @param {string|Array.<string>}
+ * @param {Function} cb
+ * @param {*} [context=this]
+ *
+ * @example
+ *  list.each('x', function (x, idx) {});
+ *  list.each(['x', 'y'], function (x, y, idx) {});
+ *  list.each(function (idx) {})
+ */
+listProto.each = function (dims, cb, context, contextCompat) {
+    'use strict';
+
+    if (!this._count) {
+        return;
+    }
+
+    if (typeof dims === 'function') {
+        contextCompat = context;
+        context = cb;
+        cb = dims;
+        dims = [];
+    }
+
+    // contextCompat just for compat echarts3
+    context = context || contextCompat || this;
+
+    dims = map(normalizeDimensions(dims), this.getDimension, this);
+
+    if (__DEV__) {
+        validateDimensions(this, dims);
+    }
+
+    var dimSize = dims.length;
+
+    for (var i = 0; i < this.count(); i++) {
+        // Simple optimization
+        switch (dimSize) {
+            case 0:
+                cb.call(context, i);
+                break;
+            case 1:
+                cb.call(context, this.get(dims[0], i), i);
+                break;
+            case 2:
+                cb.call(context, this.get(dims[0], i), this.get(dims[1], i), i);
+                break;
+            default:
+                var k = 0;
+                var value = [];
+                for (; k < dimSize; k++) {
+                    value[k] = this.get(dims[k], i);
+                }
+                // Index
+                value[k] = i;
+                cb.apply(context, value);
+        }
+    }
+};
