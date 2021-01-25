@@ -31715,3 +31715,290 @@ function enableDataStack(seriesModel, dimensionInfoList, opt) {
                 stackedDimInfo = dimensionInfo;
             }
         }
+    });
+
+    if (stackedDimInfo && !byIndex && !stackedByDimInfo) {
+        // Compatible with previous design, value axis (time axis) only stack by index.
+        // It may make sense if the user provides elaborately constructed data.
+        byIndex = true;
+    }
+
+    // Add stack dimension, they can be both calculated by coordinate system in `unionExtent`.
+    // That put stack logic in List is for using conveniently in echarts extensions, but it
+    // might not be a good way.
+    if (stackedDimInfo) {
+        // Use a weird name that not duplicated with other names.
+        stackResultDimension = '__\0ecstackresult';
+        stackedOverDimension = '__\0ecstackedover';
+
+        // Create inverted index to fast query index by value.
+        if (stackedByDimInfo) {
+            stackedByDimInfo.createInvertedIndices = true;
+        }
+
+        var stackedDimCoordDim = stackedDimInfo.coordDim;
+        var stackedDimType = stackedDimInfo.type;
+        var stackedDimCoordIndex = 0;
+
+        each$1(dimensionInfoList, function (dimensionInfo) {
+            if (dimensionInfo.coordDim === stackedDimCoordDim) {
+                stackedDimCoordIndex++;
+            }
+        });
+
+        dimensionInfoList.push({
+            name: stackResultDimension,
+            coordDim: stackedDimCoordDim,
+            coordDimIndex: stackedDimCoordIndex,
+            type: stackedDimType,
+            isExtraCoord: true,
+            isCalculationCoord: true
+        });
+
+        stackedDimCoordIndex++;
+
+        dimensionInfoList.push({
+            name: stackedOverDimension,
+            // This dimension contains stack base (generally, 0), so do not set it as
+            // `stackedDimCoordDim` to avoid extent calculation, consider log scale.
+            coordDim: stackedOverDimension,
+            coordDimIndex: stackedDimCoordIndex,
+            type: stackedDimType,
+            isExtraCoord: true,
+            isCalculationCoord: true
+        });
+    }
+
+    return {
+        stackedDimension: stackedDimInfo && stackedDimInfo.name,
+        stackedByDimension: stackedByDimInfo && stackedByDimInfo.name,
+        isStackedByIndex: byIndex,
+        stackedOverDimension: stackedOverDimension,
+        stackResultDimension: stackResultDimension
+    };
+}
+
+/**
+ * @param {module:echarts/data/List} data
+ * @param {string} stackedDim
+ */
+function isDimensionStacked(data, stackedDim /*, stackedByDim*/) {
+    // Each single series only maps to one pair of axis. So we do not need to
+    // check stackByDim, whatever stacked by a dimension or stacked by index.
+    return !!stackedDim && stackedDim === data.getCalculationInfo('stackedDimension');
+        // && (
+        //     stackedByDim != null
+        //         ? stackedByDim === data.getCalculationInfo('stackedByDimension')
+        //         : data.getCalculationInfo('isStackedByIndex')
+        // );
+}
+
+/**
+ * @param {module:echarts/data/List} data
+ * @param {string} targetDim
+ * @param {string} [stackedByDim] If not input this parameter, check whether
+ *                                stacked by index.
+ * @return {string} dimension
+ */
+function getStackedDimension(data, targetDim) {
+    return isDimensionStacked(data, targetDim)
+        ? data.getCalculationInfo('stackResultDimension')
+        : targetDim;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @param {module:echarts/data/Source|Array} source Or raw data.
+ * @param {module:echarts/model/Series} seriesModel
+ * @param {Object} [opt]
+ * @param {string} [opt.generateCoord]
+ */
+function createListFromArray(source, seriesModel, opt) {
+    opt = opt || {};
+
+    if (!Source.isInstance(source)) {
+        source = Source.seriesDataToSource(source);
+    }
+
+    var coordSysName = seriesModel.get('coordinateSystem');
+    var registeredCoordSys = CoordinateSystemManager.get(coordSysName);
+
+    var coordSysDefine = getCoordSysDefineBySeries(seriesModel);
+
+    var coordSysDimDefs;
+
+    if (coordSysDefine) {
+        coordSysDimDefs = map(coordSysDefine.coordSysDims, function (dim) {
+            var dimInfo = {name: dim};
+            var axisModel = coordSysDefine.axisMap.get(dim);
+            if (axisModel) {
+                var axisType = axisModel.get('type');
+                dimInfo.type = getDimensionTypeByAxis(axisType);
+                // dimInfo.stackable = isStackable(axisType);
+            }
+            return dimInfo;
+        });
+    }
+
+    if (!coordSysDimDefs) {
+        // Get dimensions from registered coordinate system
+        coordSysDimDefs = (registeredCoordSys && (
+            registeredCoordSys.getDimensionsInfo
+                ? registeredCoordSys.getDimensionsInfo()
+                : registeredCoordSys.dimensions.slice()
+        )) || ['x', 'y'];
+    }
+
+    var dimInfoList = createDimensions(source, {
+        coordDimensions: coordSysDimDefs,
+        generateCoord: opt.generateCoord
+    });
+
+    var firstCategoryDimIndex;
+    var hasNameEncode;
+    coordSysDefine && each$1(dimInfoList, function (dimInfo, dimIndex) {
+        var coordDim = dimInfo.coordDim;
+        var categoryAxisModel = coordSysDefine.categoryAxisMap.get(coordDim);
+        if (categoryAxisModel) {
+            if (firstCategoryDimIndex == null) {
+                firstCategoryDimIndex = dimIndex;
+            }
+            dimInfo.ordinalMeta = categoryAxisModel.getOrdinalMeta();
+        }
+        if (dimInfo.otherDims.itemName != null) {
+            hasNameEncode = true;
+        }
+    });
+    if (!hasNameEncode && firstCategoryDimIndex != null) {
+        dimInfoList[firstCategoryDimIndex].otherDims.itemName = 0;
+    }
+
+    var stackCalculationInfo = enableDataStack(seriesModel, dimInfoList);
+
+    var list = new List(dimInfoList, seriesModel);
+
+    list.setCalculationInfo(stackCalculationInfo);
+
+    var dimValueGetter = (firstCategoryDimIndex != null && isNeedCompleteOrdinalData(source))
+        ? function (itemOpt, dimName, dataIndex, dimIndex) {
+            // Use dataIndex as ordinal value in categoryAxis
+            return dimIndex === firstCategoryDimIndex
+                ? dataIndex
+                : this.defaultDimValueGetter(itemOpt, dimName, dataIndex, dimIndex);
+        }
+        : null;
+
+    list.hasItemOption = false;
+    list.initData(source, null, dimValueGetter);
+
+    return list;
+}
+
+function isNeedCompleteOrdinalData(source) {
+    if (source.sourceFormat === SOURCE_FORMAT_ORIGINAL) {
+        var sampleItem = firstDataNotNull(source.data || []);
+        return sampleItem != null
+            && !isArray(getDataItemValue(sampleItem));
+    }
+}
+
+function firstDataNotNull(data) {
+    var i = 0;
+    while (i < data.length && data[i] == null) {
+        i++;
+    }
+    return data[i];
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * // Scale class management
+ * @module echarts/scale/Scale
+ */
+
+/**
+ * @param {Object} [setting]
+ */
+function Scale(setting) {
+    this._setting = setting || {};
+
+    /**
+     * Extent
+     * @type {Array.<number>}
+     * @protected
+     */
+    this._extent = [Infinity, -Infinity];
+
+    /**
+     * Step is calculated in adjustExtent
+     * @type {Array.<number>}
+     * @protected
+     */
+    this._interval = 0;
+
+    this.init && this.init.apply(this, arguments);
+}
+
+/**
+ * Parse input val to valid inner number.
+ * @param {*} val
+ * @return {number}
+ */
+Scale.prototype.parse = function (val) {
+    // Notice: This would be a trap here, If the implementation
+    // of this method depends on extent, and this method is used
+    // before extent set (like in dataZoom), it would be wrong.
+    // Nevertheless, parse does not depend on extent generally.
+    return val;
+};
+
+Scale.prototype.getSetting = function (name) {
+    return this._setting[name];
+};
+
+Scale.prototype.contain = function (val) {
+    var extent = this._extent;
+    return val >= extent[0] && val <= extent[1];
+};
+
+/**
+ * Normalize value to linear [0, 1], return 0.5 if extent span is 0
+ * @param {number} val
+ * @return {number}
+ */
