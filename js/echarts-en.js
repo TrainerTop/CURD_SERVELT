@@ -32259,3 +32259,281 @@ function getName(obj) {
 /**
  * Linear continuous scale
  * @module echarts/coord/scale/Ordinal
+ *
+ * http://en.wikipedia.org/wiki/Level_of_measurement
+ */
+
+// FIXME only one data
+
+var scaleProto = Scale.prototype;
+
+var OrdinalScale = Scale.extend({
+
+    type: 'ordinal',
+
+    /**
+     * @param {module:echarts/data/OrdianlMeta|Array.<string>} ordinalMeta
+     */
+    init: function (ordinalMeta, extent) {
+        // Caution: Should not use instanceof, consider ec-extensions using
+        // import approach to get OrdinalMeta class.
+        if (!ordinalMeta || isArray(ordinalMeta)) {
+            ordinalMeta = new OrdinalMeta({categories: ordinalMeta});
+        }
+        this._ordinalMeta = ordinalMeta;
+        this._extent = extent || [0, ordinalMeta.categories.length - 1];
+    },
+
+    parse: function (val) {
+        return typeof val === 'string'
+            ? this._ordinalMeta.getOrdinal(val)
+            // val might be float.
+            : Math.round(val);
+    },
+
+    contain: function (rank) {
+        rank = this.parse(rank);
+        return scaleProto.contain.call(this, rank)
+            && this._ordinalMeta.categories[rank] != null;
+    },
+
+    /**
+     * Normalize given rank or name to linear [0, 1]
+     * @param {number|string} [val]
+     * @return {number}
+     */
+    normalize: function (val) {
+        return scaleProto.normalize.call(this, this.parse(val));
+    },
+
+    scale: function (val) {
+        return Math.round(scaleProto.scale.call(this, val));
+    },
+
+    /**
+     * @return {Array}
+     */
+    getTicks: function () {
+        var ticks = [];
+        var extent = this._extent;
+        var rank = extent[0];
+
+        while (rank <= extent[1]) {
+            ticks.push(rank);
+            rank++;
+        }
+
+        return ticks;
+    },
+
+    /**
+     * Get item on rank n
+     * @param {number} n
+     * @return {string}
+     */
+    getLabel: function (n) {
+        if (!this.isBlank()) {
+            // Note that if no data, ordinalMeta.categories is an empty array.
+            return this._ordinalMeta.categories[n];
+        }
+    },
+
+    /**
+     * @return {number}
+     */
+    count: function () {
+        return this._extent[1] - this._extent[0] + 1;
+    },
+
+    /**
+     * @override
+     */
+    unionExtentFromData: function (data, dim) {
+        this.unionExtent(data.getApproximateExtent(dim));
+    },
+
+    getOrdinalMeta: function () {
+        return this._ordinalMeta;
+    },
+
+    niceTicks: noop,
+    niceExtent: noop
+});
+
+/**
+ * @return {module:echarts/scale/Time}
+ */
+OrdinalScale.create = function () {
+    return new OrdinalScale();
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * For testable.
+ */
+
+var roundNumber$1 = round$2;
+
+/**
+ * @param {Array.<number>} extent Both extent[0] and extent[1] should be valid number.
+ *                                Should be extent[0] < extent[1].
+ * @param {number} splitNumber splitNumber should be >= 1.
+ * @param {number} [minInterval]
+ * @param {number} [maxInterval]
+ * @return {Object} {interval, intervalPrecision, niceTickExtent}
+ */
+function intervalScaleNiceTicks(extent, splitNumber, minInterval, maxInterval) {
+    var result = {};
+    var span = extent[1] - extent[0];
+
+    var interval = result.interval = nice(span / splitNumber, true);
+    if (minInterval != null && interval < minInterval) {
+        interval = result.interval = minInterval;
+    }
+    if (maxInterval != null && interval > maxInterval) {
+        interval = result.interval = maxInterval;
+    }
+    // Tow more digital for tick.
+    var precision = result.intervalPrecision = getIntervalPrecision(interval);
+    // Niced extent inside original extent
+    var niceTickExtent = result.niceTickExtent = [
+        roundNumber$1(Math.ceil(extent[0] / interval) * interval, precision),
+        roundNumber$1(Math.floor(extent[1] / interval) * interval, precision)
+    ];
+
+    fixExtent(niceTickExtent, extent);
+
+    return result;
+}
+
+/**
+ * @param {number} interval
+ * @return {number} interval precision
+ */
+function getIntervalPrecision(interval) {
+    // Tow more digital for tick.
+    return getPrecisionSafe(interval) + 2;
+}
+
+function clamp(niceTickExtent, idx, extent) {
+    niceTickExtent[idx] = Math.max(Math.min(niceTickExtent[idx], extent[1]), extent[0]);
+}
+
+// In some cases (e.g., splitNumber is 1), niceTickExtent may be out of extent.
+function fixExtent(niceTickExtent, extent) {
+    !isFinite(niceTickExtent[0]) && (niceTickExtent[0] = extent[0]);
+    !isFinite(niceTickExtent[1]) && (niceTickExtent[1] = extent[1]);
+    clamp(niceTickExtent, 0, extent);
+    clamp(niceTickExtent, 1, extent);
+    if (niceTickExtent[0] > niceTickExtent[1]) {
+        niceTickExtent[0] = niceTickExtent[1];
+    }
+}
+
+function intervalScaleGetTicks(interval, extent, niceTickExtent, intervalPrecision) {
+    var ticks = [];
+
+    // If interval is 0, return [];
+    if (!interval) {
+        return ticks;
+    }
+
+    // Consider this case: using dataZoom toolbox, zoom and zoom.
+    var safeLimit = 10000;
+
+    if (extent[0] < niceTickExtent[0]) {
+        ticks.push(extent[0]);
+    }
+    var tick = niceTickExtent[0];
+
+    while (tick <= niceTickExtent[1]) {
+        ticks.push(tick);
+        // Avoid rounding error
+        tick = roundNumber$1(tick + interval, intervalPrecision);
+        if (tick === ticks[ticks.length - 1]) {
+            // Consider out of safe float point, e.g.,
+            // -3711126.9907707 + 2e-10 === -3711126.9907707
+            break;
+        }
+        if (ticks.length > safeLimit) {
+            return [];
+        }
+    }
+    // Consider this case: the last item of ticks is smaller
+    // than niceTickExtent[1] and niceTickExtent[1] === extent[1].
+    if (extent[1] > (ticks.length ? ticks[ticks.length - 1] : niceTickExtent[1])) {
+        ticks.push(extent[1]);
+    }
+
+    return ticks;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Interval scale
+ * @module echarts/scale/Interval
+ */
+
+
+var roundNumber = round$2;
+
+/**
+ * @alias module:echarts/coord/scale/Interval
+ * @constructor
+ */
+var IntervalScale = Scale.extend({
+
+    type: 'interval',
+
+    _interval: 0,
+
+    _intervalPrecision: 2,
+
+    setExtent: function (start, end) {
+        var thisExtent = this._extent;
+        //start,end may be a Number like '25',so...
+        if (!isNaN(start)) {
+            thisExtent[0] = parseFloat(start);
+        }
+        if (!isNaN(end)) {
+            thisExtent[1] = parseFloat(end);
+        }
+    },
+
+    unionExtent: function (other) {
