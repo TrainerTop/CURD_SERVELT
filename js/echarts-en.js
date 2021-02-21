@@ -33842,3 +33842,274 @@ function makeLabelFormatter(axis) {
             // The original intention of `idx` is "the index of the tick in all ticks".
             // But the previous implementation of category axis do not consider the
             // `axisLabel.interval`, which cause that, for example, the `interval` is
+            // `1`, then the ticks "name5", "name7", "name9" are displayed, where the
+            // corresponding `idx` are `0`, `2`, `4`, but not `0`, `1`, `2`. So we keep
+            // the definition here for back compatibility.
+            if (categoryTickStart != null) {
+                idx = tickValue - categoryTickStart;
+            }
+            return labelFormatter(getAxisRawValue(axis, tickValue), idx);
+        };
+    }
+    else {
+        return function (tick) {
+            return axis.scale.getLabel(tick);
+        };
+    }
+}
+
+function getAxisRawValue(axis, value) {
+    // In category axis with data zoom, tick is not the original
+    // index of axis.data. So tick should not be exposed to user
+    // in category axis.
+    return axis.type === 'category' ? axis.scale.getLabel(value) : value;
+}
+
+/**
+ * @param {module:echarts/coord/Axis} axis
+ * @return {module:zrender/core/BoundingRect} Be null/undefined if no labels.
+ */
+function estimateLabelUnionRect(axis) {
+    var axisModel = axis.model;
+    var scale = axis.scale;
+
+    if (!axisModel.get('axisLabel.show') || scale.isBlank()) {
+        return;
+    }
+
+    var isCategory = axis.type === 'category';
+
+    var realNumberScaleTicks;
+    var tickCount;
+    var categoryScaleExtent = scale.getExtent();
+
+    // Optimize for large category data, avoid call `getTicks()`.
+    if (isCategory) {
+        tickCount = scale.count();
+    }
+    else {
+        realNumberScaleTicks = scale.getTicks();
+        tickCount = realNumberScaleTicks.length;
+    }
+
+    var axisLabelModel = axis.getLabelModel();
+    var labelFormatter = makeLabelFormatter(axis);
+
+    var rect;
+    var step = 1;
+    // Simple optimization for large amount of labels
+    if (tickCount > 40) {
+        step = Math.ceil(tickCount / 40);
+    }
+    for (var i = 0; i < tickCount; i += step) {
+        var tickValue = realNumberScaleTicks ? realNumberScaleTicks[i] : categoryScaleExtent[0] + i;
+        var label = labelFormatter(tickValue);
+        var unrotatedSingleRect = axisLabelModel.getTextRect(label);
+        var singleRect = rotateTextRect(unrotatedSingleRect, axisLabelModel.get('rotate') || 0);
+
+        rect ? rect.union(singleRect) : (rect = singleRect);
+    }
+
+    return rect;
+}
+
+function rotateTextRect(textRect, rotate) {
+    var rotateRadians = rotate * Math.PI / 180;
+    var boundingBox = textRect.plain();
+    var beforeWidth = boundingBox.width;
+    var beforeHeight = boundingBox.height;
+    var afterWidth = beforeWidth * Math.cos(rotateRadians) + beforeHeight * Math.sin(rotateRadians);
+    var afterHeight = beforeWidth * Math.sin(rotateRadians) + beforeHeight * Math.cos(rotateRadians);
+    var rotatedRect = new BoundingRect(boundingBox.x, boundingBox.y, afterWidth, afterHeight);
+
+    return rotatedRect;
+}
+
+/**
+ * @param {module:echarts/src/model/Model} model axisLabelModel or axisTickModel
+ * @return {number|String} Can be null|'auto'|number|function
+ */
+function getOptionCategoryInterval(model) {
+    var interval = model.get('interval');
+    return interval == null ? 'auto' : interval;
+}
+
+/**
+ * Set `categoryInterval` as 0 implicitly indicates that
+ * show all labels reguardless of overlap.
+ * @param {Object} axis axisModel.axis
+ * @return {boolean}
+ */
+function shouldShowAllLabels(axis) {
+    return axis.type === 'category'
+        && getOptionCategoryInterval(axis.getLabelModel()) === 0;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// import * as axisHelper from './axisHelper';
+
+var axisModelCommonMixin = {
+
+    /**
+     * @param {boolean} origin
+     * @return {number|string} min value or 'dataMin' or null/undefined (means auto) or NaN
+     */
+    getMin: function (origin) {
+        var option = this.option;
+        var min = (!origin && option.rangeStart != null)
+            ? option.rangeStart : option.min;
+
+        if (this.axis
+            && min != null
+            && min !== 'dataMin'
+            && typeof min !== 'function'
+            && !eqNaN(min)
+        ) {
+            min = this.axis.scale.parse(min);
+        }
+        return min;
+    },
+
+    /**
+     * @param {boolean} origin
+     * @return {number|string} max value or 'dataMax' or null/undefined (means auto) or NaN
+     */
+    getMax: function (origin) {
+        var option = this.option;
+        var max = (!origin && option.rangeEnd != null)
+            ? option.rangeEnd : option.max;
+
+        if (this.axis
+            && max != null
+            && max !== 'dataMax'
+            && typeof max !== 'function'
+            && !eqNaN(max)
+        ) {
+            max = this.axis.scale.parse(max);
+        }
+        return max;
+    },
+
+    /**
+     * @return {boolean}
+     */
+    getNeedCrossZero: function () {
+        var option = this.option;
+        return (option.rangeStart != null || option.rangeEnd != null)
+            ? false : !option.scale;
+    },
+
+    /**
+     * Should be implemented by each axis model if necessary.
+     * @return {module:echarts/model/Component} coordinate system model
+     */
+    getCoordSysModel: noop,
+
+    /**
+     * @param {number} rangeStart Can only be finite number or null/undefined or NaN.
+     * @param {number} rangeEnd Can only be finite number or null/undefined or NaN.
+     */
+    setRange: function (rangeStart, rangeEnd) {
+        this.option.rangeStart = rangeStart;
+        this.option.rangeEnd = rangeEnd;
+    },
+
+    /**
+     * Reset range
+     */
+    resetRange: function () {
+        // rangeStart and rangeEnd is readonly.
+        this.option.rangeStart = this.option.rangeEnd = null;
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Symbol factory
+
+/**
+ * Triangle shape
+ * @inner
+ */
+var Triangle = extendShape({
+    type: 'triangle',
+    shape: {
+        cx: 0,
+        cy: 0,
+        width: 0,
+        height: 0
+    },
+    buildPath: function (path, shape) {
+        var cx = shape.cx;
+        var cy = shape.cy;
+        var width = shape.width / 2;
+        var height = shape.height / 2;
+        path.moveTo(cx, cy - height);
+        path.lineTo(cx + width, cy + height);
+        path.lineTo(cx - width, cy + height);
+        path.closePath();
+    }
+});
+
+/**
+ * Diamond shape
+ * @inner
+ */
+var Diamond = extendShape({
+    type: 'diamond',
+    shape: {
+        cx: 0,
+        cy: 0,
+        width: 0,
+        height: 0
+    },
+    buildPath: function (path, shape) {
+        var cx = shape.cx;
+        var cy = shape.cy;
+        var width = shape.width / 2;
+        var height = shape.height / 2;
+        path.moveTo(cx, cy - height);
+        path.lineTo(cx + width, cy);
+        path.lineTo(cx, cy + height);
+        path.lineTo(cx - width, cy);
+        path.closePath();
+    }
+});
+
+/**
+ * Pin shape
