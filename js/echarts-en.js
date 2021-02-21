@@ -33319,3 +33319,265 @@ var scaleLevels = [
     ['hh:mm\nMM-dd', ONE_MINUTE * 15], // 15m
     ['hh:mm\nMM-dd', ONE_MINUTE * 30], // 30m
     ['hh:mm\nMM-dd', ONE_HOUR],        // 1h
+    ['hh:mm\nMM-dd', ONE_HOUR * 2],    // 2h
+    ['hh:mm\nMM-dd', ONE_HOUR * 6],    // 6h
+    ['hh:mm\nMM-dd', ONE_HOUR * 12],   // 12h
+    ['MM-dd\nyyyy', ONE_DAY],          // 1d
+    ['MM-dd\nyyyy', ONE_DAY * 2],      // 2d
+    ['MM-dd\nyyyy', ONE_DAY * 3],      // 3d
+    ['MM-dd\nyyyy', ONE_DAY * 4],      // 4d
+    ['MM-dd\nyyyy', ONE_DAY * 5],      // 5d
+    ['MM-dd\nyyyy', ONE_DAY * 6],      // 6d
+    ['week', ONE_DAY * 7],             // 7d
+    ['MM-dd\nyyyy', ONE_DAY * 10],     // 10d
+    ['week', ONE_DAY * 14],            // 2w
+    ['week', ONE_DAY * 21],            // 3w
+    ['month', ONE_DAY * 31],           // 1M
+    ['week', ONE_DAY * 42],            // 6w
+    ['month', ONE_DAY * 62],           // 2M
+    ['week', ONE_DAY * 70],            // 10w
+    ['quarter', ONE_DAY * 95],         // 3M
+    ['month', ONE_DAY * 31 * 4],       // 4M
+    ['month', ONE_DAY * 31 * 5],       // 5M
+    ['half-year', ONE_DAY * 380 / 2],  // 6M
+    ['month', ONE_DAY * 31 * 8],       // 8M
+    ['month', ONE_DAY * 31 * 10],      // 10M
+    ['year', ONE_DAY * 380]            // 1Y
+];
+
+/**
+ * @param {module:echarts/model/Model}
+ * @return {module:echarts/scale/Time}
+ */
+TimeScale.create = function (model) {
+    return new TimeScale({useUTC: model.ecModel.get('useUTC')});
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Log scale
+ * @module echarts/scale/Log
+ */
+
+// Use some method of IntervalScale
+var scaleProto$1 = Scale.prototype;
+var intervalScaleProto$1 = IntervalScale.prototype;
+
+var getPrecisionSafe$1 = getPrecisionSafe;
+var roundingErrorFix = round$2;
+
+var mathFloor$1 = Math.floor;
+var mathCeil$1 = Math.ceil;
+var mathPow$1 = Math.pow;
+
+var mathLog = Math.log;
+
+var LogScale = Scale.extend({
+
+    type: 'log',
+
+    base: 10,
+
+    $constructor: function () {
+        Scale.apply(this, arguments);
+        this._originalScale = new IntervalScale();
+    },
+
+    /**
+     * @return {Array.<number>}
+     */
+    getTicks: function () {
+        var originalScale = this._originalScale;
+        var extent = this._extent;
+        var originalExtent = originalScale.getExtent();
+
+        return map(intervalScaleProto$1.getTicks.call(this), function (val) {
+            var powVal = round$2(mathPow$1(this.base, val));
+
+            // Fix #4158
+            powVal = (val === extent[0] && originalScale.__fixMin)
+                ? fixRoundingError(powVal, originalExtent[0])
+                : powVal;
+            powVal = (val === extent[1] && originalScale.__fixMax)
+                ? fixRoundingError(powVal, originalExtent[1])
+                : powVal;
+
+            return powVal;
+        }, this);
+    },
+
+    /**
+     * @param {number} val
+     * @return {string}
+     */
+    getLabel: intervalScaleProto$1.getLabel,
+
+    /**
+     * @param  {number} val
+     * @return {number}
+     */
+    scale: function (val) {
+        val = scaleProto$1.scale.call(this, val);
+        return mathPow$1(this.base, val);
+    },
+
+    /**
+     * @param {number} start
+     * @param {number} end
+     */
+    setExtent: function (start, end) {
+        var base = this.base;
+        start = mathLog(start) / mathLog(base);
+        end = mathLog(end) / mathLog(base);
+        intervalScaleProto$1.setExtent.call(this, start, end);
+    },
+
+    /**
+     * @return {number} end
+     */
+    getExtent: function () {
+        var base = this.base;
+        var extent = scaleProto$1.getExtent.call(this);
+        extent[0] = mathPow$1(base, extent[0]);
+        extent[1] = mathPow$1(base, extent[1]);
+
+        // Fix #4158
+        var originalScale = this._originalScale;
+        var originalExtent = originalScale.getExtent();
+        originalScale.__fixMin && (extent[0] = fixRoundingError(extent[0], originalExtent[0]));
+        originalScale.__fixMax && (extent[1] = fixRoundingError(extent[1], originalExtent[1]));
+
+        return extent;
+    },
+
+    /**
+     * @param  {Array.<number>} extent
+     */
+    unionExtent: function (extent) {
+        this._originalScale.unionExtent(extent);
+
+        var base = this.base;
+        extent[0] = mathLog(extent[0]) / mathLog(base);
+        extent[1] = mathLog(extent[1]) / mathLog(base);
+        scaleProto$1.unionExtent.call(this, extent);
+    },
+
+    /**
+     * @override
+     */
+    unionExtentFromData: function (data, dim) {
+        // TODO
+        // filter value that <= 0
+        this.unionExtent(data.getApproximateExtent(dim));
+    },
+
+    /**
+     * Update interval and extent of intervals for nice ticks
+     * @param  {number} [approxTickNum = 10] Given approx tick number
+     */
+    niceTicks: function (approxTickNum) {
+        approxTickNum = approxTickNum || 10;
+        var extent = this._extent;
+        var span = extent[1] - extent[0];
+        if (span === Infinity || span <= 0) {
+            return;
+        }
+
+        var interval = quantity(span);
+        var err = approxTickNum / span * interval;
+
+        // Filter ticks to get closer to the desired count.
+        if (err <= 0.5) {
+            interval *= 10;
+        }
+
+        // Interval should be integer
+        while (!isNaN(interval) && Math.abs(interval) < 1 && Math.abs(interval) > 0) {
+            interval *= 10;
+        }
+
+        var niceExtent = [
+            round$2(mathCeil$1(extent[0] / interval) * interval),
+            round$2(mathFloor$1(extent[1] / interval) * interval)
+        ];
+
+        this._interval = interval;
+        this._niceExtent = niceExtent;
+    },
+
+    /**
+     * Nice extent.
+     * @override
+     */
+    niceExtent: function (opt) {
+        intervalScaleProto$1.niceExtent.call(this, opt);
+
+        var originalScale = this._originalScale;
+        originalScale.__fixMin = opt.fixMin;
+        originalScale.__fixMax = opt.fixMax;
+    }
+
+});
+
+each$1(['contain', 'normalize'], function (methodName) {
+    LogScale.prototype[methodName] = function (val) {
+        val = mathLog(val) / mathLog(this.base);
+        return scaleProto$1[methodName].call(this, val);
+    };
+});
+
+LogScale.create = function () {
+    return new LogScale();
+};
+
+function fixRoundingError(val, originalVal) {
+    return roundingErrorFix(val, getPrecisionSafe$1(originalVal));
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Get axis scale extent before niced.
+ * Item of returned array can only be number (including Infinity and NaN).
+ */
+function getScaleExtent(scale, model) {
+    var scaleType = scale.type;
+
+    var min = model.getMin();
+    var max = model.getMax();
+    var fixMin = min != null;
