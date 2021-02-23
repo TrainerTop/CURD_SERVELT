@@ -34378,3 +34378,271 @@ function createSymbol(symbolType, x, y, w, h, color, keepAspect) {
     var symbolPath;
 
     if (symbolType.indexOf('image://') === 0) {
+        symbolPath = makeImage(
+            symbolType.slice(8),
+            new BoundingRect(x, y, w, h),
+            keepAspect ? 'center' : 'cover'
+        );
+    }
+    else if (symbolType.indexOf('path://') === 0) {
+        symbolPath = makePath(
+            symbolType.slice(7),
+            {},
+            new BoundingRect(x, y, w, h),
+            keepAspect ? 'center' : 'cover'
+        );
+    }
+    else {
+        symbolPath = new SymbolClz({
+            shape: {
+                symbolType: symbolType,
+                x: x,
+                y: y,
+                width: w,
+                height: h
+            }
+        });
+    }
+
+    symbolPath.__isEmptyBrush = isEmpty;
+
+    symbolPath.setColor = symbolPathSetColor;
+
+    symbolPath.setColor(color);
+
+    return symbolPath;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// import createGraphFromNodeEdge from './chart/helper/createGraphFromNodeEdge';
+/**
+ * Create a muti dimension List structure from seriesModel.
+ * @param  {module:echarts/model/Model} seriesModel
+ * @return {module:echarts/data/List} list
+ */
+function createList(seriesModel) {
+    return createListFromArray(seriesModel.getSource(), seriesModel);
+}
+
+var dataStack$1 = {
+    isDimensionStacked: isDimensionStacked,
+    enableDataStack: enableDataStack,
+    getStackedDimension: getStackedDimension
+};
+
+/**
+ * Create scale
+ * @param {Array.<number>} dataExtent
+ * @param {Object|module:echarts/Model} option
+ */
+function createScale(dataExtent, option) {
+    var axisModel = option;
+    if (!Model.isInstance(option)) {
+        axisModel = new Model(option);
+        mixin(axisModel, axisModelCommonMixin);
+    }
+
+    var scale = createScaleByModel(axisModel);
+    scale.setExtent(dataExtent[0], dataExtent[1]);
+
+    niceScaleExtent(scale, axisModel);
+    return scale;
+}
+
+/**
+ * Mixin common methods to axis model,
+ *
+ * Inlcude methods
+ * `getFormattedLabels() => Array.<string>`
+ * `getCategories() => Array.<string>`
+ * `getMin(origin: boolean) => number`
+ * `getMax(origin: boolean) => number`
+ * `getNeedCrossZero() => boolean`
+ * `setRange(start: number, end: number)`
+ * `resetRange()`
+ */
+function mixinAxisModelCommonMethods(Model$$1) {
+    mixin(Model$$1, axisModelCommonMixin);
+}
+
+var helper = (Object.freeze || Object)({
+	createList: createList,
+	getLayoutRect: getLayoutRect,
+	dataStack: dataStack$1,
+	createScale: createScale,
+	mixinAxisModelCommonMethods: mixinAxisModelCommonMethods,
+	completeDimensions: completeDimensions,
+	createDimensions: createDimensions,
+	createSymbol: createSymbol
+});
+
+var EPSILON$3 = 1e-8;
+
+function isAroundEqual$1(a, b) {
+    return Math.abs(a - b) < EPSILON$3;
+}
+
+function contain$1(points, x, y) {
+    var w = 0;
+    var p = points[0];
+
+    if (!p) {
+        return false;
+    }
+
+    for (var i = 1; i < points.length; i++) {
+        var p2 = points[i];
+        w += windingLine(p[0], p[1], p2[0], p2[1], x, y);
+        p = p2;
+    }
+
+    // Close polygon
+    var p0 = points[0];
+    if (!isAroundEqual$1(p[0], p0[0]) || !isAroundEqual$1(p[1], p0[1])) {
+        w += windingLine(p[0], p[1], p0[0], p0[1], x, y);
+    }
+
+    return w !== 0;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @module echarts/coord/geo/Region
+ */
+
+/**
+ * @param {string|Region} name
+ * @param {Array} geometries
+ * @param {Array.<number>} cp
+ */
+function Region(name, geometries, cp) {
+
+    /**
+     * @type {string}
+     * @readOnly
+     */
+    this.name = name;
+
+    /**
+     * @type {Array.<Array>}
+     * @readOnly
+     */
+    this.geometries = geometries;
+
+    if (!cp) {
+        var rect = this.getBoundingRect();
+        cp = [
+            rect.x + rect.width / 2,
+            rect.y + rect.height / 2
+        ];
+    }
+    else {
+        cp = [cp[0], cp[1]];
+    }
+    /**
+     * @type {Array.<number>}
+     */
+    this.center = cp;
+}
+
+Region.prototype = {
+
+    constructor: Region,
+
+    properties: null,
+
+    /**
+     * @return {module:zrender/core/BoundingRect}
+     */
+    getBoundingRect: function () {
+        var rect = this._rect;
+        if (rect) {
+            return rect;
+        }
+
+        var MAX_NUMBER = Number.MAX_VALUE;
+        var min$$1 = [MAX_NUMBER, MAX_NUMBER];
+        var max$$1 = [-MAX_NUMBER, -MAX_NUMBER];
+        var min2 = [];
+        var max2 = [];
+        var geometries = this.geometries;
+        for (var i = 0; i < geometries.length; i++) {
+            // Only support polygon
+            if (geometries[i].type !== 'polygon') {
+                continue;
+            }
+            // Doesn't consider hole
+            var exterior = geometries[i].exterior;
+            fromPoints(exterior, min2, max2);
+            min(min$$1, min$$1, min2);
+            max(max$$1, max$$1, max2);
+        }
+        // No data
+        if (i === 0) {
+            min$$1[0] = min$$1[1] = max$$1[0] = max$$1[1] = 0;
+        }
+
+        return (this._rect = new BoundingRect(
+            min$$1[0], min$$1[1], max$$1[0] - min$$1[0], max$$1[1] - min$$1[1]
+        ));
+    },
+
+    /**
+     * @param {<Array.<number>} coord
+     * @return {boolean}
+     */
+    contain: function (coord) {
+        var rect = this.getBoundingRect();
+        var geometries = this.geometries;
+        if (!rect.contain(coord[0], coord[1])) {
+            return false;
+        }
+        loopGeo: for (var i = 0, len$$1 = geometries.length; i < len$$1; i++) {
+            // Only support polygon.
+            if (geometries[i].type !== 'polygon') {
+                continue;
+            }
+            var exterior = geometries[i].exterior;
+            var interiors = geometries[i].interiors;
+            if (contain$1(exterior, coord[0], coord[1])) {
+                // Not in the region if point is in the hole.
+                for (var k = 0; k < (interiors ? interiors.length : 0); k++) {
+                    if (contain$1(interiors[k])) {
+                        continue loopGeo;
+                    }
