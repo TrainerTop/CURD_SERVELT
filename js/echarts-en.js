@@ -34646,3 +34646,280 @@ Region.prototype = {
                     if (contain$1(interiors[k])) {
                         continue loopGeo;
                     }
+                }
+                return true;
+            }
+        }
+        return false;
+    },
+
+    transformTo: function (x, y, width, height) {
+        var rect = this.getBoundingRect();
+        var aspect = rect.width / rect.height;
+        if (!width) {
+            width = aspect * height;
+        }
+        else if (!height) {
+            height = width / aspect;
+        }
+        var target = new BoundingRect(x, y, width, height);
+        var transform = rect.calculateTransform(target);
+        var geometries = this.geometries;
+        for (var i = 0; i < geometries.length; i++) {
+            // Only support polygon.
+            if (geometries[i].type !== 'polygon') {
+                continue;
+            }
+            var exterior = geometries[i].exterior;
+            var interiors = geometries[i].interiors;
+            for (var p = 0; p < exterior.length; p++) {
+                applyTransform(exterior[p], exterior[p], transform);
+            }
+            for (var h = 0; h < (interiors ? interiors.length : 0); h++) {
+                for (var p = 0; p < interiors[h].length; p++) {
+                    applyTransform(interiors[h][p], interiors[h][p], transform);
+                }
+            }
+        }
+        rect = this._rect;
+        rect.copy(target);
+        // Update center
+        this.center = [
+            rect.x + rect.width / 2,
+            rect.y + rect.height / 2
+        ];
+    },
+
+    cloneShallow: function (name) {
+        name == null && (name = this.name);
+        var newRegion = new Region(name, this.geometries, this.center);
+        newRegion._rect = this._rect;
+        newRegion.transformTo = null; // Simply avoid to be called.
+        return newRegion;
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Parse and decode geo json
+ * @module echarts/coord/geo/parseGeoJson
+ */
+
+function decode(json) {
+    if (!json.UTF8Encoding) {
+        return json;
+    }
+    var encodeScale = json.UTF8Scale;
+    if (encodeScale == null) {
+        encodeScale = 1024;
+    }
+
+    var features = json.features;
+
+    for (var f = 0; f < features.length; f++) {
+        var feature = features[f];
+        var geometry = feature.geometry;
+        var coordinates = geometry.coordinates;
+        var encodeOffsets = geometry.encodeOffsets;
+
+        for (var c = 0; c < coordinates.length; c++) {
+            var coordinate = coordinates[c];
+
+            if (geometry.type === 'Polygon') {
+                coordinates[c] = decodePolygon(
+                    coordinate,
+                    encodeOffsets[c],
+                    encodeScale
+                );
+            }
+            else if (geometry.type === 'MultiPolygon') {
+                for (var c2 = 0; c2 < coordinate.length; c2++) {
+                    var polygon = coordinate[c2];
+                    coordinate[c2] = decodePolygon(
+                        polygon,
+                        encodeOffsets[c][c2],
+                        encodeScale
+                    );
+                }
+            }
+        }
+    }
+    // Has been decoded
+    json.UTF8Encoding = false;
+    return json;
+}
+
+function decodePolygon(coordinate, encodeOffsets, encodeScale) {
+    var result = [];
+    var prevX = encodeOffsets[0];
+    var prevY = encodeOffsets[1];
+
+    for (var i = 0; i < coordinate.length; i += 2) {
+        var x = coordinate.charCodeAt(i) - 64;
+        var y = coordinate.charCodeAt(i + 1) - 64;
+        // ZigZag decoding
+        x = (x >> 1) ^ (-(x & 1));
+        y = (y >> 1) ^ (-(y & 1));
+        // Delta deocding
+        x += prevX;
+        y += prevY;
+
+        prevX = x;
+        prevY = y;
+        // Dequantize
+        result.push([x / encodeScale, y / encodeScale]);
+    }
+
+    return result;
+}
+
+/**
+ * @alias module:echarts/coord/geo/parseGeoJson
+ * @param {Object} geoJson
+ * @return {module:zrender/container/Group}
+ */
+var parseGeoJson$1 = function (geoJson) {
+
+    decode(geoJson);
+
+    return map(filter(geoJson.features, function (featureObj) {
+        // Output of mapshaper may have geometry null
+        return featureObj.geometry
+            && featureObj.properties
+            && featureObj.geometry.coordinates.length > 0;
+    }), function (featureObj) {
+        var properties = featureObj.properties;
+        var geo = featureObj.geometry;
+
+        var coordinates = geo.coordinates;
+
+        var geometries = [];
+        if (geo.type === 'Polygon') {
+            geometries.push({
+                type: 'polygon',
+                // According to the GeoJSON specification.
+                // First must be exterior, and the rest are all interior(holes).
+                exterior: coordinates[0],
+                interiors: coordinates.slice(1)
+            });
+        }
+        if (geo.type === 'MultiPolygon') {
+            each$1(coordinates, function (item) {
+                if (item[0]) {
+                    geometries.push({
+                        type: 'polygon',
+                        exterior: item[0],
+                        interiors: item.slice(1)
+                    });
+                }
+            });
+        }
+
+        var region = new Region(
+            properties.name,
+            geometries,
+            properties.cp
+        );
+        region.properties = properties;
+        return region;
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var inner$6 = makeInner();
+
+/**
+ * @param {module:echats/coord/Axis} axis
+ * @return {Object} {
+ *     labels: [{
+ *         formattedLabel: string,
+ *         rawLabel: string,
+ *         tickValue: number
+ *     }, ...],
+ *     labelCategoryInterval: number
+ * }
+ */
+function createAxisLabels(axis) {
+    // Only ordinal scale support tick interval
+    return axis.type === 'category'
+        ? makeCategoryLabels(axis)
+        : makeRealNumberLabels(axis);
+}
+
+/**
+ * @param {module:echats/coord/Axis} axis
+ * @param {module:echarts/model/Model} tickModel For example, can be axisTick, splitLine, splitArea.
+ * @return {Object} {
+ *     ticks: Array.<number>
+ *     tickCategoryInterval: number
+ * }
+ */
+function createAxisTicks(axis, tickModel) {
+    // Only ordinal scale support tick interval
+    return axis.type === 'category'
+        ? makeCategoryTicks(axis, tickModel)
+        : {ticks: axis.scale.getTicks()};
+}
+
+function makeCategoryLabels(axis) {
+    var labelModel = axis.getLabelModel();
+    var result = makeCategoryLabelsActually(axis, labelModel);
+
+    return (!labelModel.get('show') || axis.scale.isBlank())
+        ? {labels: [], labelCategoryInterval: result.labelCategoryInterval}
+        : result;
+}
+
+function makeCategoryLabelsActually(axis, labelModel) {
+    var labelsCache = getListCache(axis, 'labels');
+    var optionLabelInterval = getOptionCategoryInterval(labelModel);
+    var result = listCacheGet(labelsCache, optionLabelInterval);
+
+    if (result) {
+        return result;
+    }
+
+    var labels;
+    var numericLabelInterval;
+
+    if (isFunction$1(optionLabelInterval)) {
+        labels = makeLabelsByCustomizedCategoryInterval(axis, optionLabelInterval);
+    }
+    else {
+        numericLabelInterval = optionLabelInterval === 'auto'
