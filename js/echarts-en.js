@@ -36920,3 +36920,261 @@ function getBoundingBox(points, smoothConstraint) {
             if (pt[1] > ptMax[1]) {
                 ptMax[1] = pt[1];
             }
+        }
+    }
+    return {
+        min: smoothConstraint ? ptMin : ptMax,
+        max: smoothConstraint ? ptMax : ptMin
+    };
+}
+
+var Polyline$1 = Path.extend({
+
+    type: 'ec-polyline',
+
+    shape: {
+        points: [],
+
+        smooth: 0,
+
+        smoothConstraint: true,
+
+        smoothMonotone: null,
+
+        connectNulls: false
+    },
+
+    style: {
+        fill: null,
+
+        stroke: '#000'
+    },
+
+    brush: fixClipWithShadow(Path.prototype.brush),
+
+    buildPath: function (ctx, shape) {
+        var points = shape.points;
+
+        var i = 0;
+        var len$$1 = points.length;
+
+        var result = getBoundingBox(points, shape.smoothConstraint);
+
+        if (shape.connectNulls) {
+            // Must remove first and last null values avoid draw error in polygon
+            for (; len$$1 > 0; len$$1--) {
+                if (!isPointNull(points[len$$1 - 1])) {
+                    break;
+                }
+            }
+            for (; i < len$$1; i++) {
+                if (!isPointNull(points[i])) {
+                    break;
+                }
+            }
+        }
+        while (i < len$$1) {
+            i += drawSegment(
+                ctx, points, i, len$$1, len$$1,
+                1, result.min, result.max, shape.smooth,
+                shape.smoothMonotone, shape.connectNulls
+            ) + 1;
+        }
+    }
+});
+
+var Polygon$1 = Path.extend({
+
+    type: 'ec-polygon',
+
+    shape: {
+        points: [],
+
+        // Offset between stacked base points and points
+        stackedOnPoints: [],
+
+        smooth: 0,
+
+        stackedOnSmooth: 0,
+
+        smoothConstraint: true,
+
+        smoothMonotone: null,
+
+        connectNulls: false
+    },
+
+    brush: fixClipWithShadow(Path.prototype.brush),
+
+    buildPath: function (ctx, shape) {
+        var points = shape.points;
+        var stackedOnPoints = shape.stackedOnPoints;
+
+        var i = 0;
+        var len$$1 = points.length;
+        var smoothMonotone = shape.smoothMonotone;
+        var bbox = getBoundingBox(points, shape.smoothConstraint);
+        var stackedOnBBox = getBoundingBox(stackedOnPoints, shape.smoothConstraint);
+
+        if (shape.connectNulls) {
+            // Must remove first and last null values avoid draw error in polygon
+            for (; len$$1 > 0; len$$1--) {
+                if (!isPointNull(points[len$$1 - 1])) {
+                    break;
+                }
+            }
+            for (; i < len$$1; i++) {
+                if (!isPointNull(points[i])) {
+                    break;
+                }
+            }
+        }
+        while (i < len$$1) {
+            var k = drawSegment(
+                ctx, points, i, len$$1, len$$1,
+                1, bbox.min, bbox.max, shape.smooth,
+                smoothMonotone, shape.connectNulls
+            );
+            drawSegment(
+                ctx, stackedOnPoints, i + k - 1, k, len$$1,
+                -1, stackedOnBBox.min, stackedOnBBox.max, shape.stackedOnSmooth,
+                smoothMonotone, shape.connectNulls
+            );
+            i += k + 1;
+
+            ctx.closePath();
+        }
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// FIXME step not support polar
+
+function isPointsSame(points1, points2) {
+    if (points1.length !== points2.length) {
+        return;
+    }
+    for (var i = 0; i < points1.length; i++) {
+        var p1 = points1[i];
+        var p2 = points2[i];
+        if (p1[0] !== p2[0] || p1[1] !== p2[1]) {
+            return;
+        }
+    }
+    return true;
+}
+
+function getSmooth(smooth) {
+    return typeof (smooth) === 'number' ? smooth : (smooth ? 0.5 : 0);
+}
+
+function getAxisExtentWithGap(axis) {
+    var extent = axis.getGlobalExtent();
+    if (axis.onBand) {
+        // Remove extra 1px to avoid line miter in clipped edge
+        var halfBandWidth = axis.getBandWidth() / 2 - 1;
+        var dir = extent[1] > extent[0] ? 1 : -1;
+        extent[0] += dir * halfBandWidth;
+        extent[1] -= dir * halfBandWidth;
+    }
+    return extent;
+}
+
+/**
+ * @param {module:echarts/coord/cartesian/Cartesian2D|module:echarts/coord/polar/Polar} coordSys
+ * @param {module:echarts/data/List} data
+ * @param {Object} dataCoordInfo
+ * @param {Array.<Array.<number>>} points
+ */
+function getStackedOnPoints(coordSys, data, dataCoordInfo) {
+    if (!dataCoordInfo.valueDim) {
+        return [];
+    }
+
+    var points = [];
+    for (var idx = 0, len = data.count(); idx < len; idx++) {
+        points.push(getStackedOnPoint(dataCoordInfo, coordSys, data, idx));
+    }
+
+    return points;
+}
+
+function createGridClipShape(cartesian, hasAnimation, forSymbol, seriesModel) {
+    var xExtent = getAxisExtentWithGap(cartesian.getAxis('x'));
+    var yExtent = getAxisExtentWithGap(cartesian.getAxis('y'));
+    var isHorizontal = cartesian.getBaseAxis().isHorizontal();
+
+    var x = Math.min(xExtent[0], xExtent[1]);
+    var y = Math.min(yExtent[0], yExtent[1]);
+    var width = Math.max(xExtent[0], xExtent[1]) - x;
+    var height = Math.max(yExtent[0], yExtent[1]) - y;
+
+    // Avoid float number rounding error for symbol on the edge of axis extent.
+    // See #7913 and `test/dataZoom-clip.html`.
+    if (forSymbol) {
+        x -= 0.5;
+        width += 0.5;
+        y -= 0.5;
+        height += 0.5;
+    }
+    else {
+        var lineWidth = seriesModel.get('lineStyle.width') || 2;
+        // Expand clip shape to avoid clipping when line value exceeds axis
+        var expandSize = seriesModel.get('clipOverflow') ? lineWidth / 2 : Math.max(width, height);
+        if (isHorizontal) {
+            y -= expandSize;
+            height += expandSize * 2;
+        }
+        else {
+            x -= expandSize;
+            width += expandSize * 2;
+        }
+    }
+
+    var clipPath = new Rect({
+        shape: {
+            x: x,
+            y: y,
+            width: width,
+            height: height
+        }
+    });
+
+    if (hasAnimation) {
+        clipPath.shape[isHorizontal ? 'width' : 'height'] = 0;
+        initProps(clipPath, {
+            shape: {
+                width: width,
+                height: height
+            }
+        }, seriesModel);
+    }
+
+    return clipPath;
+}
+
+function createPolarClipShape(polar, hasAnimation, forSymbol, seriesModel) {
+    var angleAxis = polar.getAngleAxis();
+    var radiusAxis = polar.getRadiusAxis();
+
+    var radiusExtent = radiusAxis.getExtent().slice();
+    radiusExtent[0] > radiusExtent[1] && radiusExtent.reverse();
+    var angleExtent = angleAxis.getExtent();
