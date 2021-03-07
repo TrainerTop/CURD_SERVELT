@@ -37178,3 +37178,266 @@ function createPolarClipShape(polar, hasAnimation, forSymbol, seriesModel) {
     var radiusExtent = radiusAxis.getExtent().slice();
     radiusExtent[0] > radiusExtent[1] && radiusExtent.reverse();
     var angleExtent = angleAxis.getExtent();
+
+    var RADIAN = Math.PI / 180;
+
+    // Avoid float number rounding error for symbol on the edge of axis extent.
+    if (forSymbol) {
+        radiusExtent[0] -= 0.5;
+        radiusExtent[1] += 0.5;
+    }
+
+    var clipPath = new Sector({
+        shape: {
+            cx: round$2(polar.cx, 1),
+            cy: round$2(polar.cy, 1),
+            r0: round$2(radiusExtent[0], 1),
+            r: round$2(radiusExtent[1], 1),
+            startAngle: -angleExtent[0] * RADIAN,
+            endAngle: -angleExtent[1] * RADIAN,
+            clockwise: angleAxis.inverse
+        }
+    });
+
+    if (hasAnimation) {
+        clipPath.shape.endAngle = -angleExtent[0] * RADIAN;
+        initProps(clipPath, {
+            shape: {
+                endAngle: -angleExtent[1] * RADIAN
+            }
+        }, seriesModel);
+    }
+
+    return clipPath;
+}
+
+function createClipShape(coordSys, hasAnimation, forSymbol, seriesModel) {
+    return coordSys.type === 'polar'
+        ? createPolarClipShape(coordSys, hasAnimation, forSymbol, seriesModel)
+        : createGridClipShape(coordSys, hasAnimation, forSymbol, seriesModel);
+}
+
+function turnPointsIntoStep(points, coordSys, stepTurnAt) {
+    var baseAxis = coordSys.getBaseAxis();
+    var baseIndex = baseAxis.dim === 'x' || baseAxis.dim === 'radius' ? 0 : 1;
+
+    var stepPoints = [];
+    for (var i = 0; i < points.length - 1; i++) {
+        var nextPt = points[i + 1];
+        var pt = points[i];
+        stepPoints.push(pt);
+
+        var stepPt = [];
+        switch (stepTurnAt) {
+            case 'end':
+                stepPt[baseIndex] = nextPt[baseIndex];
+                stepPt[1 - baseIndex] = pt[1 - baseIndex];
+                // default is start
+                stepPoints.push(stepPt);
+                break;
+            case 'middle':
+                // default is start
+                var middle = (pt[baseIndex] + nextPt[baseIndex]) / 2;
+                var stepPt2 = [];
+                stepPt[baseIndex] = stepPt2[baseIndex] = middle;
+                stepPt[1 - baseIndex] = pt[1 - baseIndex];
+                stepPt2[1 - baseIndex] = nextPt[1 - baseIndex];
+                stepPoints.push(stepPt);
+                stepPoints.push(stepPt2);
+                break;
+            default:
+                stepPt[baseIndex] = pt[baseIndex];
+                stepPt[1 - baseIndex] = nextPt[1 - baseIndex];
+                // default is start
+                stepPoints.push(stepPt);
+        }
+    }
+    // Last points
+    points[i] && stepPoints.push(points[i]);
+    return stepPoints;
+}
+
+function getVisualGradient(data, coordSys) {
+    var visualMetaList = data.getVisual('visualMeta');
+    if (!visualMetaList || !visualMetaList.length || !data.count()) {
+        // When data.count() is 0, gradient range can not be calculated.
+        return;
+    }
+
+    if (coordSys.type !== 'cartesian2d') {
+        if (__DEV__) {
+            console.warn('Visual map on line style is only supported on cartesian2d.');
+        }
+        return;
+    }
+
+    var coordDim;
+    var visualMeta;
+
+    for (var i = visualMetaList.length - 1; i >= 0; i--) {
+        var dimIndex = visualMetaList[i].dimension;
+        var dimName = data.dimensions[dimIndex];
+        var dimInfo = data.getDimensionInfo(dimName);
+        coordDim = dimInfo && dimInfo.coordDim;
+        // Can only be x or y
+        if (coordDim === 'x' || coordDim === 'y') {
+            visualMeta = visualMetaList[i];
+            break;
+        }
+    }
+
+    if (!visualMeta) {
+        if (__DEV__) {
+            console.warn('Visual map on line style only support x or y dimension.');
+        }
+        return;
+    }
+
+    // If the area to be rendered is bigger than area defined by LinearGradient,
+    // the canvas spec prescribes that the color of the first stop and the last
+    // stop should be used. But if two stops are added at offset 0, in effect
+    // browsers use the color of the second stop to render area outside
+    // LinearGradient. So we can only infinitesimally extend area defined in
+    // LinearGradient to render `outerColors`.
+
+    var axis = coordSys.getAxis(coordDim);
+
+    // dataToCoor mapping may not be linear, but must be monotonic.
+    var colorStops = map(visualMeta.stops, function (stop) {
+        return {
+            coord: axis.toGlobalCoord(axis.dataToCoord(stop.value)),
+            color: stop.color
+        };
+    });
+    var stopLen = colorStops.length;
+    var outerColors = visualMeta.outerColors.slice();
+
+    if (stopLen && colorStops[0].coord > colorStops[stopLen - 1].coord) {
+        colorStops.reverse();
+        outerColors.reverse();
+    }
+
+    var tinyExtent = 10; // Arbitrary value: 10px
+    var minCoord = colorStops[0].coord - tinyExtent;
+    var maxCoord = colorStops[stopLen - 1].coord + tinyExtent;
+    var coordSpan = maxCoord - minCoord;
+
+    if (coordSpan < 1e-3) {
+        return 'transparent';
+    }
+
+    each$1(colorStops, function (stop) {
+        stop.offset = (stop.coord - minCoord) / coordSpan;
+    });
+    colorStops.push({
+        offset: stopLen ? colorStops[stopLen - 1].offset : 0.5,
+        color: outerColors[1] || 'transparent'
+    });
+    colorStops.unshift({ // notice colorStops.length have been changed.
+        offset: stopLen ? colorStops[0].offset : 0.5,
+        color: outerColors[0] || 'transparent'
+    });
+
+    // zrUtil.each(colorStops, function (colorStop) {
+    //     // Make sure each offset has rounded px to avoid not sharp edge
+    //     colorStop.offset = (Math.round(colorStop.offset * (end - start) + start) - start) / (end - start);
+    // });
+
+    var gradient = new LinearGradient(0, 0, 0, 0, colorStops, true);
+    gradient[coordDim] = minCoord;
+    gradient[coordDim + '2'] = maxCoord;
+
+    return gradient;
+}
+
+function getIsIgnoreFunc(seriesModel, data, coordSys) {
+    var showAllSymbol = seriesModel.get('showAllSymbol');
+    var isAuto = showAllSymbol === 'auto';
+
+    if (showAllSymbol && !isAuto) {
+        return;
+    }
+
+    var categoryAxis = coordSys.getAxesByScale('ordinal')[0];
+    if (!categoryAxis) {
+        return;
+    }
+
+    // Note that category label interval strategy might bring some weird effect
+    // in some scenario: users may wonder why some of the symbols are not
+    // displayed. So we show all symbols as possible as we can.
+    if (isAuto
+        // Simplify the logic, do not determine label overlap here.
+        && canShowAllSymbolForCategory(categoryAxis, data)
+    ) {
+        return;
+    }
+
+    // Otherwise follow the label interval strategy on category axis.
+    var categoryDataDim = data.mapDimension(categoryAxis.dim);
+    var labelMap = {};
+
+    each$1(categoryAxis.getViewLabels(), function (labelItem) {
+        labelMap[labelItem.tickValue] = 1;
+    });
+
+    return function (dataIndex) {
+        return !labelMap.hasOwnProperty(data.get(categoryDataDim, dataIndex));
+    };
+}
+
+function canShowAllSymbolForCategory(categoryAxis, data) {
+    // In mose cases, line is monotonous on category axis, and the label size
+    // is close with each other. So we check the symbol size and some of the
+    // label size alone with the category axis to estimate whether all symbol
+    // can be shown without overlap.
+    var axisExtent = categoryAxis.getExtent();
+    var availSize = Math.abs(axisExtent[1] - axisExtent[0]) / categoryAxis.scale.count();
+    isNaN(availSize) && (availSize = 0); // 0/0 is NaN.
+
+    // Sampling some points, max 5.
+    var dataLen = data.count();
+    var step = Math.max(1, Math.round(dataLen / 5));
+    for (var dataIndex = 0; dataIndex < dataLen; dataIndex += step) {
+        if (SymbolClz$1.getSymbolSize(
+                data, dataIndex
+            // Only for cartesian, where `isHorizontal` exists.
+            )[categoryAxis.isHorizontal() ? 1 : 0]
+            // Empirical number
+            * 1.5 > availSize
+        ) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+Chart.extend({
+
+    type: 'line',
+
+    init: function () {
+        var lineGroup = new Group();
+
+        var symbolDraw = new SymbolDraw();
+        this.group.add(symbolDraw.group);
+
+        this._symbolDraw = symbolDraw;
+        this._lineGroup = lineGroup;
+    },
+
+    render: function (seriesModel, ecModel, api) {
+        var coordSys = seriesModel.coordinateSystem;
+        var group = this.group;
+        var data = seriesModel.getData();
+        var lineStyleModel = seriesModel.getModel('lineStyle');
+        var areaStyleModel = seriesModel.getModel('areaStyle');
+
+        var points = data.mapArray(data.getItemLayout);
+
+        var isCoordSysPolar = coordSys.type === 'polar';
+        var prevCoordSys = this._coordSys;
+
+        var symbolDraw = this._symbolDraw;
+        var polyline = this._polyline;
