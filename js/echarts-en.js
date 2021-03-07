@@ -37441,3 +37441,272 @@ Chart.extend({
 
         var symbolDraw = this._symbolDraw;
         var polyline = this._polyline;
+        var polygon = this._polygon;
+
+        var lineGroup = this._lineGroup;
+
+        var hasAnimation = seriesModel.get('animation');
+
+        var isAreaChart = !areaStyleModel.isEmpty();
+
+        var valueOrigin = areaStyleModel.get('origin');
+        var dataCoordInfo = prepareDataCoordInfo(coordSys, data, valueOrigin);
+
+        var stackedOnPoints = getStackedOnPoints(coordSys, data, dataCoordInfo);
+
+        var showSymbol = seriesModel.get('showSymbol');
+
+        var isIgnoreFunc = showSymbol && !isCoordSysPolar
+            && getIsIgnoreFunc(seriesModel, data, coordSys);
+
+        // Remove temporary symbols
+        var oldData = this._data;
+        oldData && oldData.eachItemGraphicEl(function (el, idx) {
+            if (el.__temp) {
+                group.remove(el);
+                oldData.setItemGraphicEl(idx, null);
+            }
+        });
+
+        // Remove previous created symbols if showSymbol changed to false
+        if (!showSymbol) {
+            symbolDraw.remove();
+        }
+
+        group.add(lineGroup);
+
+        // FIXME step not support polar
+        var step = !isCoordSysPolar && seriesModel.get('step');
+        // Initialization animation or coordinate system changed
+        if (
+            !(polyline && prevCoordSys.type === coordSys.type && step === this._step)
+        ) {
+            showSymbol && symbolDraw.updateData(data, {
+                isIgnore: isIgnoreFunc,
+                clipShape: createClipShape(coordSys, false, true, seriesModel)
+            });
+
+            if (step) {
+                // TODO If stacked series is not step
+                points = turnPointsIntoStep(points, coordSys, step);
+                stackedOnPoints = turnPointsIntoStep(stackedOnPoints, coordSys, step);
+            }
+
+            polyline = this._newPolyline(points, coordSys, hasAnimation);
+            if (isAreaChart) {
+                polygon = this._newPolygon(
+                    points, stackedOnPoints,
+                    coordSys, hasAnimation
+                );
+            }
+            lineGroup.setClipPath(createClipShape(coordSys, true, false, seriesModel));
+        }
+        else {
+            if (isAreaChart && !polygon) {
+                // If areaStyle is added
+                polygon = this._newPolygon(
+                    points, stackedOnPoints,
+                    coordSys, hasAnimation
+                );
+            }
+            else if (polygon && !isAreaChart) {
+                // If areaStyle is removed
+                lineGroup.remove(polygon);
+                polygon = this._polygon = null;
+            }
+
+            // Update clipPath
+            lineGroup.setClipPath(createClipShape(coordSys, false, false, seriesModel));
+
+            // Always update, or it is wrong in the case turning on legend
+            // because points are not changed
+            showSymbol && symbolDraw.updateData(data, {
+                isIgnore: isIgnoreFunc,
+                clipShape: createClipShape(coordSys, false, true, seriesModel)
+            });
+
+            // Stop symbol animation and sync with line points
+            // FIXME performance?
+            data.eachItemGraphicEl(function (el) {
+                el.stopAnimation(true);
+            });
+
+            // In the case data zoom triggerred refreshing frequently
+            // Data may not change if line has a category axis. So it should animate nothing
+            if (!isPointsSame(this._stackedOnPoints, stackedOnPoints)
+                || !isPointsSame(this._points, points)
+            ) {
+                if (hasAnimation) {
+                    this._updateAnimation(
+                        data, stackedOnPoints, coordSys, api, step, valueOrigin
+                    );
+                }
+                else {
+                    // Not do it in update with animation
+                    if (step) {
+                        // TODO If stacked series is not step
+                        points = turnPointsIntoStep(points, coordSys, step);
+                        stackedOnPoints = turnPointsIntoStep(stackedOnPoints, coordSys, step);
+                    }
+
+                    polyline.setShape({
+                        points: points
+                    });
+                    polygon && polygon.setShape({
+                        points: points,
+                        stackedOnPoints: stackedOnPoints
+                    });
+                }
+            }
+        }
+
+        var visualColor = getVisualGradient(data, coordSys) || data.getVisual('color');
+
+        polyline.useStyle(defaults(
+            // Use color in lineStyle first
+            lineStyleModel.getLineStyle(),
+            {
+                fill: 'none',
+                stroke: visualColor,
+                lineJoin: 'bevel'
+            }
+        ));
+
+        var smooth = seriesModel.get('smooth');
+        smooth = getSmooth(seriesModel.get('smooth'));
+        polyline.setShape({
+            smooth: smooth,
+            smoothMonotone: seriesModel.get('smoothMonotone'),
+            connectNulls: seriesModel.get('connectNulls')
+        });
+
+        if (polygon) {
+            var stackedOnSeries = data.getCalculationInfo('stackedOnSeries');
+            var stackedOnSmooth = 0;
+
+            polygon.useStyle(defaults(
+                areaStyleModel.getAreaStyle(),
+                {
+                    fill: visualColor,
+                    opacity: 0.7,
+                    lineJoin: 'bevel'
+                }
+            ));
+
+            if (stackedOnSeries) {
+                stackedOnSmooth = getSmooth(stackedOnSeries.get('smooth'));
+            }
+
+            polygon.setShape({
+                smooth: smooth,
+                stackedOnSmooth: stackedOnSmooth,
+                smoothMonotone: seriesModel.get('smoothMonotone'),
+                connectNulls: seriesModel.get('connectNulls')
+            });
+        }
+
+        this._data = data;
+        // Save the coordinate system for transition animation when data changed
+        this._coordSys = coordSys;
+        this._stackedOnPoints = stackedOnPoints;
+        this._points = points;
+        this._step = step;
+        this._valueOrigin = valueOrigin;
+    },
+
+    dispose: function () {},
+
+    highlight: function (seriesModel, ecModel, api, payload) {
+        var data = seriesModel.getData();
+        var dataIndex = queryDataIndex(data, payload);
+
+        if (!(dataIndex instanceof Array) && dataIndex != null && dataIndex >= 0) {
+            var symbol = data.getItemGraphicEl(dataIndex);
+            if (!symbol) {
+                // Create a temporary symbol if it is not exists
+                var pt = data.getItemLayout(dataIndex);
+                if (!pt) {
+                    // Null data
+                    return;
+                }
+                symbol = new SymbolClz$1(data, dataIndex);
+                symbol.position = pt;
+                symbol.setZ(
+                    seriesModel.get('zlevel'),
+                    seriesModel.get('z')
+                );
+                symbol.ignore = isNaN(pt[0]) || isNaN(pt[1]);
+                symbol.__temp = true;
+                data.setItemGraphicEl(dataIndex, symbol);
+
+                // Stop scale animation
+                symbol.stopSymbolAnimation(true);
+
+                this.group.add(symbol);
+            }
+            symbol.highlight();
+        }
+        else {
+            // Highlight whole series
+            Chart.prototype.highlight.call(
+                this, seriesModel, ecModel, api, payload
+            );
+        }
+    },
+
+    downplay: function (seriesModel, ecModel, api, payload) {
+        var data = seriesModel.getData();
+        var dataIndex = queryDataIndex(data, payload);
+        if (dataIndex != null && dataIndex >= 0) {
+            var symbol = data.getItemGraphicEl(dataIndex);
+            if (symbol) {
+                if (symbol.__temp) {
+                    data.setItemGraphicEl(dataIndex, null);
+                    this.group.remove(symbol);
+                }
+                else {
+                    symbol.downplay();
+                }
+            }
+        }
+        else {
+            // FIXME
+            // can not downplay completely.
+            // Downplay whole series
+            Chart.prototype.downplay.call(
+                this, seriesModel, ecModel, api, payload
+            );
+        }
+    },
+
+    /**
+     * @param {module:zrender/container/Group} group
+     * @param {Array.<Array.<number>>} points
+     * @private
+     */
+    _newPolyline: function (points) {
+        var polyline = this._polyline;
+        // Remove previous created polyline
+        if (polyline) {
+            this._lineGroup.remove(polyline);
+        }
+
+        polyline = new Polyline$1({
+            shape: {
+                points: points
+            },
+            silent: true,
+            z2: 10
+        });
+
+        this._lineGroup.add(polyline);
+
+        this._polyline = polyline;
+
+        return polyline;
+    },
+
+    /**
+     * @param {module:zrender/container/Group} group
+     * @param {Array.<Array.<number>>} stackedOnPoints
+     * @param {Array.<Array.<number>>} points
