@@ -37710,3 +37710,295 @@ Chart.extend({
      * @param {module:zrender/container/Group} group
      * @param {Array.<Array.<number>>} stackedOnPoints
      * @param {Array.<Array.<number>>} points
+     * @private
+     */
+    _newPolygon: function (points, stackedOnPoints) {
+        var polygon = this._polygon;
+        // Remove previous created polygon
+        if (polygon) {
+            this._lineGroup.remove(polygon);
+        }
+
+        polygon = new Polygon$1({
+            shape: {
+                points: points,
+                stackedOnPoints: stackedOnPoints
+            },
+            silent: true
+        });
+
+        this._lineGroup.add(polygon);
+
+        this._polygon = polygon;
+        return polygon;
+    },
+
+    /**
+     * @private
+     */
+    // FIXME Two value axis
+    _updateAnimation: function (data, stackedOnPoints, coordSys, api, step, valueOrigin) {
+        var polyline = this._polyline;
+        var polygon = this._polygon;
+        var seriesModel = data.hostModel;
+
+        var diff = lineAnimationDiff(
+            this._data, data,
+            this._stackedOnPoints, stackedOnPoints,
+            this._coordSys, coordSys,
+            this._valueOrigin, valueOrigin
+        );
+
+        var current = diff.current;
+        var stackedOnCurrent = diff.stackedOnCurrent;
+        var next = diff.next;
+        var stackedOnNext = diff.stackedOnNext;
+        if (step) {
+            // TODO If stacked series is not step
+            current = turnPointsIntoStep(diff.current, coordSys, step);
+            stackedOnCurrent = turnPointsIntoStep(diff.stackedOnCurrent, coordSys, step);
+            next = turnPointsIntoStep(diff.next, coordSys, step);
+            stackedOnNext = turnPointsIntoStep(diff.stackedOnNext, coordSys, step);
+        }
+        // `diff.current` is subset of `current` (which should be ensured by
+        // turnPointsIntoStep), so points in `__points` can be updated when
+        // points in `current` are update during animation.
+        polyline.shape.__points = diff.current;
+        polyline.shape.points = current;
+
+        updateProps(polyline, {
+            shape: {
+                points: next
+            }
+        }, seriesModel);
+
+        if (polygon) {
+            polygon.setShape({
+                points: current,
+                stackedOnPoints: stackedOnCurrent
+            });
+            updateProps(polygon, {
+                shape: {
+                    points: next,
+                    stackedOnPoints: stackedOnNext
+                }
+            }, seriesModel);
+        }
+
+        var updatedDataInfo = [];
+        var diffStatus = diff.status;
+
+        for (var i = 0; i < diffStatus.length; i++) {
+            var cmd = diffStatus[i].cmd;
+            if (cmd === '=') {
+                var el = data.getItemGraphicEl(diffStatus[i].idx1);
+                if (el) {
+                    updatedDataInfo.push({
+                        el: el,
+                        ptIdx: i    // Index of points
+                    });
+                }
+            }
+        }
+
+        if (polyline.animators && polyline.animators.length) {
+            polyline.animators[0].during(function () {
+                for (var i = 0; i < updatedDataInfo.length; i++) {
+                    var el = updatedDataInfo[i].el;
+                    el.attr('position', polyline.shape.__points[updatedDataInfo[i].ptIdx]);
+                }
+            });
+        }
+    },
+
+    remove: function (ecModel) {
+        var group = this.group;
+        var oldData = this._data;
+        this._lineGroup.removeAll();
+        this._symbolDraw.remove(true);
+        // Remove temporary created elements when highlighting
+        oldData && oldData.eachItemGraphicEl(function (el, idx) {
+            if (el.__temp) {
+                group.remove(el);
+                oldData.setItemGraphicEl(idx, null);
+            }
+        });
+
+        this._polyline
+            = this._polygon
+            = this._coordSys
+            = this._points
+            = this._stackedOnPoints
+            = this._data = null;
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+var visualSymbol = function (seriesType, defaultSymbolType, legendSymbol) {
+    // Encoding visual for all series include which is filtered for legend drawing
+    return {
+        seriesType: seriesType,
+
+        // For legend.
+        performRawSeries: true,
+
+        reset: function (seriesModel, ecModel, api) {
+            var data = seriesModel.getData();
+
+            var symbolType = seriesModel.get('symbol') || defaultSymbolType;
+            var symbolSize = seriesModel.get('symbolSize');
+            var keepAspect = seriesModel.get('symbolKeepAspect');
+
+            data.setVisual({
+                legendSymbol: legendSymbol || symbolType,
+                symbol: symbolType,
+                symbolSize: symbolSize,
+                symbolKeepAspect: keepAspect
+            });
+
+            // Only visible series has each data be visual encoded
+            if (ecModel.isSeriesFiltered(seriesModel)) {
+                return;
+            }
+
+            var hasCallback = typeof symbolSize === 'function';
+
+            function dataEach(data, idx) {
+                if (typeof symbolSize === 'function') {
+                    var rawValue = seriesModel.getRawValue(idx);
+                    // FIXME
+                    var params = seriesModel.getDataParams(idx);
+                    data.setItemVisual(idx, 'symbolSize', symbolSize(rawValue, params));
+                }
+
+                if (data.hasItemOption) {
+                    var itemModel = data.getItemModel(idx);
+                    var itemSymbolType = itemModel.getShallow('symbol', true);
+                    var itemSymbolSize = itemModel.getShallow('symbolSize',
+                        true);
+                    var itemSymbolKeepAspect
+                        = itemModel.getShallow('symbolKeepAspect', true);
+
+                    // If has item symbol
+                    if (itemSymbolType != null) {
+                        data.setItemVisual(idx, 'symbol', itemSymbolType);
+                    }
+                    if (itemSymbolSize != null) {
+                        // PENDING Transform symbolSize ?
+                        data.setItemVisual(idx, 'symbolSize', itemSymbolSize);
+                    }
+                    if (itemSymbolKeepAspect != null) {
+                        data.setItemVisual(idx, 'symbolKeepAspect',
+                            itemSymbolKeepAspect);
+                    }
+                }
+            }
+
+            return { dataEach: (data.hasItemOption || hasCallback) ? dataEach : null };
+        }
+    };
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/* global Float32Array */
+
+var pointsLayout = function (seriesType) {
+    return {
+        seriesType: seriesType,
+
+        plan: createRenderPlanner(),
+
+        reset: function (seriesModel) {
+            var data = seriesModel.getData();
+            var coordSys = seriesModel.coordinateSystem;
+            var pipelineContext = seriesModel.pipelineContext;
+            var isLargeRender = pipelineContext.large;
+
+            if (!coordSys) {
+                return;
+            }
+
+            var dims = map(coordSys.dimensions, function (dim) {
+                return data.mapDimension(dim);
+            }).slice(0, 2);
+            var dimLen = dims.length;
+
+            var stackResultDim = data.getCalculationInfo('stackResultDimension');
+            if (isDimensionStacked(data, dims[0] /*, dims[1]*/)) {
+                dims[0] = stackResultDim;
+            }
+            if (isDimensionStacked(data, dims[1] /*, dims[0]*/)) {
+                dims[1] = stackResultDim;
+            }
+
+            function progress(params, data) {
+                var segCount = params.end - params.start;
+                var points = isLargeRender && new Float32Array(segCount * dimLen);
+
+                for (var i = params.start, offset = 0, tmpIn = [], tmpOut = []; i < params.end; i++) {
+                    var point;
+
+                    if (dimLen === 1) {
+                        var x = data.get(dims[0], i);
+                        point = !isNaN(x) && coordSys.dataToPoint(x, null, tmpOut);
+                    }
+                    else {
+                        var x = tmpIn[0] = data.get(dims[0], i);
+                        var y = tmpIn[1] = data.get(dims[1], i);
+                        // Also {Array.<number>}, not undefined to avoid if...else... statement
+                        point = !isNaN(x) && !isNaN(y) && coordSys.dataToPoint(tmpIn, null, tmpOut);
+                    }
+
+                    if (isLargeRender) {
+                        points[offset++] = point ? point[0] : NaN;
+                        points[offset++] = point ? point[1] : NaN;
+                    }
+                    else {
+                        data.setItemLayout(i, (point && point.slice()) || [NaN, NaN]);
+                    }
+                }
+
+                isLargeRender && data.setLayout('symbolPoints', points);
+            }
+
+            return dimLen && {progress: progress};
+        }
+    };
+};
