@@ -38262,3 +38262,286 @@ function Cartesian2D(name) {
 }
 
 Cartesian2D.prototype = {
+
+    constructor: Cartesian2D,
+
+    type: 'cartesian2d',
+
+    /**
+     * @type {Array.<string>}
+     * @readOnly
+     */
+    dimensions: ['x', 'y'],
+
+    /**
+     * Base axis will be used on stacking.
+     *
+     * @return {module:echarts/coord/cartesian/Axis2D}
+     */
+    getBaseAxis: function () {
+        return this.getAxesByScale('ordinal')[0]
+            || this.getAxesByScale('time')[0]
+            || this.getAxis('x');
+    },
+
+    /**
+     * If contain point
+     * @param {Array.<number>} point
+     * @return {boolean}
+     */
+    containPoint: function (point) {
+        var axisX = this.getAxis('x');
+        var axisY = this.getAxis('y');
+        return axisX.contain(axisX.toLocalCoord(point[0]))
+            && axisY.contain(axisY.toLocalCoord(point[1]));
+    },
+
+    /**
+     * If contain data
+     * @param {Array.<number>} data
+     * @return {boolean}
+     */
+    containData: function (data) {
+        return this.getAxis('x').containData(data[0])
+            && this.getAxis('y').containData(data[1]);
+    },
+
+    /**
+     * @param {Array.<number>} data
+     * @param {Array.<number>} out
+     * @return {Array.<number>}
+     */
+    dataToPoint: function (data, reserved, out) {
+        var xAxis = this.getAxis('x');
+        var yAxis = this.getAxis('y');
+        out = out || [];
+        out[0] = xAxis.toGlobalCoord(xAxis.dataToCoord(data[0]));
+        out[1] = yAxis.toGlobalCoord(yAxis.dataToCoord(data[1]));
+        return out;
+    },
+
+    /**
+     * @param {Array.<number>} data
+     * @param {Array.<number>} out
+     * @return {Array.<number>}
+     */
+    clampData: function (data, out) {
+        var xScale = this.getAxis('x').scale;
+        var yScale = this.getAxis('y').scale;
+        var xAxisExtent = xScale.getExtent();
+        var yAxisExtent = yScale.getExtent();
+        var x = xScale.parse(data[0]);
+        var y = yScale.parse(data[1]);
+        out = out || [];
+        out[0] = Math.min(
+            Math.max(Math.min(xAxisExtent[0], xAxisExtent[1]), x),
+            Math.max(xAxisExtent[0], xAxisExtent[1])
+        );
+        out[1] = Math.min(
+            Math.max(Math.min(yAxisExtent[0], yAxisExtent[1]), y),
+            Math.max(yAxisExtent[0], yAxisExtent[1])
+        );
+
+        return out;
+    },
+
+    /**
+     * @param {Array.<number>} point
+     * @param {Array.<number>} out
+     * @return {Array.<number>}
+     */
+    pointToData: function (point, out) {
+        var xAxis = this.getAxis('x');
+        var yAxis = this.getAxis('y');
+        out = out || [];
+        out[0] = xAxis.coordToData(xAxis.toLocalCoord(point[0]));
+        out[1] = yAxis.coordToData(yAxis.toLocalCoord(point[1]));
+        return out;
+    },
+
+    /**
+     * Get other axis
+     * @param {module:echarts/coord/cartesian/Axis2D} axis
+     */
+    getOtherAxis: function (axis) {
+        return this.getAxis(axis.dim === 'x' ? 'y' : 'x');
+    }
+
+};
+
+inherits(Cartesian2D, Cartesian);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Extend axis 2d
+ * @constructor module:echarts/coord/cartesian/Axis2D
+ * @extends {module:echarts/coord/cartesian/Axis}
+ * @param {string} dim
+ * @param {*} scale
+ * @param {Array.<number>} coordExtent
+ * @param {string} axisType
+ * @param {string} position
+ */
+var Axis2D = function (dim, scale, coordExtent, axisType, position) {
+    Axis.call(this, dim, scale, coordExtent);
+    /**
+     * Axis type
+     *  - 'category'
+     *  - 'value'
+     *  - 'time'
+     *  - 'log'
+     * @type {string}
+     */
+    this.type = axisType || 'value';
+
+    /**
+     * Axis position
+     *  - 'top'
+     *  - 'bottom'
+     *  - 'left'
+     *  - 'right'
+     */
+    this.position = position || 'bottom';
+};
+
+Axis2D.prototype = {
+
+    constructor: Axis2D,
+
+    /**
+     * Index of axis, can be used as key
+     */
+    index: 0,
+
+    /**
+     * Implemented in <module:echarts/coord/cartesian/Grid>.
+     * @return {Array.<module:echarts/coord/cartesian/Axis2D>}
+     *         If not on zero of other axis, return null/undefined.
+     *         If no axes, return an empty array.
+     */
+    getAxesOnZeroOf: null,
+
+    /**
+     * Axis model
+     * @param {module:echarts/coord/cartesian/AxisModel}
+     */
+    model: null,
+
+    isHorizontal: function () {
+        var position = this.position;
+        return position === 'top' || position === 'bottom';
+    },
+
+    /**
+     * Each item cooresponds to this.getExtent(), which
+     * means globalExtent[0] may greater than globalExtent[1],
+     * unless `asc` is input.
+     *
+     * @param {boolean} [asc]
+     * @return {Array.<number>}
+     */
+    getGlobalExtent: function (asc) {
+        var ret = this.getExtent();
+        ret[0] = this.toGlobalCoord(ret[0]);
+        ret[1] = this.toGlobalCoord(ret[1]);
+        asc && ret[0] > ret[1] && ret.reverse();
+        return ret;
+    },
+
+    getOtherAxis: function () {
+        this.grid.getOtherAxis();
+    },
+
+    /**
+     * @override
+     */
+    pointToData: function (point, clamp) {
+        return this.coordToData(this.toLocalCoord(point[this.dim === 'x' ? 0 : 1]), clamp);
+    },
+
+    /**
+     * Transform global coord to local coord,
+     * i.e. var localCoord = axis.toLocalCoord(80);
+     * designate by module:echarts/coord/cartesian/Grid.
+     * @type {Function}
+     */
+    toLocalCoord: null,
+
+    /**
+     * Transform global coord to local coord,
+     * i.e. var globalCoord = axis.toLocalCoord(40);
+     * designate by module:echarts/coord/cartesian/Grid.
+     * @type {Function}
+     */
+    toGlobalCoord: null
+
+};
+
+inherits(Axis2D, Axis);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var defaultOption = {
+    show: true,
+    zlevel: 0,
+    z: 0,
+    // Inverse the axis.
+    inverse: false,
+
+    // Axis name displayed.
+    name: '',
+    // 'start' | 'middle' | 'end'
+    nameLocation: 'end',
+    // By degree. By defualt auto rotate by nameLocation.
+    nameRotate: null,
+    nameTruncate: {
+        maxWidth: null,
+        ellipsis: '...',
+        placeholder: '.'
+    },
+    // Use global text style by default.
+    nameTextStyle: {},
+    // The gap between axisName and axisLine.
+    nameGap: 15,
+
+    // Default `false` to support tooltip.
+    silent: false,
+    // Default `false` to avoid legacy user event listener fail.
+    triggerEvent: false,
+
+    tooltip: {
