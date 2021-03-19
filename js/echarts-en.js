@@ -39096,3 +39096,262 @@ gridProto.resize = function (gridModel, api, ignoreContainLabel) {
             width: api.getWidth(),
             height: api.getHeight()
         });
+
+    this._rect = gridRect;
+
+    var axesList = this._axesList;
+
+    adjustAxes();
+
+    // Minus label size
+    if (!ignoreContainLabel && gridModel.get('containLabel')) {
+        each$1(axesList, function (axis) {
+            if (!axis.model.get('axisLabel.inside')) {
+                var labelUnionRect = estimateLabelUnionRect(axis);
+                if (labelUnionRect) {
+                    var dim = axis.isHorizontal() ? 'height' : 'width';
+                    var margin = axis.model.get('axisLabel.margin');
+                    gridRect[dim] -= labelUnionRect[dim] + margin;
+                    if (axis.position === 'top') {
+                        gridRect.y += labelUnionRect.height + margin;
+                    }
+                    else if (axis.position === 'left') {
+                        gridRect.x += labelUnionRect.width + margin;
+                    }
+                }
+            }
+        });
+
+        adjustAxes();
+    }
+
+    function adjustAxes() {
+        each$1(axesList, function (axis) {
+            var isHorizontal = axis.isHorizontal();
+            var extent = isHorizontal ? [0, gridRect.width] : [0, gridRect.height];
+            var idx = axis.inverse ? 1 : 0;
+            axis.setExtent(extent[idx], extent[1 - idx]);
+            updateAxisTransform(axis, isHorizontal ? gridRect.x : gridRect.y);
+        });
+    }
+};
+
+/**
+ * @param {string} axisType
+ * @param {number} [axisIndex]
+ */
+gridProto.getAxis = function (axisType, axisIndex) {
+    var axesMapOnDim = this._axesMap[axisType];
+    if (axesMapOnDim != null) {
+        if (axisIndex == null) {
+            // Find first axis
+            for (var name in axesMapOnDim) {
+                if (axesMapOnDim.hasOwnProperty(name)) {
+                    return axesMapOnDim[name];
+                }
+            }
+        }
+        return axesMapOnDim[axisIndex];
+    }
+};
+
+/**
+ * @return {Array.<module:echarts/coord/Axis>}
+ */
+gridProto.getAxes = function () {
+    return this._axesList.slice();
+};
+
+/**
+ * Usage:
+ *      grid.getCartesian(xAxisIndex, yAxisIndex);
+ *      grid.getCartesian(xAxisIndex);
+ *      grid.getCartesian(null, yAxisIndex);
+ *      grid.getCartesian({xAxisIndex: ..., yAxisIndex: ...});
+ *
+ * @param {number|Object} [xAxisIndex]
+ * @param {number} [yAxisIndex]
+ */
+gridProto.getCartesian = function (xAxisIndex, yAxisIndex) {
+    if (xAxisIndex != null && yAxisIndex != null) {
+        var key = 'x' + xAxisIndex + 'y' + yAxisIndex;
+        return this._coordsMap[key];
+    }
+
+    if (isObject$1(xAxisIndex)) {
+        yAxisIndex = xAxisIndex.yAxisIndex;
+        xAxisIndex = xAxisIndex.xAxisIndex;
+    }
+    // When only xAxisIndex or yAxisIndex given, find its first cartesian.
+    for (var i = 0, coordList = this._coordsList; i < coordList.length; i++) {
+        if (coordList[i].getAxis('x').index === xAxisIndex
+            || coordList[i].getAxis('y').index === yAxisIndex
+        ) {
+            return coordList[i];
+        }
+    }
+};
+
+gridProto.getCartesians = function () {
+    return this._coordsList.slice();
+};
+
+/**
+ * @implements
+ * see {module:echarts/CoodinateSystem}
+ */
+gridProto.convertToPixel = function (ecModel, finder, value) {
+    var target = this._findConvertTarget(ecModel, finder);
+
+    return target.cartesian
+        ? target.cartesian.dataToPoint(value)
+        : target.axis
+        ? target.axis.toGlobalCoord(target.axis.dataToCoord(value))
+        : null;
+};
+
+/**
+ * @implements
+ * see {module:echarts/CoodinateSystem}
+ */
+gridProto.convertFromPixel = function (ecModel, finder, value) {
+    var target = this._findConvertTarget(ecModel, finder);
+
+    return target.cartesian
+        ? target.cartesian.pointToData(value)
+        : target.axis
+        ? target.axis.coordToData(target.axis.toLocalCoord(value))
+        : null;
+};
+
+/**
+ * @inner
+ */
+gridProto._findConvertTarget = function (ecModel, finder) {
+    var seriesModel = finder.seriesModel;
+    var xAxisModel = finder.xAxisModel
+        || (seriesModel && seriesModel.getReferringComponents('xAxis')[0]);
+    var yAxisModel = finder.yAxisModel
+        || (seriesModel && seriesModel.getReferringComponents('yAxis')[0]);
+    var gridModel = finder.gridModel;
+    var coordsList = this._coordsList;
+    var cartesian;
+    var axis;
+
+    if (seriesModel) {
+        cartesian = seriesModel.coordinateSystem;
+        indexOf(coordsList, cartesian) < 0 && (cartesian = null);
+    }
+    else if (xAxisModel && yAxisModel) {
+        cartesian = this.getCartesian(xAxisModel.componentIndex, yAxisModel.componentIndex);
+    }
+    else if (xAxisModel) {
+        axis = this.getAxis('x', xAxisModel.componentIndex);
+    }
+    else if (yAxisModel) {
+        axis = this.getAxis('y', yAxisModel.componentIndex);
+    }
+    // Lowest priority.
+    else if (gridModel) {
+        var grid = gridModel.coordinateSystem;
+        if (grid === this) {
+            cartesian = this._coordsList[0];
+        }
+    }
+
+    return {cartesian: cartesian, axis: axis};
+};
+
+/**
+ * @implements
+ * see {module:echarts/CoodinateSystem}
+ */
+gridProto.containPoint = function (point) {
+    var coord = this._coordsList[0];
+    if (coord) {
+        return coord.containPoint(point);
+    }
+};
+
+/**
+ * Initialize cartesian coordinate systems
+ * @private
+ */
+gridProto._initCartesian = function (gridModel, ecModel, api) {
+    var axisPositionUsed = {
+        left: false,
+        right: false,
+        top: false,
+        bottom: false
+    };
+
+    var axesMap = {
+        x: {},
+        y: {}
+    };
+    var axesCount = {
+        x: 0,
+        y: 0
+    };
+
+    /// Create axis
+    ecModel.eachComponent('xAxis', createAxisCreator('x'), this);
+    ecModel.eachComponent('yAxis', createAxisCreator('y'), this);
+
+    if (!axesCount.x || !axesCount.y) {
+        // Roll back when there no either x or y axis
+        this._axesMap = {};
+        this._axesList = [];
+        return;
+    }
+
+    this._axesMap = axesMap;
+
+    /// Create cartesian2d
+    each$1(axesMap.x, function (xAxis, xAxisIndex) {
+        each$1(axesMap.y, function (yAxis, yAxisIndex) {
+            var key = 'x' + xAxisIndex + 'y' + yAxisIndex;
+            var cartesian = new Cartesian2D(key);
+
+            cartesian.grid = this;
+            cartesian.model = gridModel;
+
+            this._coordsMap[key] = cartesian;
+            this._coordsList.push(cartesian);
+
+            cartesian.addAxis(xAxis);
+            cartesian.addAxis(yAxis);
+        }, this);
+    }, this);
+
+    function createAxisCreator(axisType) {
+        return function (axisModel, idx) {
+            if (!isAxisUsedInTheGrid(axisModel, gridModel, ecModel)) {
+                return;
+            }
+
+            var axisPosition = axisModel.get('position');
+            if (axisType === 'x') {
+                // Fix position
+                if (axisPosition !== 'top' && axisPosition !== 'bottom') {
+                    // Default bottom of X
+                    axisPosition = 'bottom';
+                    if (axisPositionUsed[axisPosition]) {
+                        axisPosition = axisPosition === 'top' ? 'bottom' : 'top';
+                    }
+                }
+            }
+            else {
+                // Fix position
+                if (axisPosition !== 'left' && axisPosition !== 'right') {
+                    // Default left of Y
+                    axisPosition = 'left';
+                    if (axisPositionUsed[axisPosition]) {
+                        axisPosition = axisPosition === 'left' ? 'right' : 'left';
+                    }
+                }
+            }
+            axisPositionUsed[axisPosition] = true;
+
+            var axis = new Axis2D(
+                axisType, createScaleByModel(axisModel),
