@@ -38830,3 +38830,269 @@ var AxisModel = ComponentModel.extend({
      * @override
      */
     mergeOption: function () {
+        AxisModel.superApply(this, 'mergeOption', arguments);
+        this.resetRange();
+    },
+
+    /**
+     * @override
+     */
+    restoreData: function () {
+        AxisModel.superApply(this, 'restoreData', arguments);
+        this.resetRange();
+    },
+
+    /**
+     * @override
+     * @return {module:echarts/model/Component}
+     */
+    getCoordSysModel: function () {
+        return this.ecModel.queryComponents({
+            mainType: 'grid',
+            index: this.option.gridIndex,
+            id: this.option.gridId
+        })[0];
+    }
+
+});
+
+function getAxisType(axisDim, option) {
+    // Default axis with data is category axis
+    return option.type || (option.data ? 'category' : 'value');
+}
+
+merge(AxisModel.prototype, axisModelCommonMixin);
+
+var extraOption = {
+    // gridIndex: 0,
+    // gridId: '',
+
+    // Offset is for multiple axis on the same position
+    offset: 0
+};
+
+axisModelCreator('x', AxisModel, getAxisType, extraOption);
+axisModelCreator('y', AxisModel, getAxisType, extraOption);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Grid 是在有直角坐标系的时候必须要存在的
+// 所以这里也要被 Cartesian2D 依赖
+
+ComponentModel.extend({
+
+    type: 'grid',
+
+    dependencies: ['xAxis', 'yAxis'],
+
+    layoutMode: 'box',
+
+    /**
+     * @type {module:echarts/coord/cartesian/Grid}
+     */
+    coordinateSystem: null,
+
+    defaultOption: {
+        show: false,
+        zlevel: 0,
+        z: 0,
+        left: '10%',
+        top: 60,
+        right: '10%',
+        bottom: 60,
+        // If grid size contain label
+        containLabel: false,
+        // width: {totalWidth} - left - right,
+        // height: {totalHeight} - top - bottom,
+        backgroundColor: 'rgba(0,0,0,0)',
+        borderWidth: 1,
+        borderColor: '#ccc'
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Grid is a region which contains at most 4 cartesian systems
+ *
+ * TODO Default cartesian
+ */
+
+// Depends on GridModel, AxisModel, which performs preprocess.
+/**
+ * Check if the axis is used in the specified grid
+ * @inner
+ */
+function isAxisUsedInTheGrid(axisModel, gridModel, ecModel) {
+    return axisModel.getCoordSysModel() === gridModel;
+}
+
+function Grid(gridModel, ecModel, api) {
+    /**
+     * @type {Object.<string, module:echarts/coord/cartesian/Cartesian2D>}
+     * @private
+     */
+    this._coordsMap = {};
+
+    /**
+     * @type {Array.<module:echarts/coord/cartesian/Cartesian>}
+     * @private
+     */
+    this._coordsList = [];
+
+    /**
+     * @type {Object.<string, module:echarts/coord/cartesian/Axis2D>}
+     * @private
+     */
+    this._axesMap = {};
+
+    /**
+     * @type {Array.<module:echarts/coord/cartesian/Axis2D>}
+     * @private
+     */
+    this._axesList = [];
+
+    this._initCartesian(gridModel, ecModel, api);
+
+    this.model = gridModel;
+}
+
+var gridProto = Grid.prototype;
+
+gridProto.type = 'grid';
+
+gridProto.axisPointerEnabled = true;
+
+gridProto.getRect = function () {
+    return this._rect;
+};
+
+gridProto.update = function (ecModel, api) {
+
+    var axesMap = this._axesMap;
+
+    this._updateScale(ecModel, this.model);
+
+    each$1(axesMap.x, function (xAxis) {
+        niceScaleExtent(xAxis.scale, xAxis.model);
+    });
+    each$1(axesMap.y, function (yAxis) {
+        niceScaleExtent(yAxis.scale, yAxis.model);
+    });
+
+    // Key: axisDim_axisIndex, value: boolean, whether onZero target.
+    var onZeroRecords = {};
+
+    each$1(axesMap.x, function (xAxis) {
+        fixAxisOnZero(axesMap, 'y', xAxis, onZeroRecords);
+    });
+    each$1(axesMap.y, function (yAxis) {
+        fixAxisOnZero(axesMap, 'x', yAxis, onZeroRecords);
+    });
+
+    // Resize again if containLabel is enabled
+    // FIXME It may cause getting wrong grid size in data processing stage
+    this.resize(this.model, api);
+};
+
+function fixAxisOnZero(axesMap, otherAxisDim, axis, onZeroRecords) {
+
+    axis.getAxesOnZeroOf = function () {
+        // TODO: onZero of multiple axes.
+        return otherAxisOnZeroOf ? [otherAxisOnZeroOf] : [];
+    };
+
+    // onZero can not be enabled in these two situations:
+    // 1. When any other axis is a category axis.
+    // 2. When no axis is cross 0 point.
+    var otherAxes = axesMap[otherAxisDim];
+
+    var otherAxisOnZeroOf;
+    var axisModel = axis.model;
+    var onZero = axisModel.get('axisLine.onZero');
+    var onZeroAxisIndex = axisModel.get('axisLine.onZeroAxisIndex');
+
+    if (!onZero) {
+        return;
+    }
+
+    // If target axis is specified.
+    if (onZeroAxisIndex != null) {
+        if (canOnZeroToAxis(otherAxes[onZeroAxisIndex])) {
+            otherAxisOnZeroOf = otherAxes[onZeroAxisIndex];
+        }
+    }
+    else {
+        // Find the first available other axis.
+        for (var idx in otherAxes) {
+            if (otherAxes.hasOwnProperty(idx)
+                && canOnZeroToAxis(otherAxes[idx])
+                // Consider that two Y axes on one value axis,
+                // if both onZero, the two Y axes overlap.
+                && !onZeroRecords[getOnZeroRecordKey(otherAxes[idx])]
+            ) {
+                otherAxisOnZeroOf = otherAxes[idx];
+                break;
+            }
+        }
+    }
+
+    if (otherAxisOnZeroOf) {
+        onZeroRecords[getOnZeroRecordKey(otherAxisOnZeroOf)] = true;
+    }
+
+    function getOnZeroRecordKey(axis) {
+        return axis.dim + '_' + axis.index;
+    }
+}
+
+function canOnZeroToAxis(axis) {
+    return axis && axis.type !== 'category' && axis.type !== 'time' && ifAxisCrossZero(axis);
+}
+
+/**
+ * Resize the grid
+ * @param {module:echarts/coord/cartesian/GridModel} gridModel
+ * @param {module:echarts/ExtensionAPI} api
+ */
+gridProto.resize = function (gridModel, api, ignoreContainLabel) {
+
+    var gridRect = getLayoutRect(
+        gridModel.getBoxLayoutParams(), {
+            width: api.getWidth(),
+            height: api.getHeight()
+        });
