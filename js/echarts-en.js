@@ -40164,3 +40164,263 @@ function buildAxisTick(axisBuilder, axisModel, opt) {
                 {
                     stroke: axisModel.get('axisLine.lineStyle.color')
                 }
+            ),
+            z2: 2,
+            silent: true
+        }));
+        axisBuilder.group.add(tickEl);
+        tickEls.push(tickEl);
+    }
+
+    return tickEls;
+}
+
+function buildAxisLabel(axisBuilder, axisModel, opt) {
+    var axis = axisModel.axis;
+    var show = retrieve(opt.axisLabelShow, axisModel.get('axisLabel.show'));
+
+    if (!show || axis.scale.isBlank()) {
+        return;
+    }
+
+    var labelModel = axisModel.getModel('axisLabel');
+    var labelMargin = labelModel.get('margin');
+    var labels = axis.getViewLabels();
+
+    // Special label rotate.
+    var labelRotation = (
+        retrieve(opt.labelRotate, labelModel.get('rotate')) || 0
+    ) * PI$2 / 180;
+
+    var labelLayout = innerTextLayout(opt.rotation, labelRotation, opt.labelDirection);
+    var rawCategoryData = axisModel.getCategories(true);
+
+    var labelEls = [];
+    var silent = isSilent(axisModel);
+    var triggerEvent = axisModel.get('triggerEvent');
+
+    each$1(labels, function (labelItem, index) {
+        var tickValue = labelItem.tickValue;
+        var formattedLabel = labelItem.formattedLabel;
+        var rawLabel = labelItem.rawLabel;
+
+        var itemLabelModel = labelModel;
+        if (rawCategoryData && rawCategoryData[tickValue] && rawCategoryData[tickValue].textStyle) {
+            itemLabelModel = new Model(
+                rawCategoryData[tickValue].textStyle, labelModel, axisModel.ecModel
+            );
+        }
+
+        var textColor = itemLabelModel.getTextColor()
+            || axisModel.get('axisLine.lineStyle.color');
+
+        var tickCoord = axis.dataToCoord(tickValue);
+        var pos = [
+            tickCoord,
+            opt.labelOffset + opt.labelDirection * labelMargin
+        ];
+
+        var textEl = new Text({
+            // Id for animation
+            anid: 'label_' + tickValue,
+            position: pos,
+            rotation: labelLayout.rotation,
+            silent: silent,
+            z2: 10
+        });
+
+        setTextStyle(textEl.style, itemLabelModel, {
+            text: formattedLabel,
+            textAlign: itemLabelModel.getShallow('align', true)
+                || labelLayout.textAlign,
+            textVerticalAlign: itemLabelModel.getShallow('verticalAlign', true)
+                || itemLabelModel.getShallow('baseline', true)
+                || labelLayout.textVerticalAlign,
+            textFill: typeof textColor === 'function'
+                ? textColor(
+                    // (1) In category axis with data zoom, tick is not the original
+                    // index of axis.data. So tick should not be exposed to user
+                    // in category axis.
+                    // (2) Compatible with previous version, which always use formatted label as
+                    // input. But in interval scale the formatted label is like '223,445', which
+                    // maked user repalce ','. So we modify it to return original val but remain
+                    // it as 'string' to avoid error in replacing.
+                    axis.type === 'category'
+                        ? rawLabel
+                        : axis.type === 'value'
+                        ? tickValue + ''
+                        : tickValue,
+                    index
+                )
+                : textColor
+        });
+
+        // Pack data for mouse event
+        if (triggerEvent) {
+            textEl.eventData = makeAxisEventDataBase(axisModel);
+            textEl.eventData.targetType = 'axisLabel';
+            textEl.eventData.value = rawLabel;
+        }
+
+        // FIXME
+        axisBuilder._dumbGroup.add(textEl);
+        textEl.updateTransform();
+
+        labelEls.push(textEl);
+        axisBuilder.group.add(textEl);
+
+        textEl.decomposeTransform();
+
+    });
+
+    return labelEls;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var each$6 = each$1;
+var curry$1 = curry;
+
+// Build axisPointerModel, mergin tooltip.axisPointer model for each axis.
+// allAxesInfo should be updated when setOption performed.
+function collect(ecModel, api) {
+    var result = {
+        /**
+         * key: makeKey(axis.model)
+         * value: {
+         *      axis,
+         *      coordSys,
+         *      axisPointerModel,
+         *      triggerTooltip,
+         *      involveSeries,
+         *      snap,
+         *      seriesModels,
+         *      seriesDataCount
+         * }
+         */
+        axesInfo: {},
+        seriesInvolved: false,
+        /**
+         * key: makeKey(coordSys.model)
+         * value: Object: key makeKey(axis.model), value: axisInfo
+         */
+        coordSysAxesInfo: {},
+        coordSysMap: {}
+    };
+
+    collectAxesInfo(result, ecModel, api);
+
+    // Check seriesInvolved for performance, in case too many series in some chart.
+    result.seriesInvolved && collectSeriesInfo(result, ecModel);
+
+    return result;
+}
+
+function collectAxesInfo(result, ecModel, api) {
+    var globalTooltipModel = ecModel.getComponent('tooltip');
+    var globalAxisPointerModel = ecModel.getComponent('axisPointer');
+    // links can only be set on global.
+    var linksOption = globalAxisPointerModel.get('link', true) || [];
+    var linkGroups = [];
+
+    // Collect axes info.
+    each$6(api.getCoordinateSystems(), function (coordSys) {
+        // Some coordinate system do not support axes, like geo.
+        if (!coordSys.axisPointerEnabled) {
+            return;
+        }
+
+        var coordSysKey = makeKey(coordSys.model);
+        var axesInfoInCoordSys = result.coordSysAxesInfo[coordSysKey] = {};
+        result.coordSysMap[coordSysKey] = coordSys;
+
+        // Set tooltip (like 'cross') is a convienent way to show axisPointer
+        // for user. So we enable seting tooltip on coordSys model.
+        var coordSysModel = coordSys.model;
+        var baseTooltipModel = coordSysModel.getModel('tooltip', globalTooltipModel);
+
+        each$6(coordSys.getAxes(), curry$1(saveTooltipAxisInfo, false, null));
+
+        // If axis tooltip used, choose tooltip axis for each coordSys.
+        // Notice this case: coordSys is `grid` but not `cartesian2D` here.
+        if (coordSys.getTooltipAxes
+            && globalTooltipModel
+            // If tooltip.showContent is set as false, tooltip will not
+            // show but axisPointer will show as normal.
+            && baseTooltipModel.get('show')
+        ) {
+            // Compatible with previous logic. But series.tooltip.trigger: 'axis'
+            // or series.data[n].tooltip.trigger: 'axis' are not support any more.
+            var triggerAxis = baseTooltipModel.get('trigger') === 'axis';
+            var cross = baseTooltipModel.get('axisPointer.type') === 'cross';
+            var tooltipAxes = coordSys.getTooltipAxes(baseTooltipModel.get('axisPointer.axis'));
+            if (triggerAxis || cross) {
+                each$6(tooltipAxes.baseAxes, curry$1(
+                    saveTooltipAxisInfo, cross ? 'cross' : true, triggerAxis
+                ));
+            }
+            if (cross) {
+                each$6(tooltipAxes.otherAxes, curry$1(saveTooltipAxisInfo, 'cross', false));
+            }
+        }
+
+        // fromTooltip: true | false | 'cross'
+        // triggerTooltip: true | false | null
+        function saveTooltipAxisInfo(fromTooltip, triggerTooltip, axis) {
+            var axisPointerModel = axis.model.getModel('axisPointer', globalAxisPointerModel);
+
+            var axisPointerShow = axisPointerModel.get('show');
+            if (!axisPointerShow || (
+                axisPointerShow === 'auto'
+                && !fromTooltip
+                && !isHandleTrigger(axisPointerModel)
+            )) {
+                return;
+            }
+
+            if (triggerTooltip == null) {
+                triggerTooltip = axisPointerModel.get('triggerTooltip');
+            }
+
+            axisPointerModel = fromTooltip
+                ? makeAxisPointerModel(
+                    axis, baseTooltipModel, globalAxisPointerModel, ecModel,
+                    fromTooltip, triggerTooltip
+                )
+                : axisPointerModel;
+
+            var snap = axisPointerModel.get('snap');
+            var key = makeKey(axis.model);
+            var involveSeries = triggerTooltip || snap || axis.type === 'category';
+
+            // If result.axesInfo[key] exist, override it (tooltip has higher priority).
+            var axisInfo = result.axesInfo[key] = {
+                key: key,
+                axis: axis,
+                coordSys: coordSys,
+                axisPointerModel: axisPointerModel,
+                triggerTooltip: triggerTooltip,
+                involveSeries: involveSeries,
+                snap: snap,
+                useHandle: isHandleTrigger(axisPointerModel),
+                seriesModels: []
+            };
+            axesInfoInCoordSys[key] = axisInfo;
+            result.seriesInvolved |= involveSeries;
