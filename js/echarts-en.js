@@ -39891,3 +39891,276 @@ var builders = {
         var mainType = axisModel.mainType;
         var formatterParams = {
             componentType: mainType,
+            name: name,
+            $vars: ['name']
+        };
+        formatterParams[mainType + 'Index'] = axisModel.componentIndex;
+
+        var textEl = new Text({
+            // Id for animation
+            anid: 'name',
+
+            __fullText: name,
+            __truncatedText: truncatedText,
+
+            position: pos,
+            rotation: labelLayout.rotation,
+            silent: isSilent(axisModel),
+            z2: 1,
+            tooltip: (tooltipOpt && tooltipOpt.show)
+                ? extend({
+                    content: name,
+                    formatter: function () {
+                        return name;
+                    },
+                    formatterParams: formatterParams
+                }, tooltipOpt)
+                : null
+        });
+
+        setTextStyle(textEl.style, textStyleModel, {
+            text: truncatedText,
+            textFont: textFont,
+            textFill: textStyleModel.getTextColor()
+                || axisModel.get('axisLine.lineStyle.color'),
+            textAlign: labelLayout.textAlign,
+            textVerticalAlign: labelLayout.textVerticalAlign
+        });
+
+        if (axisModel.get('triggerEvent')) {
+            textEl.eventData = makeAxisEventDataBase(axisModel);
+            textEl.eventData.targetType = 'axisName';
+            textEl.eventData.name = name;
+        }
+
+        // FIXME
+        this._dumbGroup.add(textEl);
+        textEl.updateTransform();
+
+        this.group.add(textEl);
+
+        textEl.decomposeTransform();
+    }
+
+};
+
+/**
+ * @public
+ * @static
+ * @param {Object} opt
+ * @param {number} axisRotation in radian
+ * @param {number} textRotation in radian
+ * @param {number} direction
+ * @return {Object} {
+ *  rotation, // according to axis
+ *  textAlign,
+ *  textVerticalAlign
+ * }
+ */
+var innerTextLayout = AxisBuilder.innerTextLayout = function (axisRotation, textRotation, direction) {
+    var rotationDiff = remRadian(textRotation - axisRotation);
+    var textAlign;
+    var textVerticalAlign;
+
+    if (isRadianAroundZero(rotationDiff)) { // Label is parallel with axis line.
+        textVerticalAlign = direction > 0 ? 'top' : 'bottom';
+        textAlign = 'center';
+    }
+    else if (isRadianAroundZero(rotationDiff - PI$2)) { // Label is inverse parallel with axis line.
+        textVerticalAlign = direction > 0 ? 'bottom' : 'top';
+        textAlign = 'center';
+    }
+    else {
+        textVerticalAlign = 'middle';
+
+        if (rotationDiff > 0 && rotationDiff < PI$2) {
+            textAlign = direction > 0 ? 'right' : 'left';
+        }
+        else {
+            textAlign = direction > 0 ? 'left' : 'right';
+        }
+    }
+
+    return {
+        rotation: rotationDiff,
+        textAlign: textAlign,
+        textVerticalAlign: textVerticalAlign
+    };
+};
+
+function endTextLayout(opt, textPosition, textRotate, extent) {
+    var rotationDiff = remRadian(textRotate - opt.rotation);
+    var textAlign;
+    var textVerticalAlign;
+    var inverse = extent[0] > extent[1];
+    var onLeft = (textPosition === 'start' && !inverse)
+        || (textPosition !== 'start' && inverse);
+
+    if (isRadianAroundZero(rotationDiff - PI$2 / 2)) {
+        textVerticalAlign = onLeft ? 'bottom' : 'top';
+        textAlign = 'center';
+    }
+    else if (isRadianAroundZero(rotationDiff - PI$2 * 1.5)) {
+        textVerticalAlign = onLeft ? 'top' : 'bottom';
+        textAlign = 'center';
+    }
+    else {
+        textVerticalAlign = 'middle';
+        if (rotationDiff < PI$2 * 1.5 && rotationDiff > PI$2 / 2) {
+            textAlign = onLeft ? 'left' : 'right';
+        }
+        else {
+            textAlign = onLeft ? 'right' : 'left';
+        }
+    }
+
+    return {
+        rotation: rotationDiff,
+        textAlign: textAlign,
+        textVerticalAlign: textVerticalAlign
+    };
+}
+
+function isSilent(axisModel) {
+    var tooltipOpt = axisModel.get('tooltip');
+    return axisModel.get('silent')
+        // Consider mouse cursor, add these restrictions.
+        || !(
+            axisModel.get('triggerEvent') || (tooltipOpt && tooltipOpt.show)
+        );
+}
+
+function fixMinMaxLabelShow(axisModel, labelEls, tickEls) {
+    if (shouldShowAllLabels(axisModel.axis)) {
+        return;
+    }
+
+    // If min or max are user set, we need to check
+    // If the tick on min(max) are overlap on their neighbour tick
+    // If they are overlapped, we need to hide the min(max) tick label
+    var showMinLabel = axisModel.get('axisLabel.showMinLabel');
+    var showMaxLabel = axisModel.get('axisLabel.showMaxLabel');
+
+    // FIXME
+    // Have not consider onBand yet, where tick els is more than label els.
+
+    labelEls = labelEls || [];
+    tickEls = tickEls || [];
+
+    var firstLabel = labelEls[0];
+    var nextLabel = labelEls[1];
+    var lastLabel = labelEls[labelEls.length - 1];
+    var prevLabel = labelEls[labelEls.length - 2];
+
+    var firstTick = tickEls[0];
+    var nextTick = tickEls[1];
+    var lastTick = tickEls[tickEls.length - 1];
+    var prevTick = tickEls[tickEls.length - 2];
+
+    if (showMinLabel === false) {
+        ignoreEl(firstLabel);
+        ignoreEl(firstTick);
+    }
+    else if (isTwoLabelOverlapped(firstLabel, nextLabel)) {
+        if (showMinLabel) {
+            ignoreEl(nextLabel);
+            ignoreEl(nextTick);
+        }
+        else {
+            ignoreEl(firstLabel);
+            ignoreEl(firstTick);
+        }
+    }
+
+    if (showMaxLabel === false) {
+        ignoreEl(lastLabel);
+        ignoreEl(lastTick);
+    }
+    else if (isTwoLabelOverlapped(prevLabel, lastLabel)) {
+        if (showMaxLabel) {
+            ignoreEl(prevLabel);
+            ignoreEl(prevTick);
+        }
+        else {
+            ignoreEl(lastLabel);
+            ignoreEl(lastTick);
+        }
+    }
+}
+
+function ignoreEl(el) {
+    el && (el.ignore = true);
+}
+
+function isTwoLabelOverlapped(current, next, labelLayout) {
+    // current and next has the same rotation.
+    var firstRect = current && current.getBoundingRect().clone();
+    var nextRect = next && next.getBoundingRect().clone();
+
+    if (!firstRect || !nextRect) {
+        return;
+    }
+
+    // When checking intersect of two rotated labels, we use mRotationBack
+    // to avoid that boundingRect is enlarge when using `boundingRect.applyTransform`.
+    var mRotationBack = identity([]);
+    rotate(mRotationBack, mRotationBack, -current.rotation);
+
+    firstRect.applyTransform(mul$1([], mRotationBack, current.getLocalTransform()));
+    nextRect.applyTransform(mul$1([], mRotationBack, next.getLocalTransform()));
+
+    return firstRect.intersect(nextRect);
+}
+
+function isNameLocationCenter(nameLocation) {
+    return nameLocation === 'middle' || nameLocation === 'center';
+}
+
+function buildAxisTick(axisBuilder, axisModel, opt) {
+    var axis = axisModel.axis;
+
+    if (!axisModel.get('axisTick.show') || axis.scale.isBlank()) {
+        return;
+    }
+
+    var tickModel = axisModel.getModel('axisTick');
+
+    var lineStyleModel = tickModel.getModel('lineStyle');
+    var tickLen = tickModel.get('length');
+
+    var ticksCoords = axis.getTicksCoords();
+
+    var pt1 = [];
+    var pt2 = [];
+    var matrix = axisBuilder._transform;
+
+    var tickEls = [];
+
+    for (var i = 0; i < ticksCoords.length; i++) {
+        var tickCoord = ticksCoords[i].coord;
+
+        pt1[0] = tickCoord;
+        pt1[1] = 0;
+        pt2[0] = tickCoord;
+        pt2[1] = opt.tickDirection * tickLen;
+
+        if (matrix) {
+            applyTransform(pt1, pt1, matrix);
+            applyTransform(pt2, pt2, matrix);
+        }
+        // Tick line, Not use group transform to have better line draw
+        var tickEl = new Line(subPixelOptimizeLine({
+            // Id for animation
+            anid: 'tick_' + ticksCoords[i].tickValue,
+
+            shape: {
+                x1: pt1[0],
+                y1: pt1[1],
+                x2: pt2[0],
+                y2: pt2[1]
+            },
+            style: defaults(
+                lineStyleModel.getLineStyle(),
+                {
+                    stroke: axisModel.get('axisLine.lineStyle.color')
+                }
