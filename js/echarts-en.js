@@ -39636,3 +39636,258 @@ var AxisBuilder = function (axisModel, opt) {
 
     /**
      * @readOnly
+     */
+    this.axisModel = axisModel;
+
+    // Default value
+    defaults(
+        opt,
+        {
+            labelOffset: 0,
+            nameDirection: 1,
+            tickDirection: 1,
+            labelDirection: 1,
+            silent: true
+        }
+    );
+
+    /**
+     * @readOnly
+     */
+    this.group = new Group();
+
+    // FIXME Not use a seperate text group?
+    var dumbGroup = new Group({
+        position: opt.position.slice(),
+        rotation: opt.rotation
+    });
+
+    // this.group.add(dumbGroup);
+    // this._dumbGroup = dumbGroup;
+
+    dumbGroup.updateTransform();
+    this._transform = dumbGroup.transform;
+
+    this._dumbGroup = dumbGroup;
+};
+
+AxisBuilder.prototype = {
+
+    constructor: AxisBuilder,
+
+    hasBuilder: function (name) {
+        return !!builders[name];
+    },
+
+    add: function (name) {
+        builders[name].call(this);
+    },
+
+    getGroup: function () {
+        return this.group;
+    }
+
+};
+
+var builders = {
+
+    /**
+     * @private
+     */
+    axisLine: function () {
+        var opt = this.opt;
+        var axisModel = this.axisModel;
+
+        if (!axisModel.get('axisLine.show')) {
+            return;
+        }
+
+        var extent = this.axisModel.axis.getExtent();
+
+        var matrix = this._transform;
+        var pt1 = [extent[0], 0];
+        var pt2 = [extent[1], 0];
+        if (matrix) {
+            applyTransform(pt1, pt1, matrix);
+            applyTransform(pt2, pt2, matrix);
+        }
+
+        var lineStyle = extend(
+            {
+                lineCap: 'round'
+            },
+            axisModel.getModel('axisLine.lineStyle').getLineStyle()
+        );
+
+        this.group.add(new Line(subPixelOptimizeLine({
+            // Id for animation
+            anid: 'line',
+
+            shape: {
+                x1: pt1[0],
+                y1: pt1[1],
+                x2: pt2[0],
+                y2: pt2[1]
+            },
+            style: lineStyle,
+            strokeContainThreshold: opt.strokeContainThreshold || 5,
+            silent: true,
+            z2: 1
+        })));
+
+        var arrows = axisModel.get('axisLine.symbol');
+        var arrowSize = axisModel.get('axisLine.symbolSize');
+
+        var arrowOffset = axisModel.get('axisLine.symbolOffset') || 0;
+        if (typeof arrowOffset === 'number') {
+            arrowOffset = [arrowOffset, arrowOffset];
+        }
+
+        if (arrows != null) {
+            if (typeof arrows === 'string') {
+                // Use the same arrow for start and end point
+                arrows = [arrows, arrows];
+            }
+            if (typeof arrowSize === 'string'
+                || typeof arrowSize === 'number'
+            ) {
+                // Use the same size for width and height
+                arrowSize = [arrowSize, arrowSize];
+            }
+
+            var symbolWidth = arrowSize[0];
+            var symbolHeight = arrowSize[1];
+
+            each$1([{
+                rotate: opt.rotation + Math.PI / 2,
+                offset: arrowOffset[0],
+                r: 0
+            }, {
+                rotate: opt.rotation - Math.PI / 2,
+                offset: arrowOffset[1],
+                r: Math.sqrt((pt1[0] - pt2[0]) * (pt1[0] - pt2[0])
+                    + (pt1[1] - pt2[1]) * (pt1[1] - pt2[1]))
+            }], function (point, index) {
+                if (arrows[index] !== 'none' && arrows[index] != null) {
+                    var symbol = createSymbol(
+                        arrows[index],
+                        -symbolWidth / 2,
+                        -symbolHeight / 2,
+                        symbolWidth,
+                        symbolHeight,
+                        lineStyle.stroke,
+                        true
+                    );
+
+                    // Calculate arrow position with offset
+                    var r = point.r + point.offset;
+                    var pos = [
+                        pt1[0] + r * Math.cos(opt.rotation),
+                        pt1[1] - r * Math.sin(opt.rotation)
+                    ];
+
+                    symbol.attr({
+                        rotation: point.rotate,
+                        position: pos,
+                        silent: true,
+                        z2: 11
+                    });
+                    this.group.add(symbol);
+                }
+            }, this);
+        }
+    },
+
+    /**
+     * @private
+     */
+    axisTickLabel: function () {
+        var axisModel = this.axisModel;
+        var opt = this.opt;
+
+        var tickEls = buildAxisTick(this, axisModel, opt);
+        var labelEls = buildAxisLabel(this, axisModel, opt);
+
+        fixMinMaxLabelShow(axisModel, labelEls, tickEls);
+    },
+
+    /**
+     * @private
+     */
+    axisName: function () {
+        var opt = this.opt;
+        var axisModel = this.axisModel;
+        var name = retrieve(opt.axisName, axisModel.get('name'));
+
+        if (!name) {
+            return;
+        }
+
+        var nameLocation = axisModel.get('nameLocation');
+        var nameDirection = opt.nameDirection;
+        var textStyleModel = axisModel.getModel('nameTextStyle');
+        var gap = axisModel.get('nameGap') || 0;
+
+        var extent = this.axisModel.axis.getExtent();
+        var gapSignal = extent[0] > extent[1] ? -1 : 1;
+        var pos = [
+            nameLocation === 'start'
+                ? extent[0] - gapSignal * gap
+                : nameLocation === 'end'
+                ? extent[1] + gapSignal * gap
+                : (extent[0] + extent[1]) / 2, // 'middle'
+            // Reuse labelOffset.
+            isNameLocationCenter(nameLocation) ? opt.labelOffset + nameDirection * gap : 0
+        ];
+
+        var labelLayout;
+
+        var nameRotation = axisModel.get('nameRotate');
+        if (nameRotation != null) {
+            nameRotation = nameRotation * PI$2 / 180; // To radian.
+        }
+
+        var axisNameAvailableWidth;
+
+        if (isNameLocationCenter(nameLocation)) {
+            labelLayout = innerTextLayout(
+                opt.rotation,
+                nameRotation != null ? nameRotation : opt.rotation, // Adapt to axis.
+                nameDirection
+            );
+        }
+        else {
+            labelLayout = endTextLayout(
+                opt, nameLocation, nameRotation || 0, extent
+            );
+
+            axisNameAvailableWidth = opt.axisNameAvailableWidth;
+            if (axisNameAvailableWidth != null) {
+                axisNameAvailableWidth = Math.abs(
+                    axisNameAvailableWidth / Math.sin(labelLayout.rotation)
+                );
+                !isFinite(axisNameAvailableWidth) && (axisNameAvailableWidth = null);
+            }
+        }
+
+        var textFont = textStyleModel.getFont();
+
+        var truncateOpt = axisModel.get('nameTruncate', true) || {};
+        var ellipsis = truncateOpt.ellipsis;
+        var maxWidth = retrieve(
+            opt.nameTruncateMaxWidth, truncateOpt.maxWidth, axisNameAvailableWidth
+        );
+        // FIXME
+        // truncate rich text? (consider performance)
+        var truncatedText = (ellipsis != null && maxWidth != null)
+            ? truncateText$1(
+                name, maxWidth, textFont, ellipsis,
+                {minChar: 2, placeholder: truncateOpt.placeholder}
+            )
+            : name;
+
+        var tooltipOpt = axisModel.get('tooltip', true);
+
+        var mainType = axisModel.mainType;
+        var formatterParams = {
+            componentType: mainType,
