@@ -39355,3 +39355,284 @@ gridProto._initCartesian = function (gridModel, ecModel, api) {
 
             var axis = new Axis2D(
                 axisType, createScaleByModel(axisModel),
+                [0, 0],
+                axisModel.get('type'),
+                axisPosition
+            );
+
+            var isCategory = axis.type === 'category';
+            axis.onBand = isCategory && axisModel.get('boundaryGap');
+            axis.inverse = axisModel.get('inverse');
+
+            // Inject axis into axisModel
+            axisModel.axis = axis;
+
+            // Inject axisModel into axis
+            axis.model = axisModel;
+
+            // Inject grid info axis
+            axis.grid = this;
+
+            // Index of axis, can be used as key
+            axis.index = idx;
+
+            this._axesList.push(axis);
+
+            axesMap[axisType][idx] = axis;
+            axesCount[axisType]++;
+        };
+    }
+};
+
+/**
+ * Update cartesian properties from series
+ * @param  {module:echarts/model/Option} option
+ * @private
+ */
+gridProto._updateScale = function (ecModel, gridModel) {
+    // Reset scale
+    each$1(this._axesList, function (axis) {
+        axis.scale.setExtent(Infinity, -Infinity);
+    });
+    ecModel.eachSeries(function (seriesModel) {
+        if (isCartesian2D(seriesModel)) {
+            var axesModels = findAxesModels(seriesModel, ecModel);
+            var xAxisModel = axesModels[0];
+            var yAxisModel = axesModels[1];
+
+            if (!isAxisUsedInTheGrid(xAxisModel, gridModel, ecModel)
+                || !isAxisUsedInTheGrid(yAxisModel, gridModel, ecModel)
+            ) {
+                return;
+            }
+
+            var cartesian = this.getCartesian(
+                xAxisModel.componentIndex, yAxisModel.componentIndex
+            );
+            var data = seriesModel.getData();
+            var xAxis = cartesian.getAxis('x');
+            var yAxis = cartesian.getAxis('y');
+
+            if (data.type === 'list') {
+                unionExtent(data, xAxis, seriesModel);
+                unionExtent(data, yAxis, seriesModel);
+            }
+        }
+    }, this);
+
+    function unionExtent(data, axis, seriesModel) {
+        each$1(data.mapDimension(axis.dim, true), function (dim) {
+            axis.scale.unionExtentFromData(
+                // For example, the extent of the orginal dimension
+                // is [0.1, 0.5], the extent of the `stackResultDimension`
+                // is [7, 9], the final extent should not include [0.1, 0.5].
+                data, getStackedDimension(data, dim)
+            );
+        });
+    }
+};
+
+/**
+ * @param {string} [dim] 'x' or 'y' or 'auto' or null/undefined
+ * @return {Object} {baseAxes: [], otherAxes: []}
+ */
+gridProto.getTooltipAxes = function (dim) {
+    var baseAxes = [];
+    var otherAxes = [];
+
+    each$1(this.getCartesians(), function (cartesian) {
+        var baseAxis = (dim != null && dim !== 'auto')
+            ? cartesian.getAxis(dim) : cartesian.getBaseAxis();
+        var otherAxis = cartesian.getOtherAxis(baseAxis);
+        indexOf(baseAxes, baseAxis) < 0 && baseAxes.push(baseAxis);
+        indexOf(otherAxes, otherAxis) < 0 && otherAxes.push(otherAxis);
+    });
+
+    return {baseAxes: baseAxes, otherAxes: otherAxes};
+};
+
+/**
+ * @inner
+ */
+function updateAxisTransform(axis, coordBase) {
+    var axisExtent = axis.getExtent();
+    var axisExtentSum = axisExtent[0] + axisExtent[1];
+
+    // Fast transform
+    axis.toGlobalCoord = axis.dim === 'x'
+        ? function (coord) {
+            return coord + coordBase;
+        }
+        : function (coord) {
+            return axisExtentSum - coord + coordBase;
+        };
+    axis.toLocalCoord = axis.dim === 'x'
+        ? function (coord) {
+            return coord - coordBase;
+        }
+        : function (coord) {
+            return axisExtentSum - coord + coordBase;
+        };
+}
+
+var axesTypes = ['xAxis', 'yAxis'];
+/**
+ * @inner
+ */
+function findAxesModels(seriesModel, ecModel) {
+    return map(axesTypes, function (axisType) {
+        var axisModel = seriesModel.getReferringComponents(axisType)[0];
+
+        if (__DEV__) {
+            if (!axisModel) {
+                throw new Error(axisType + ' "' + retrieve(
+                    seriesModel.get(axisType + 'Index'),
+                    seriesModel.get(axisType + 'Id'),
+                    0
+                ) + '" not found');
+            }
+        }
+        return axisModel;
+    });
+}
+
+/**
+ * @inner
+ */
+function isCartesian2D(seriesModel) {
+    return seriesModel.get('coordinateSystem') === 'cartesian2d';
+}
+
+Grid.create = function (ecModel, api) {
+    var grids = [];
+    ecModel.eachComponent('grid', function (gridModel, idx) {
+        var grid = new Grid(gridModel, ecModel, api);
+        grid.name = 'grid_' + idx;
+        // dataSampling requires axis extent, so resize
+        // should be performed in create stage.
+        grid.resize(gridModel, api, true);
+
+        gridModel.coordinateSystem = grid;
+
+        grids.push(grid);
+    });
+
+    // Inject the coordinateSystems into seriesModel
+    ecModel.eachSeries(function (seriesModel) {
+        if (!isCartesian2D(seriesModel)) {
+            return;
+        }
+
+        var axesModels = findAxesModels(seriesModel, ecModel);
+        var xAxisModel = axesModels[0];
+        var yAxisModel = axesModels[1];
+
+        var gridModel = xAxisModel.getCoordSysModel();
+
+        if (__DEV__) {
+            if (!gridModel) {
+                throw new Error(
+                    'Grid "' + retrieve(
+                        xAxisModel.get('gridIndex'),
+                        xAxisModel.get('gridId'),
+                        0
+                    ) + '" not found'
+                );
+            }
+            if (xAxisModel.getCoordSysModel() !== yAxisModel.getCoordSysModel()) {
+                throw new Error('xAxis and yAxis must use the same grid');
+            }
+        }
+
+        var grid = gridModel.coordinateSystem;
+
+        seriesModel.coordinateSystem = grid.getCartesian(
+            xAxisModel.componentIndex, yAxisModel.componentIndex
+        );
+    });
+
+    return grids;
+};
+
+// For deciding which dimensions to use when creating list data
+Grid.dimensions = Grid.prototype.dimensions = Cartesian2D.prototype.dimensions;
+
+CoordinateSystemManager.register('cartesian2d', Grid);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var PI$2 = Math.PI;
+
+function makeAxisEventDataBase(axisModel) {
+    var eventData = {
+        componentType: axisModel.mainType,
+        componentIndex: axisModel.componentIndex
+    };
+    eventData[axisModel.mainType + 'Index'] = axisModel.componentIndex;
+    return eventData;
+}
+
+/**
+ * A final axis is translated and rotated from a "standard axis".
+ * So opt.position and opt.rotation is required.
+ *
+ * A standard axis is and axis from [0, 0] to [0, axisExtent[1]],
+ * for example: (0, 0) ------------> (0, 50)
+ *
+ * nameDirection or tickDirection or labelDirection is 1 means tick
+ * or label is below the standard axis, whereas is -1 means above
+ * the standard axis. labelOffset means offset between label and axis,
+ * which is useful when 'onZero', where axisLabel is in the grid and
+ * label in outside grid.
+ *
+ * Tips: like always,
+ * positive rotation represents anticlockwise, and negative rotation
+ * represents clockwise.
+ * The direction of position coordinate is the same as the direction
+ * of screen coordinate.
+ *
+ * Do not need to consider axis 'inverse', which is auto processed by
+ * axis extent.
+ *
+ * @param {module:zrender/container/Group} group
+ * @param {Object} axisModel
+ * @param {Object} opt Standard axis parameters.
+ * @param {Array.<number>} opt.position [x, y]
+ * @param {number} opt.rotation by radian
+ * @param {number} [opt.nameDirection=1] 1 or -1 Used when nameLocation is 'middle' or 'center'.
+ * @param {number} [opt.tickDirection=1] 1 or -1
+ * @param {number} [opt.labelDirection=1] 1 or -1
+ * @param {number} [opt.labelOffset=0] Usefull when onZero.
+ * @param {string} [opt.axisLabelShow] default get from axisModel.
+ * @param {string} [opt.axisName] default get from axisModel.
+ * @param {number} [opt.axisNameAvailableWidth]
+ * @param {number} [opt.labelRotate] by degree, default get from axisModel.
+ * @param {number} [opt.strokeContainThreshold] Default label interval when label
+ * @param {number} [opt.nameTruncateMaxWidth]
+ */
+var AxisBuilder = function (axisModel, opt) {
+
+    /**
+     * @readOnly
+     */
+    this.opt = opt;
+
+    /**
+     * @readOnly
