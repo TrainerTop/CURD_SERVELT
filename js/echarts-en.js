@@ -40424,3 +40424,277 @@ function collectAxesInfo(result, ecModel, api) {
             };
             axesInfoInCoordSys[key] = axisInfo;
             result.seriesInvolved |= involveSeries;
+
+            var groupIndex = getLinkGroupIndex(linksOption, axis);
+            if (groupIndex != null) {
+                var linkGroup = linkGroups[groupIndex] || (linkGroups[groupIndex] = {axesInfo: {}});
+                linkGroup.axesInfo[key] = axisInfo;
+                linkGroup.mapper = linksOption[groupIndex].mapper;
+                axisInfo.linkGroup = linkGroup;
+            }
+        }
+    });
+}
+
+function makeAxisPointerModel(
+    axis, baseTooltipModel, globalAxisPointerModel, ecModel, fromTooltip, triggerTooltip
+) {
+    var tooltipAxisPointerModel = baseTooltipModel.getModel('axisPointer');
+    var volatileOption = {};
+
+    each$6(
+        [
+            'type', 'snap', 'lineStyle', 'shadowStyle', 'label',
+            'animation', 'animationDurationUpdate', 'animationEasingUpdate', 'z'
+        ],
+        function (field) {
+            volatileOption[field] = clone(tooltipAxisPointerModel.get(field));
+        }
+    );
+
+    // category axis do not auto snap, otherwise some tick that do not
+    // has value can not be hovered. value/time/log axis default snap if
+    // triggered from tooltip and trigger tooltip.
+    volatileOption.snap = axis.type !== 'category' && !!triggerTooltip;
+
+    // Compatibel with previous behavior, tooltip axis do not show label by default.
+    // Only these properties can be overrided from tooltip to axisPointer.
+    if (tooltipAxisPointerModel.get('type') === 'cross') {
+        volatileOption.type = 'line';
+    }
+    var labelOption = volatileOption.label || (volatileOption.label = {});
+    // Follow the convention, do not show label when triggered by tooltip by default.
+    labelOption.show == null && (labelOption.show = false);
+
+    if (fromTooltip === 'cross') {
+        // When 'cross', both axes show labels.
+        var tooltipAxisPointerLabelShow = tooltipAxisPointerModel.get('label.show');
+        labelOption.show = tooltipAxisPointerLabelShow != null ? tooltipAxisPointerLabelShow : true;
+        // If triggerTooltip, this is a base axis, which should better not use cross style
+        // (cross style is dashed by default)
+        if (!triggerTooltip) {
+            var crossStyle = volatileOption.lineStyle = tooltipAxisPointerModel.get('crossStyle');
+            crossStyle && defaults(labelOption, crossStyle.textStyle);
+        }
+    }
+
+    return axis.model.getModel(
+        'axisPointer',
+        new Model(volatileOption, globalAxisPointerModel, ecModel)
+    );
+}
+
+function collectSeriesInfo(result, ecModel) {
+    // Prepare data for axis trigger
+    ecModel.eachSeries(function (seriesModel) {
+
+        // Notice this case: this coordSys is `cartesian2D` but not `grid`.
+        var coordSys = seriesModel.coordinateSystem;
+        var seriesTooltipTrigger = seriesModel.get('tooltip.trigger', true);
+        var seriesTooltipShow = seriesModel.get('tooltip.show', true);
+        if (!coordSys
+            || seriesTooltipTrigger === 'none'
+            || seriesTooltipTrigger === false
+            || seriesTooltipTrigger === 'item'
+            || seriesTooltipShow === false
+            || seriesModel.get('axisPointer.show', true) === false
+        ) {
+            return;
+        }
+
+        each$6(result.coordSysAxesInfo[makeKey(coordSys.model)], function (axisInfo) {
+            var axis = axisInfo.axis;
+            if (coordSys.getAxis(axis.dim) === axis) {
+                axisInfo.seriesModels.push(seriesModel);
+                axisInfo.seriesDataCount == null && (axisInfo.seriesDataCount = 0);
+                axisInfo.seriesDataCount += seriesModel.getData().count();
+            }
+        });
+
+    }, this);
+}
+
+/**
+ * For example:
+ * {
+ *     axisPointer: {
+ *         links: [{
+ *             xAxisIndex: [2, 4],
+ *             yAxisIndex: 'all'
+ *         }, {
+ *             xAxisId: ['a5', 'a7'],
+ *             xAxisName: 'xxx'
+ *         }]
+ *     }
+ * }
+ */
+function getLinkGroupIndex(linksOption, axis) {
+    var axisModel = axis.model;
+    var dim = axis.dim;
+    for (var i = 0; i < linksOption.length; i++) {
+        var linkOption = linksOption[i] || {};
+        if (checkPropInLink(linkOption[dim + 'AxisId'], axisModel.id)
+            || checkPropInLink(linkOption[dim + 'AxisIndex'], axisModel.componentIndex)
+            || checkPropInLink(linkOption[dim + 'AxisName'], axisModel.name)
+        ) {
+            return i;
+        }
+    }
+}
+
+function checkPropInLink(linkPropValue, axisPropValue) {
+    return linkPropValue === 'all'
+        || (isArray(linkPropValue) && indexOf(linkPropValue, axisPropValue) >= 0)
+        || linkPropValue === axisPropValue;
+}
+
+function fixValue(axisModel) {
+    var axisInfo = getAxisInfo(axisModel);
+    if (!axisInfo) {
+        return;
+    }
+
+    var axisPointerModel = axisInfo.axisPointerModel;
+    var scale = axisInfo.axis.scale;
+    var option = axisPointerModel.option;
+    var status = axisPointerModel.get('status');
+    var value = axisPointerModel.get('value');
+
+    // Parse init value for category and time axis.
+    if (value != null) {
+        value = scale.parse(value);
+    }
+
+    var useHandle = isHandleTrigger(axisPointerModel);
+    // If `handle` used, `axisPointer` will always be displayed, so value
+    // and status should be initialized.
+    if (status == null) {
+        option.status = useHandle ? 'show' : 'hide';
+    }
+
+    var extent = scale.getExtent().slice();
+    extent[0] > extent[1] && extent.reverse();
+
+    if (// Pick a value on axis when initializing.
+        value == null
+        // If both `handle` and `dataZoom` are used, value may be out of axis extent,
+        // where we should re-pick a value to keep `handle` displaying normally.
+        || value > extent[1]
+    ) {
+        // Make handle displayed on the end of the axis when init, which looks better.
+        value = extent[1];
+    }
+    if (value < extent[0]) {
+        value = extent[0];
+    }
+
+    option.value = value;
+
+    if (useHandle) {
+        option.status = axisInfo.axis.scale.isBlank() ? 'hide' : 'show';
+    }
+}
+
+function getAxisInfo(axisModel) {
+    var coordSysAxesInfo = (axisModel.ecModel.getComponent('axisPointer') || {}).coordSysAxesInfo;
+    return coordSysAxesInfo && coordSysAxesInfo.axesInfo[makeKey(axisModel)];
+}
+
+function getAxisPointerModel(axisModel) {
+    var axisInfo = getAxisInfo(axisModel);
+    return axisInfo && axisInfo.axisPointerModel;
+}
+
+function isHandleTrigger(axisPointerModel) {
+    return !!axisPointerModel.get('handle.show');
+}
+
+/**
+ * @param {module:echarts/model/Model} model
+ * @return {string} unique key
+ */
+function makeKey(model) {
+    return model.type + '||' + model.id;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Base class of AxisView.
+ */
+var AxisView = extendComponentView({
+
+    type: 'axis',
+
+    /**
+     * @private
+     */
+    _axisPointer: null,
+
+    /**
+     * @protected
+     * @type {string}
+     */
+    axisPointerClass: null,
+
+    /**
+     * @override
+     */
+    render: function (axisModel, ecModel, api, payload) {
+        // FIXME
+        // This process should proformed after coordinate systems updated
+        // (axis scale updated), and should be performed each time update.
+        // So put it here temporarily, although it is not appropriate to
+        // put a model-writing procedure in `view`.
+        this.axisPointerClass && fixValue(axisModel);
+
+        AxisView.superApply(this, 'render', arguments);
+
+        updateAxisPointer(this, axisModel, ecModel, api, payload, true);
+    },
+
+    /**
+     * Action handler.
+     * @public
+     * @param {module:echarts/coord/cartesian/AxisModel} axisModel
+     * @param {module:echarts/model/Global} ecModel
+     * @param {module:echarts/ExtensionAPI} api
+     * @param {Object} payload
+     */
+    updateAxisPointer: function (axisModel, ecModel, api, payload, force) {
+        updateAxisPointer(this, axisModel, ecModel, api, payload, false);
+    },
+
+    /**
+     * @override
+     */
+    remove: function (ecModel, api) {
+        var axisPointer = this._axisPointer;
+        axisPointer && axisPointer.remove(api);
+        AxisView.superApply(this, 'remove', arguments);
+    },
+
+    /**
+     * @override
+     */
+    dispose: function (ecModel, api) {
+        disposeAxisPointer(this, api);
+        AxisView.superApply(this, 'dispose', arguments);
+    }
