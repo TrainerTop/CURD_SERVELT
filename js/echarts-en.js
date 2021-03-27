@@ -40698,3 +40698,267 @@ var AxisView = extendComponentView({
         disposeAxisPointer(this, api);
         AxisView.superApply(this, 'dispose', arguments);
     }
+
+});
+
+function updateAxisPointer(axisView, axisModel, ecModel, api, payload, forceRender) {
+    var Clazz = AxisView.getAxisPointerClass(axisView.axisPointerClass);
+    if (!Clazz) {
+        return;
+    }
+    var axisPointerModel = getAxisPointerModel(axisModel);
+    axisPointerModel
+        ? (axisView._axisPointer || (axisView._axisPointer = new Clazz()))
+            .render(axisModel, axisPointerModel, api, forceRender)
+        : disposeAxisPointer(axisView, api);
+}
+
+function disposeAxisPointer(axisView, ecModel, api) {
+    var axisPointer = axisView._axisPointer;
+    axisPointer && axisPointer.dispose(ecModel, api);
+    axisView._axisPointer = null;
+}
+
+var axisPointerClazz = [];
+
+AxisView.registerAxisPointerClass = function (type, clazz) {
+    if (__DEV__) {
+        if (axisPointerClazz[type]) {
+            throw new Error('axisPointer ' + type + ' exists');
+        }
+    }
+    axisPointerClazz[type] = clazz;
+};
+
+AxisView.getAxisPointerClass = function (type) {
+    return type && axisPointerClazz[type];
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Can only be called after coordinate system creation stage.
+ * (Can be called before coordinate system update stage).
+ *
+ * @param {Object} opt {labelInside}
+ * @return {Object} {
+ *  position, rotation, labelDirection, labelOffset,
+ *  tickDirection, labelRotate, z2
+ * }
+ */
+function layout$1(gridModel, axisModel, opt) {
+    opt = opt || {};
+    var grid = gridModel.coordinateSystem;
+    var axis = axisModel.axis;
+    var layout = {};
+    var otherAxisOnZeroOf = axis.getAxesOnZeroOf()[0];
+
+    var rawAxisPosition = axis.position;
+    var axisPosition = otherAxisOnZeroOf ? 'onZero' : rawAxisPosition;
+    var axisDim = axis.dim;
+
+    var rect = grid.getRect();
+    var rectBound = [rect.x, rect.x + rect.width, rect.y, rect.y + rect.height];
+    var idx = {left: 0, right: 1, top: 0, bottom: 1, onZero: 2};
+    var axisOffset = axisModel.get('offset') || 0;
+
+    var posBound = axisDim === 'x'
+        ? [rectBound[2] - axisOffset, rectBound[3] + axisOffset]
+        : [rectBound[0] - axisOffset, rectBound[1] + axisOffset];
+
+    if (otherAxisOnZeroOf) {
+        var onZeroCoord = otherAxisOnZeroOf.toGlobalCoord(otherAxisOnZeroOf.dataToCoord(0));
+        posBound[idx.onZero] = Math.max(Math.min(onZeroCoord, posBound[1]), posBound[0]);
+    }
+
+    // Axis position
+    layout.position = [
+        axisDim === 'y' ? posBound[idx[axisPosition]] : rectBound[0],
+        axisDim === 'x' ? posBound[idx[axisPosition]] : rectBound[3]
+    ];
+
+    // Axis rotation
+    layout.rotation = Math.PI / 2 * (axisDim === 'x' ? 0 : 1);
+
+    // Tick and label direction, x y is axisDim
+    var dirMap = {top: -1, bottom: 1, left: -1, right: 1};
+
+    layout.labelDirection = layout.tickDirection = layout.nameDirection = dirMap[rawAxisPosition];
+    layout.labelOffset = otherAxisOnZeroOf ? posBound[idx[rawAxisPosition]] - posBound[idx.onZero] : 0;
+
+    if (axisModel.get('axisTick.inside')) {
+        layout.tickDirection = -layout.tickDirection;
+    }
+    if (retrieve(opt.labelInside, axisModel.get('axisLabel.inside'))) {
+        layout.labelDirection = -layout.labelDirection;
+    }
+
+    // Special label rotation
+    var labelRotate = axisModel.get('axisLabel.rotate');
+    layout.labelRotate = axisPosition === 'top' ? -labelRotate : labelRotate;
+
+    // Over splitLine and splitArea
+    layout.z2 = 1;
+
+    return layout;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var axisBuilderAttrs = [
+    'axisLine', 'axisTickLabel', 'axisName'
+];
+var selfBuilderAttrs = [
+    'splitArea', 'splitLine'
+];
+
+// function getAlignWithLabel(model, axisModel) {
+//     var alignWithLabel = model.get('alignWithLabel');
+//     if (alignWithLabel === 'auto') {
+//         alignWithLabel = axisModel.get('axisTick.alignWithLabel');
+//     }
+//     return alignWithLabel;
+// }
+
+var CartesianAxisView = AxisView.extend({
+
+    type: 'cartesianAxis',
+
+    axisPointerClass: 'CartesianAxisPointer',
+
+    /**
+     * @override
+     */
+    render: function (axisModel, ecModel, api, payload) {
+
+        this.group.removeAll();
+
+        var oldAxisGroup = this._axisGroup;
+        this._axisGroup = new Group();
+
+        this.group.add(this._axisGroup);
+
+        if (!axisModel.get('show')) {
+            return;
+        }
+
+        var gridModel = axisModel.getCoordSysModel();
+
+        var layout = layout$1(gridModel, axisModel);
+
+        var axisBuilder = new AxisBuilder(axisModel, layout);
+
+        each$1(axisBuilderAttrs, axisBuilder.add, axisBuilder);
+
+        this._axisGroup.add(axisBuilder.getGroup());
+
+        each$1(selfBuilderAttrs, function (name) {
+            if (axisModel.get(name + '.show')) {
+                this['_' + name](axisModel, gridModel);
+            }
+        }, this);
+
+        groupTransition(oldAxisGroup, this._axisGroup, axisModel);
+
+        CartesianAxisView.superCall(this, 'render', axisModel, ecModel, api, payload);
+    },
+
+    remove: function () {
+        this._splitAreaColors = null;
+    },
+
+    /**
+     * @param {module:echarts/coord/cartesian/AxisModel} axisModel
+     * @param {module:echarts/coord/cartesian/GridModel} gridModel
+     * @private
+     */
+    _splitLine: function (axisModel, gridModel) {
+        var axis = axisModel.axis;
+
+        if (axis.scale.isBlank()) {
+            return;
+        }
+
+        var splitLineModel = axisModel.getModel('splitLine');
+        var lineStyleModel = splitLineModel.getModel('lineStyle');
+        var lineColors = lineStyleModel.get('color');
+
+        lineColors = isArray(lineColors) ? lineColors : [lineColors];
+
+        var gridRect = gridModel.coordinateSystem.getRect();
+        var isHorizontal = axis.isHorizontal();
+
+        var lineCount = 0;
+
+        var ticksCoords = axis.getTicksCoords({
+            tickModel: splitLineModel
+        });
+
+        var p1 = [];
+        var p2 = [];
+
+        // Simple optimization
+        // Batching the lines if color are the same
+        var lineStyle = lineStyleModel.getLineStyle();
+        for (var i = 0; i < ticksCoords.length; i++) {
+            var tickCoord = axis.toGlobalCoord(ticksCoords[i].coord);
+
+            if (isHorizontal) {
+                p1[0] = tickCoord;
+                p1[1] = gridRect.y;
+                p2[0] = tickCoord;
+                p2[1] = gridRect.y + gridRect.height;
+            }
+            else {
+                p1[0] = gridRect.x;
+                p1[1] = tickCoord;
+                p2[0] = gridRect.x + gridRect.width;
+                p2[1] = tickCoord;
+            }
+
+            var colorIndex = (lineCount++) % lineColors.length;
+            var tickValue = ticksCoords[i].tickValue;
+            this._axisGroup.add(new Line(subPixelOptimizeLine({
+                anid: tickValue != null ? 'line_' + ticksCoords[i].tickValue : null,
+                shape: {
+                    x1: p1[0],
+                    y1: p1[1],
+                    x2: p2[0],
+                    y2: p2[1]
+                },
+                style: defaults({
+                    stroke: lineColors[colorIndex]
