@@ -41476,3 +41476,269 @@ extendChartView({
                 if (!data.hasValue(dataIndex)) {
                     return;
                 }
+
+                var itemModel = data.getItemModel(dataIndex);
+                var layout = getLayout[coord.type](data, dataIndex, itemModel);
+                var el = elementCreator[coord.type](
+                    data, dataIndex, itemModel, layout, isHorizontalOrRadial, animationModel
+                );
+                data.setItemGraphicEl(dataIndex, el);
+                group.add(el);
+
+                updateStyle(
+                    el, data, dataIndex, itemModel, layout,
+                    seriesModel, isHorizontalOrRadial, coord.type === 'polar'
+                );
+            })
+            .update(function (newIndex, oldIndex) {
+                var el = oldData.getItemGraphicEl(oldIndex);
+
+                if (!data.hasValue(newIndex)) {
+                    group.remove(el);
+                    return;
+                }
+
+                var itemModel = data.getItemModel(newIndex);
+                var layout = getLayout[coord.type](data, newIndex, itemModel);
+
+                if (el) {
+                    updateProps(el, {shape: layout}, animationModel, newIndex);
+                }
+                else {
+                    el = elementCreator[coord.type](
+                        data, newIndex, itemModel, layout, isHorizontalOrRadial, animationModel, true
+                    );
+                }
+
+                data.setItemGraphicEl(newIndex, el);
+                // Add back
+                group.add(el);
+
+                updateStyle(
+                    el, data, newIndex, itemModel, layout,
+                    seriesModel, isHorizontalOrRadial, coord.type === 'polar'
+                );
+            })
+            .remove(function (dataIndex) {
+                var el = oldData.getItemGraphicEl(dataIndex);
+                if (coord.type === 'cartesian2d') {
+                    el && removeRect(dataIndex, animationModel, el);
+                }
+                else {
+                    el && removeSector(dataIndex, animationModel, el);
+                }
+            })
+            .execute();
+
+        this._data = data;
+    },
+
+    _renderLarge: function (seriesModel, ecModel, api) {
+        this._clear();
+        createLarge(seriesModel, this.group);
+    },
+
+    _incrementalRenderLarge: function (params, seriesModel) {
+        createLarge(seriesModel, this.group, true);
+    },
+
+    dispose: noop,
+
+    remove: function (ecModel) {
+        this._clear(ecModel);
+    },
+
+    _clear: function (ecModel) {
+        var group = this.group;
+        var data = this._data;
+        if (ecModel && ecModel.get('animation') && data && !this._isLargeDraw) {
+            data.eachItemGraphicEl(function (el) {
+                if (el.type === 'sector') {
+                    removeSector(el.dataIndex, ecModel, el);
+                }
+                else {
+                    removeRect(el.dataIndex, ecModel, el);
+                }
+            });
+        }
+        else {
+            group.removeAll();
+        }
+        this._data = null;
+    }
+
+});
+
+var elementCreator = {
+
+    cartesian2d: function (
+        data, dataIndex, itemModel, layout, isHorizontal,
+        animationModel, isUpdate
+    ) {
+        var rect = new Rect({shape: extend({}, layout)});
+
+        // Animation
+        if (animationModel) {
+            var rectShape = rect.shape;
+            var animateProperty = isHorizontal ? 'height' : 'width';
+            var animateTarget = {};
+            rectShape[animateProperty] = 0;
+            animateTarget[animateProperty] = layout[animateProperty];
+            graphic[isUpdate ? 'updateProps' : 'initProps'](rect, {
+                shape: animateTarget
+            }, animationModel, dataIndex);
+        }
+
+        return rect;
+    },
+
+    polar: function (
+        data, dataIndex, itemModel, layout, isRadial,
+        animationModel, isUpdate
+    ) {
+        // Keep the same logic with bar in catesion: use end value to control
+        // direction. Notice that if clockwise is true (by default), the sector
+        // will always draw clockwisely, no matter whether endAngle is greater
+        // or less than startAngle.
+        var clockwise = layout.startAngle < layout.endAngle;
+        var sector = new Sector({
+            shape: defaults({clockwise: clockwise}, layout)
+        });
+
+        // Animation
+        if (animationModel) {
+            var sectorShape = sector.shape;
+            var animateProperty = isRadial ? 'r' : 'endAngle';
+            var animateTarget = {};
+            sectorShape[animateProperty] = isRadial ? 0 : layout.startAngle;
+            animateTarget[animateProperty] = layout[animateProperty];
+            graphic[isUpdate ? 'updateProps' : 'initProps'](sector, {
+                shape: animateTarget
+            }, animationModel, dataIndex);
+        }
+
+        return sector;
+    }
+};
+
+function removeRect(dataIndex, animationModel, el) {
+    // Not show text when animating
+    el.style.text = null;
+    updateProps(el, {
+        shape: {
+            width: 0
+        }
+    }, animationModel, dataIndex, function () {
+        el.parent && el.parent.remove(el);
+    });
+}
+
+function removeSector(dataIndex, animationModel, el) {
+    // Not show text when animating
+    el.style.text = null;
+    updateProps(el, {
+        shape: {
+            r: el.shape.r0
+        }
+    }, animationModel, dataIndex, function () {
+        el.parent && el.parent.remove(el);
+    });
+}
+
+var getLayout = {
+    cartesian2d: function (data, dataIndex, itemModel) {
+        var layout = data.getItemLayout(dataIndex);
+        var fixedLineWidth = getLineWidth(itemModel, layout);
+
+        // fix layout with lineWidth
+        var signX = layout.width > 0 ? 1 : -1;
+        var signY = layout.height > 0 ? 1 : -1;
+        return {
+            x: layout.x + signX * fixedLineWidth / 2,
+            y: layout.y + signY * fixedLineWidth / 2,
+            width: layout.width - signX * fixedLineWidth,
+            height: layout.height - signY * fixedLineWidth
+        };
+    },
+
+    polar: function (data, dataIndex, itemModel) {
+        var layout = data.getItemLayout(dataIndex);
+        return {
+            cx: layout.cx,
+            cy: layout.cy,
+            r0: layout.r0,
+            r: layout.r,
+            startAngle: layout.startAngle,
+            endAngle: layout.endAngle
+        };
+    }
+};
+
+function updateStyle(
+    el, data, dataIndex, itemModel, layout, seriesModel, isHorizontal, isPolar
+) {
+    var color = data.getItemVisual(dataIndex, 'color');
+    var opacity = data.getItemVisual(dataIndex, 'opacity');
+    var itemStyleModel = itemModel.getModel('itemStyle');
+    var hoverStyle = itemModel.getModel('emphasis.itemStyle').getBarItemStyle();
+
+    if (!isPolar) {
+        el.setShape('r', itemStyleModel.get('barBorderRadius') || 0);
+    }
+
+    el.useStyle(defaults(
+        {
+            fill: color,
+            opacity: opacity
+        },
+        itemStyleModel.getBarItemStyle()
+    ));
+
+    var cursorStyle = itemModel.getShallow('cursor');
+    cursorStyle && el.attr('cursor', cursorStyle);
+
+    var labelPositionOutside = isHorizontal
+        ? (layout.height > 0 ? 'bottom' : 'top')
+        : (layout.width > 0 ? 'left' : 'right');
+
+    if (!isPolar) {
+        setLabel(
+            el.style, hoverStyle, itemModel, color,
+            seriesModel, dataIndex, labelPositionOutside
+        );
+    }
+
+    setHoverStyle(el, hoverStyle);
+}
+
+// In case width or height are too small.
+function getLineWidth(itemModel, rawLayout) {
+    var lineWidth = itemModel.get(BAR_BORDER_WIDTH_QUERY) || 0;
+    return Math.min(lineWidth, Math.abs(rawLayout.width), Math.abs(rawLayout.height));
+}
+
+
+var LargePath = Path.extend({
+
+    type: 'largeBar',
+
+    shape: {points: []},
+
+    buildPath: function (ctx, shape) {
+        // Drawing lines is more efficient than drawing
+        // a whole line or drawing rects.
+        var points = shape.points;
+        var startPoint = this.__startPoint;
+        var valueIdx = this.__valueIdx;
+
+        for (var i = 0; i < points.length; i += 2) {
+            startPoint[this.__valueIdx] = points[i + valueIdx];
+            ctx.moveTo(startPoint[0], startPoint[1]);
+            ctx.lineTo(points[i], points[i + 1]);
+        }
+    }
+});
+
+function createLarge(seriesModel, group, incremental) {
+    // TODO support polar
+    var data = seriesModel.getData();
