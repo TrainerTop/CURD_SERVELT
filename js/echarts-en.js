@@ -41214,3 +41214,265 @@ var BaseBarSeries = SeriesModel.extend({
         // stack: null
 
         // Cartesian coordinate system
+        // xAxisIndex: 0,
+        // yAxisIndex: 0,
+
+        // 最小高度改为0
+        barMinHeight: 0,
+        // 最小角度为0，仅对极坐标系下的柱状图有效
+        barMinAngle: 0,
+        // cursor: null,
+
+        large: false,
+        largeThreshold: 400,
+        progressive: 3e3,
+        progressiveChunkMode: 'mod',
+
+        // barMaxWidth: null,
+        // 默认自适应
+        // barWidth: null,
+        // 柱间距离，默认为柱形宽度的30%，可设固定值
+        // barGap: '30%',
+        // 类目间柱形距离，默认为类目间距的20%，可设固定值
+        // barCategoryGap: '20%',
+        // label: {
+        //      show: false
+        // },
+        itemStyle: {},
+        emphasis: {}
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+BaseBarSeries.extend({
+
+    type: 'series.bar',
+
+    dependencies: ['grid', 'polar'],
+
+    brushSelector: 'rect',
+
+    /**
+     * @override
+     */
+    getProgressive: function () {
+        // Do not support progressive in normal mode.
+        return this.get('large')
+            ? this.get('progressive')
+            : false;
+    },
+
+    /**
+     * @override
+     */
+    getProgressiveThreshold: function () {
+        // Do not support progressive in normal mode.
+        var progressiveThreshold = this.get('progressiveThreshold');
+        var largeThreshold = this.get('largeThreshold');
+        if (largeThreshold > progressiveThreshold) {
+            progressiveThreshold = largeThreshold;
+        }
+        return progressiveThreshold;
+    }
+
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+function setLabel(
+    normalStyle, hoverStyle, itemModel, color, seriesModel, dataIndex, labelPositionOutside
+) {
+    var labelModel = itemModel.getModel('label');
+    var hoverLabelModel = itemModel.getModel('emphasis.label');
+
+    setLabelStyle(
+        normalStyle, hoverStyle, labelModel, hoverLabelModel,
+        {
+            labelFetcher: seriesModel,
+            labelDataIndex: dataIndex,
+            defaultText: getDefaultLabel(seriesModel.getData(), dataIndex),
+            isRectText: true,
+            autoColor: color
+        }
+    );
+
+    fixPosition(normalStyle);
+    fixPosition(hoverStyle);
+}
+
+function fixPosition(style, labelPositionOutside) {
+    if (style.textPosition === 'outside') {
+        style.textPosition = labelPositionOutside;
+    }
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var getBarItemStyle = makeStyleMapper(
+    [
+        ['fill', 'color'],
+        ['stroke', 'borderColor'],
+        ['lineWidth', 'borderWidth'],
+        // Compatitable with 2
+        ['stroke', 'barBorderColor'],
+        ['lineWidth', 'barBorderWidth'],
+        ['opacity'],
+        ['shadowBlur'],
+        ['shadowOffsetX'],
+        ['shadowOffsetY'],
+        ['shadowColor']
+    ]
+);
+
+var barItemStyle = {
+    getBarItemStyle: function (excludes) {
+        var style = getBarItemStyle(this, excludes);
+        if (this.getBorderLineDash) {
+            var lineDash = this.getBorderLineDash();
+            lineDash && (style.lineDash = lineDash);
+        }
+        return style;
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var BAR_BORDER_WIDTH_QUERY = ['itemStyle', 'barBorderWidth'];
+
+// FIXME
+// Just for compatible with ec2.
+extend(Model.prototype, barItemStyle);
+
+extendChartView({
+
+    type: 'bar',
+
+    render: function (seriesModel, ecModel, api) {
+        this._updateDrawMode(seriesModel);
+
+        var coordinateSystemType = seriesModel.get('coordinateSystem');
+
+        if (coordinateSystemType === 'cartesian2d'
+            || coordinateSystemType === 'polar'
+        ) {
+            this._isLargeDraw
+                ? this._renderLarge(seriesModel, ecModel, api)
+                : this._renderNormal(seriesModel, ecModel, api);
+        }
+        else if (__DEV__) {
+            console.warn('Only cartesian2d and polar supported for bar.');
+        }
+
+        return this.group;
+    },
+
+    incrementalPrepareRender: function (seriesModel, ecModel, api) {
+        this._clear();
+        this._updateDrawMode(seriesModel);
+    },
+
+    incrementalRender: function (params, seriesModel, ecModel, api) {
+        // Do not support progressive in normal mode.
+        this._incrementalRenderLarge(params, seriesModel);
+    },
+
+    _updateDrawMode: function (seriesModel) {
+        var isLargeDraw = seriesModel.pipelineContext.large;
+        if (this._isLargeDraw == null || isLargeDraw ^ this._isLargeDraw) {
+            this._isLargeDraw = isLargeDraw;
+            this._clear();
+        }
+    },
+
+    _renderNormal: function (seriesModel, ecModel, api) {
+        var group = this.group;
+        var data = seriesModel.getData();
+        var oldData = this._data;
+
+        var coord = seriesModel.coordinateSystem;
+        var baseAxis = coord.getBaseAxis();
+        var isHorizontalOrRadial;
+
+        if (coord.type === 'cartesian2d') {
+            isHorizontalOrRadial = baseAxis.isHorizontal();
+        }
+        else if (coord.type === 'polar') {
+            isHorizontalOrRadial = baseAxis.dim === 'angle';
+        }
+
+        var animationModel = seriesModel.isAnimationEnabled() ? seriesModel : null;
+
+        data.diff(oldData)
+            .add(function (dataIndex) {
+                if (!data.hasValue(dataIndex)) {
+                    return;
+                }
