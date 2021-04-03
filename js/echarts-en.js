@@ -42279,3 +42279,260 @@ piePieceProto.updateData = function (data, idx, firstCreate) {
     var visualColor = data.getItemVisual(idx, 'color');
 
     sector.useStyle(
+        defaults(
+            {
+                lineJoin: 'bevel',
+                fill: visualColor
+            },
+            itemModel.getModel('itemStyle').getItemStyle()
+        )
+    );
+    sector.hoverStyle = itemModel.getModel('emphasis.itemStyle').getItemStyle();
+
+    var cursorStyle = itemModel.getShallow('cursor');
+    cursorStyle && sector.attr('cursor', cursorStyle);
+
+    // Toggle selected
+    toggleItemSelected(
+        this,
+        data.getItemLayout(idx),
+        seriesModel.isSelected(null, idx),
+        seriesModel.get('selectedOffset'),
+        seriesModel.get('animation')
+    );
+
+    function onEmphasis() {
+        // Sector may has animation of updating data. Force to move to the last frame
+        // Or it may stopped on the wrong shape
+        sector.stopAnimation(true);
+        sector.animateTo({
+            shape: {
+                r: layout.r + seriesModel.get('hoverOffset')
+            }
+        }, 300, 'elasticOut');
+    }
+    function onNormal() {
+        sector.stopAnimation(true);
+        sector.animateTo({
+            shape: {
+                r: layout.r
+            }
+        }, 300, 'elasticOut');
+    }
+    sector.off('mouseover').off('mouseout').off('emphasis').off('normal');
+    if (itemModel.get('hoverAnimation') && seriesModel.isAnimationEnabled()) {
+        sector
+            .on('mouseover', onEmphasis)
+            .on('mouseout', onNormal)
+            .on('emphasis', onEmphasis)
+            .on('normal', onNormal);
+    }
+
+    this._updateLabel(data, idx);
+
+    setHoverStyle(this);
+};
+
+piePieceProto._updateLabel = function (data, idx) {
+
+    var labelLine = this.childAt(1);
+    var labelText = this.childAt(2);
+
+    var seriesModel = data.hostModel;
+    var itemModel = data.getItemModel(idx);
+    var layout = data.getItemLayout(idx);
+    var labelLayout = layout.label;
+    var visualColor = data.getItemVisual(idx, 'color');
+
+    updateProps(labelLine, {
+        shape: {
+            points: labelLayout.linePoints || [
+                [labelLayout.x, labelLayout.y], [labelLayout.x, labelLayout.y], [labelLayout.x, labelLayout.y]
+            ]
+        }
+    }, seriesModel, idx);
+
+    updateProps(labelText, {
+        style: {
+            x: labelLayout.x,
+            y: labelLayout.y
+        }
+    }, seriesModel, idx);
+    labelText.attr({
+        rotation: labelLayout.rotation,
+        origin: [labelLayout.x, labelLayout.y],
+        z2: 10
+    });
+
+    var labelModel = itemModel.getModel('label');
+    var labelHoverModel = itemModel.getModel('emphasis.label');
+    var labelLineModel = itemModel.getModel('labelLine');
+    var labelLineHoverModel = itemModel.getModel('emphasis.labelLine');
+    var visualColor = data.getItemVisual(idx, 'color');
+
+    setLabelStyle(
+        labelText.style, labelText.hoverStyle = {}, labelModel, labelHoverModel,
+        {
+            labelFetcher: data.hostModel,
+            labelDataIndex: idx,
+            defaultText: data.getName(idx),
+            autoColor: visualColor,
+            useInsideStyle: !!labelLayout.inside
+        },
+        {
+            textAlign: labelLayout.textAlign,
+            textVerticalAlign: labelLayout.verticalAlign,
+            opacity: data.getItemVisual(idx, 'opacity')
+        }
+    );
+
+    labelText.ignore = labelText.normalIgnore = !labelModel.get('show');
+    labelText.hoverIgnore = !labelHoverModel.get('show');
+
+    labelLine.ignore = labelLine.normalIgnore = !labelLineModel.get('show');
+    labelLine.hoverIgnore = !labelLineHoverModel.get('show');
+
+    // Default use item visual color
+    labelLine.setStyle({
+        stroke: visualColor,
+        opacity: data.getItemVisual(idx, 'opacity')
+    });
+    labelLine.setStyle(labelLineModel.getModel('lineStyle').getLineStyle());
+
+    labelLine.hoverStyle = labelLineHoverModel.getModel('lineStyle').getLineStyle();
+
+    var smooth = labelLineModel.get('smooth');
+    if (smooth && smooth === true) {
+        smooth = 0.4;
+    }
+    labelLine.setShape({
+        smooth: smooth
+    });
+};
+
+inherits(PiePiece, Group);
+
+
+// Pie view
+var PieView = Chart.extend({
+
+    type: 'pie',
+
+    init: function () {
+        var sectorGroup = new Group();
+        this._sectorGroup = sectorGroup;
+    },
+
+    render: function (seriesModel, ecModel, api, payload) {
+        if (payload && (payload.from === this.uid)) {
+            return;
+        }
+
+        var data = seriesModel.getData();
+        var oldData = this._data;
+        var group = this.group;
+
+        var hasAnimation = ecModel.get('animation');
+        var isFirstRender = !oldData;
+        var animationType = seriesModel.get('animationType');
+
+        var onSectorClick = curry(
+            updateDataSelected, this.uid, seriesModel, hasAnimation, api
+        );
+
+        var selectedMode = seriesModel.get('selectedMode');
+
+        data.diff(oldData)
+            .add(function (idx) {
+                var piePiece = new PiePiece(data, idx);
+                // Default expansion animation
+                if (isFirstRender && animationType !== 'scale') {
+                    piePiece.eachChild(function (child) {
+                        child.stopAnimation(true);
+                    });
+                }
+
+                selectedMode && piePiece.on('click', onSectorClick);
+
+                data.setItemGraphicEl(idx, piePiece);
+
+                group.add(piePiece);
+            })
+            .update(function (newIdx, oldIdx) {
+                var piePiece = oldData.getItemGraphicEl(oldIdx);
+
+                piePiece.updateData(data, newIdx);
+
+                piePiece.off('click');
+                selectedMode && piePiece.on('click', onSectorClick);
+                group.add(piePiece);
+                data.setItemGraphicEl(newIdx, piePiece);
+            })
+            .remove(function (idx) {
+                var piePiece = oldData.getItemGraphicEl(idx);
+                group.remove(piePiece);
+            })
+            .execute();
+
+        if (
+            hasAnimation && isFirstRender && data.count() > 0
+            // Default expansion animation
+            && animationType !== 'scale'
+        ) {
+            var shape = data.getItemLayout(0);
+            var r = Math.max(api.getWidth(), api.getHeight()) / 2;
+
+            var removeClipPath = bind(group.removeClipPath, group);
+            group.setClipPath(this._createClipPath(
+                shape.cx, shape.cy, r, shape.startAngle, shape.clockwise, removeClipPath, seriesModel
+            ));
+        }
+        else {
+            // clipPath is used in first-time animation, so remove it when otherwise. See: #8994
+            group.removeClipPath();
+        }
+
+        this._data = data;
+    },
+
+    dispose: function () {},
+
+    _createClipPath: function (
+        cx, cy, r, startAngle, clockwise, cb, seriesModel
+    ) {
+        var clipPath = new Sector({
+            shape: {
+                cx: cx,
+                cy: cy,
+                r0: 0,
+                r: r,
+                startAngle: startAngle,
+                endAngle: startAngle,
+                clockwise: clockwise
+            }
+        });
+
+        initProps(clipPath, {
+            shape: {
+                endAngle: startAngle + (clockwise ? 1 : -1) * Math.PI * 2
+            }
+        }, seriesModel, cb);
+
+        return clipPath;
+    },
+
+    /**
+     * @implement
+     */
+    containPoint: function (point, seriesModel) {
+        var data = seriesModel.getData();
+        var itemLayout = data.getItemLayout(0);
+        if (itemLayout) {
+            var dx = point[0] - itemLayout.cx;
+            var dy = point[1] - itemLayout.cy;
+            var radius = Math.sqrt(dx * dx + dy * dy);
+            return radius <= itemLayout.r && radius >= itemLayout.r0;
+        }
+    }
+
+});
