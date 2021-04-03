@@ -42025,3 +42025,257 @@ var PieSeries = extendSeriesModel({
         var data = this.getData();
         var params = PieSeries.superCall(this, 'getDataParams', dataIndex);
         // FIXME toFixed?
+
+        var valueList = [];
+        data.each(data.mapDimension('value'), function (value) {
+            valueList.push(value);
+        });
+
+        params.percent = getPercentWithPrecision(
+            valueList,
+            dataIndex,
+            data.hostModel.get('percentPrecision')
+        );
+
+        params.$vars.push('percent');
+        return params;
+    },
+
+    _defaultLabelLine: function (option) {
+        // Extend labelLine emphasis
+        defaultEmphasis(option, 'labelLine', ['show']);
+
+        var labelLineNormalOpt = option.labelLine;
+        var labelLineEmphasisOpt = option.emphasis.labelLine;
+        // Not show label line if `label.normal.show = false`
+        labelLineNormalOpt.show = labelLineNormalOpt.show
+            && option.label.show;
+        labelLineEmphasisOpt.show = labelLineEmphasisOpt.show
+            && option.emphasis.label.show;
+    },
+
+    defaultOption: {
+        zlevel: 0,
+        z: 2,
+        legendHoverLink: true,
+
+        hoverAnimation: true,
+        // 默认全局居中
+        center: ['50%', '50%'],
+        radius: [0, '75%'],
+        // 默认顺时针
+        clockwise: true,
+        startAngle: 90,
+        // 最小角度改为0
+        minAngle: 0,
+        // 选中时扇区偏移量
+        selectedOffset: 10,
+        // 高亮扇区偏移量
+        hoverOffset: 10,
+
+        // If use strategy to avoid label overlapping
+        avoidLabelOverlap: true,
+        // 选择模式，默认关闭，可选single，multiple
+        // selectedMode: false,
+        // 南丁格尔玫瑰图模式，'radius'（半径） | 'area'（面积）
+        // roseType: null,
+
+        percentPrecision: 2,
+
+        // If still show when all data zero.
+        stillShowZeroSum: true,
+
+        // cursor: null,
+
+        label: {
+            // If rotate around circle
+            rotate: false,
+            show: true,
+            // 'outer', 'inside', 'center'
+            position: 'outer'
+            // formatter: 标签文本格式器，同Tooltip.formatter，不支持异步回调
+            // 默认使用全局文本样式，详见TEXTSTYLE
+            // distance: 当position为inner时有效，为label位置到圆心的距离与圆半径(环状图为内外半径和)的比例系数
+        },
+        // Enabled when label.normal.position is 'outer'
+        labelLine: {
+            show: true,
+            // 引导线两段中的第一段长度
+            length: 15,
+            // 引导线两段中的第二段长度
+            length2: 15,
+            smooth: false,
+            lineStyle: {
+                // color: 各异,
+                width: 1,
+                type: 'solid'
+            }
+        },
+        itemStyle: {
+            borderWidth: 1
+        },
+
+        // Animation type canbe expansion, scale
+        animationType: 'expansion',
+
+        animationEasing: 'cubicOut'
+    }
+});
+
+mixin(PieSeries, selectableMixin);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @param {module:echarts/model/Series} seriesModel
+ * @param {boolean} hasAnimation
+ * @inner
+ */
+function updateDataSelected(uid, seriesModel, hasAnimation, api) {
+    var data = seriesModel.getData();
+    var dataIndex = this.dataIndex;
+    var name = data.getName(dataIndex);
+    var selectedOffset = seriesModel.get('selectedOffset');
+
+    api.dispatchAction({
+        type: 'pieToggleSelect',
+        from: uid,
+        name: name,
+        seriesId: seriesModel.id
+    });
+
+    data.each(function (idx) {
+        toggleItemSelected(
+            data.getItemGraphicEl(idx),
+            data.getItemLayout(idx),
+            seriesModel.isSelected(data.getName(idx)),
+            selectedOffset,
+            hasAnimation
+        );
+    });
+}
+
+/**
+ * @param {module:zrender/graphic/Sector} el
+ * @param {Object} layout
+ * @param {boolean} isSelected
+ * @param {number} selectedOffset
+ * @param {boolean} hasAnimation
+ * @inner
+ */
+function toggleItemSelected(el, layout, isSelected, selectedOffset, hasAnimation) {
+    var midAngle = (layout.startAngle + layout.endAngle) / 2;
+
+    var dx = Math.cos(midAngle);
+    var dy = Math.sin(midAngle);
+
+    var offset = isSelected ? selectedOffset : 0;
+    var position = [dx * offset, dy * offset];
+
+    hasAnimation
+        // animateTo will stop revious animation like update transition
+        ? el.animate()
+            .when(200, {
+                position: position
+            })
+            .start('bounceOut')
+        : el.attr('position', position);
+}
+
+/**
+ * Piece of pie including Sector, Label, LabelLine
+ * @constructor
+ * @extends {module:zrender/graphic/Group}
+ */
+function PiePiece(data, idx) {
+
+    Group.call(this);
+
+    var sector = new Sector({
+        z2: 2
+    });
+    var polyline = new Polyline();
+    var text = new Text();
+    this.add(sector);
+    this.add(polyline);
+    this.add(text);
+
+    this.updateData(data, idx, true);
+
+    // Hover to change label and labelLine
+    function onEmphasis() {
+        polyline.ignore = polyline.hoverIgnore;
+        text.ignore = text.hoverIgnore;
+    }
+    function onNormal() {
+        polyline.ignore = polyline.normalIgnore;
+        text.ignore = text.normalIgnore;
+    }
+    this.on('emphasis', onEmphasis)
+        .on('normal', onNormal)
+        .on('mouseover', onEmphasis)
+        .on('mouseout', onNormal);
+}
+
+var piePieceProto = PiePiece.prototype;
+
+piePieceProto.updateData = function (data, idx, firstCreate) {
+
+    var sector = this.childAt(0);
+
+    var seriesModel = data.hostModel;
+    var itemModel = data.getItemModel(idx);
+    var layout = data.getItemLayout(idx);
+    var sectorShape = extend({}, layout);
+    sectorShape.label = null;
+
+    if (firstCreate) {
+        sector.setShape(sectorShape);
+
+        var animationType = seriesModel.getShallow('animationType');
+        if (animationType === 'scale') {
+            sector.shape.r = layout.r0;
+            initProps(sector, {
+                shape: {
+                    r: layout.r
+                }
+            }, seriesModel, idx);
+        }
+        // Expansion
+        else {
+            sector.shape.endAngle = layout.startAngle;
+            updateProps(sector, {
+                shape: {
+                    endAngle: layout.endAngle
+                }
+            }, seriesModel, idx);
+        }
+
+    }
+    else {
+        updateProps(sector, {
+            shape: sectorShape
+        }, seriesModel, idx);
+    }
+
+    // Update common style
+    var visualColor = data.getItemVisual(idx, 'color');
+
+    sector.useStyle(
