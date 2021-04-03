@@ -41742,3 +41742,286 @@ var LargePath = Path.extend({
 function createLarge(seriesModel, group, incremental) {
     // TODO support polar
     var data = seriesModel.getData();
+    var startPoint = [];
+    var valueIdx = data.getLayout('valueAxisHorizontal') ? 1 : 0;
+    startPoint[1 - valueIdx] = data.getLayout('valueAxisStart');
+
+    var el = new LargePath({
+        shape: {points: data.getLayout('largePoints')},
+        incremental: !!incremental,
+        __startPoint: startPoint,
+        __valueIdx: valueIdx
+    });
+    group.add(el);
+    setLargeStyle(el, seriesModel, data);
+}
+
+function setLargeStyle(el, seriesModel, data) {
+    var borderColor = data.getVisual('borderColor') || data.getVisual('color');
+    var itemStyle = seriesModel.getModel('itemStyle').getItemStyle(['color', 'borderColor']);
+
+    el.useStyle(itemStyle);
+    el.style.fill = null;
+    el.style.stroke = borderColor;
+    el.style.lineWidth = data.getLayout('barWidth');
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// In case developer forget to include grid component
+registerLayout(curry(layout, 'bar'));
+// Should after normal bar layout, otherwise it is blocked by normal bar layout.
+registerLayout(largeLayout);
+
+registerVisual({
+    seriesType: 'bar',
+    reset: function (seriesModel) {
+        // Visual coding for legend
+        seriesModel.getData().setVisual('legendSymbol', 'roundRect');
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+/**
+ * [Usage]:
+ * (1)
+ * createListSimply(seriesModel, ['value']);
+ * (2)
+ * createListSimply(seriesModel, {
+ *     coordDimensions: ['value'],
+ *     dimensionsCount: 5
+ * });
+ *
+ * @param {module:echarts/model/Series} seriesModel
+ * @param {Object|Array.<string|Object>} opt opt or coordDimensions
+ *        The options in opt, see `echarts/data/helper/createDimensions`
+ * @param {Array.<string>} [nameList]
+ * @return {module:echarts/data/List}
+ */
+var createListSimply = function (seriesModel, opt, nameList) {
+    opt = isArray(opt) && {coordDimensions: opt} || extend({}, opt);
+
+    var source = seriesModel.getSource();
+
+    var dimensionsInfo = createDimensions(source, opt);
+
+    var list = new List(dimensionsInfo, seriesModel);
+    list.initData(source, nameList);
+
+    return list;
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Data selectable mixin for chart series.
+ * To eanble data select, option of series must have `selectedMode`.
+ * And each data item will use `selected` to toggle itself selected status
+ */
+
+var selectableMixin = {
+
+    /**
+     * @param {Array.<Object>} targetList [{name, value, selected}, ...]
+     *        If targetList is an array, it should like [{name: ..., value: ...}, ...].
+     *        If targetList is a "List", it must have coordDim: 'value' dimension and name.
+     */
+    updateSelectedMap: function (targetList) {
+        this._targetList = isArray(targetList) ? targetList.slice() : [];
+
+        this._selectTargetMap = reduce(targetList || [], function (targetMap, target) {
+            targetMap.set(target.name, target);
+            return targetMap;
+        }, createHashMap());
+    },
+
+    /**
+     * Either name or id should be passed as input here.
+     * If both of them are defined, id is used.
+     *
+     * @param {string|undefined} name name of data
+     * @param {number|undefined} id dataIndex of data
+     */
+    // PENGING If selectedMode is null ?
+    select: function (name, id) {
+        var target = id != null
+            ? this._targetList[id]
+            : this._selectTargetMap.get(name);
+        var selectedMode = this.get('selectedMode');
+        if (selectedMode === 'single') {
+            this._selectTargetMap.each(function (target) {
+                target.selected = false;
+            });
+        }
+        target && (target.selected = true);
+    },
+
+    /**
+     * Either name or id should be passed as input here.
+     * If both of them are defined, id is used.
+     *
+     * @param {string|undefined} name name of data
+     * @param {number|undefined} id dataIndex of data
+     */
+    unSelect: function (name, id) {
+        var target = id != null
+            ? this._targetList[id]
+            : this._selectTargetMap.get(name);
+        // var selectedMode = this.get('selectedMode');
+        // selectedMode !== 'single' && target && (target.selected = false);
+        target && (target.selected = false);
+    },
+
+    /**
+     * Either name or id should be passed as input here.
+     * If both of them are defined, id is used.
+     *
+     * @param {string|undefined} name name of data
+     * @param {number|undefined} id dataIndex of data
+     */
+    toggleSelected: function (name, id) {
+        var target = id != null
+            ? this._targetList[id]
+            : this._selectTargetMap.get(name);
+        if (target != null) {
+            this[target.selected ? 'unSelect' : 'select'](name, id);
+            return target.selected;
+        }
+    },
+
+    /**
+     * Either name or id should be passed as input here.
+     * If both of them are defined, id is used.
+     *
+     * @param {string|undefined} name name of data
+     * @param {number|undefined} id dataIndex of data
+     */
+    isSelected: function (name, id) {
+        var target = id != null
+            ? this._targetList[id]
+            : this._selectTargetMap.get(name);
+        return target && target.selected;
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var PieSeries = extendSeriesModel({
+
+    type: 'series.pie',
+
+    // Overwrite
+    init: function (option) {
+        PieSeries.superApply(this, 'init', arguments);
+
+        // Enable legend selection for each data item
+        // Use a function instead of direct access because data reference may changed
+        this.legendDataProvider = function () {
+            return this.getRawData();
+        };
+
+        this.updateSelectedMap(this._createSelectableList());
+
+        this._defaultLabelLine(option);
+    },
+
+    // Overwrite
+    mergeOption: function (newOption) {
+        PieSeries.superCall(this, 'mergeOption', newOption);
+
+        this.updateSelectedMap(this._createSelectableList());
+    },
+
+    getInitialData: function (option, ecModel) {
+        return createListSimply(this, ['value']);
+    },
+
+    _createSelectableList: function () {
+        var data = this.getRawData();
+        var valueDim = data.mapDimension('value');
+        var targetList = [];
+        for (var i = 0, len = data.count(); i < len; i++) {
+            targetList.push({
+                name: data.getName(i),
+                value: data.get(valueDim, i),
+                selected: retrieveRawAttr(data, i, 'selected')
+            });
+        }
+        return targetList;
+    },
+
+    // Overwrite
+    getDataParams: function (dataIndex) {
+        var data = this.getData();
+        var params = PieSeries.superCall(this, 'getDataParams', dataIndex);
+        // FIXME toFixed?
