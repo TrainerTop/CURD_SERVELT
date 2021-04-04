@@ -42775,3 +42775,277 @@ function adjustSingleSide(list, cx, cy, r, dir, viewWidth, viewHeight) {
         if (list[i].y >= cy) {
             downList.push(list[i]);
         }
+        else {
+            upList.push(list[i]);
+        }
+    }
+    changeX(upList, false, cx, cy, r, dir);
+    changeX(downList, true, cx, cy, r, dir);
+}
+
+function avoidOverlap(labelLayoutList, cx, cy, r, viewWidth, viewHeight) {
+    var leftList = [];
+    var rightList = [];
+    for (var i = 0; i < labelLayoutList.length; i++) {
+        if (isPositionCenter(labelLayoutList[i])) {
+            continue;
+        }
+        if (labelLayoutList[i].x < cx) {
+            leftList.push(labelLayoutList[i]);
+        }
+        else {
+            rightList.push(labelLayoutList[i]);
+        }
+    }
+
+    adjustSingleSide(rightList, cx, cy, r, 1, viewWidth, viewHeight);
+    adjustSingleSide(leftList, cx, cy, r, -1, viewWidth, viewHeight);
+
+    for (var i = 0; i < labelLayoutList.length; i++) {
+        if (isPositionCenter(labelLayoutList[i])) {
+            continue;
+        }
+        var linePoints = labelLayoutList[i].linePoints;
+        if (linePoints) {
+            var dist = linePoints[1][0] - linePoints[2][0];
+            if (labelLayoutList[i].x < cx) {
+                linePoints[2][0] = labelLayoutList[i].x + 3;
+            }
+            else {
+                linePoints[2][0] = labelLayoutList[i].x - 3;
+            }
+            linePoints[1][1] = linePoints[2][1] = labelLayoutList[i].y;
+            linePoints[1][0] = linePoints[2][0] + dist;
+        }
+    }
+}
+
+function isPositionCenter(layout) {
+    // Not change x for center label
+    return layout.position === 'center';
+}
+
+var labelLayout = function (seriesModel, r, viewWidth, viewHeight) {
+    var data = seriesModel.getData();
+    var labelLayoutList = [];
+    var cx;
+    var cy;
+    var hasLabelRotate = false;
+
+    data.each(function (idx) {
+        var layout = data.getItemLayout(idx);
+
+        var itemModel = data.getItemModel(idx);
+        var labelModel = itemModel.getModel('label');
+        // Use position in normal or emphasis
+        var labelPosition = labelModel.get('position') || itemModel.get('emphasis.label.position');
+
+        var labelLineModel = itemModel.getModel('labelLine');
+        var labelLineLen = labelLineModel.get('length');
+        var labelLineLen2 = labelLineModel.get('length2');
+
+        var midAngle = (layout.startAngle + layout.endAngle) / 2;
+        var dx = Math.cos(midAngle);
+        var dy = Math.sin(midAngle);
+
+        var textX;
+        var textY;
+        var linePoints;
+        var textAlign;
+
+        cx = layout.cx;
+        cy = layout.cy;
+
+        var isLabelInside = labelPosition === 'inside' || labelPosition === 'inner';
+        if (labelPosition === 'center') {
+            textX = layout.cx;
+            textY = layout.cy;
+            textAlign = 'center';
+        }
+        else {
+            var x1 = (isLabelInside ? (layout.r + layout.r0) / 2 * dx : layout.r * dx) + cx;
+            var y1 = (isLabelInside ? (layout.r + layout.r0) / 2 * dy : layout.r * dy) + cy;
+
+            textX = x1 + dx * 3;
+            textY = y1 + dy * 3;
+
+            if (!isLabelInside) {
+                // For roseType
+                var x2 = x1 + dx * (labelLineLen + r - layout.r);
+                var y2 = y1 + dy * (labelLineLen + r - layout.r);
+                var x3 = x2 + ((dx < 0 ? -1 : 1) * labelLineLen2);
+                var y3 = y2;
+
+                textX = x3 + (dx < 0 ? -5 : 5);
+                textY = y3;
+                linePoints = [[x1, y1], [x2, y2], [x3, y3]];
+            }
+
+            textAlign = isLabelInside ? 'center' : (dx > 0 ? 'left' : 'right');
+        }
+        var font = labelModel.getFont();
+
+        var labelRotate = labelModel.get('rotate')
+            ? (dx < 0 ? -midAngle + Math.PI : -midAngle) : 0;
+        var text = seriesModel.getFormattedLabel(idx, 'normal')
+                    || data.getName(idx);
+        var textRect = getBoundingRect(
+            text, font, textAlign, 'top'
+        );
+        hasLabelRotate = !!labelRotate;
+        layout.label = {
+            x: textX,
+            y: textY,
+            position: labelPosition,
+            height: textRect.height,
+            len: labelLineLen,
+            len2: labelLineLen2,
+            linePoints: linePoints,
+            textAlign: textAlign,
+            verticalAlign: 'middle',
+            rotation: labelRotate,
+            inside: isLabelInside
+        };
+
+        // Not layout the inside label
+        if (!isLabelInside) {
+            labelLayoutList.push(layout.label);
+        }
+    });
+    if (!hasLabelRotate && seriesModel.get('avoidLabelOverlap')) {
+        avoidOverlap(labelLayoutList, cx, cy, r, viewWidth, viewHeight);
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+var PI2$4 = Math.PI * 2;
+var RADIAN = Math.PI / 180;
+
+var pieLayout = function (seriesType, ecModel, api, payload) {
+    ecModel.eachSeriesByType(seriesType, function (seriesModel) {
+        var data = seriesModel.getData();
+        var valueDim = data.mapDimension('value');
+
+        var center = seriesModel.get('center');
+        var radius = seriesModel.get('radius');
+
+        if (!isArray(radius)) {
+            radius = [0, radius];
+        }
+        if (!isArray(center)) {
+            center = [center, center];
+        }
+
+        var width = api.getWidth();
+        var height = api.getHeight();
+        var size = Math.min(width, height);
+        var cx = parsePercent$1(center[0], width);
+        var cy = parsePercent$1(center[1], height);
+        var r0 = parsePercent$1(radius[0], size / 2);
+        var r = parsePercent$1(radius[1], size / 2);
+
+        var startAngle = -seriesModel.get('startAngle') * RADIAN;
+
+        var minAngle = seriesModel.get('minAngle') * RADIAN;
+
+        var validDataCount = 0;
+        data.each(valueDim, function (value) {
+            !isNaN(value) && validDataCount++;
+        });
+
+        var sum = data.getSum(valueDim);
+        // Sum may be 0
+        var unitRadian = Math.PI / (sum || validDataCount) * 2;
+
+        var clockwise = seriesModel.get('clockwise');
+
+        var roseType = seriesModel.get('roseType');
+        var stillShowZeroSum = seriesModel.get('stillShowZeroSum');
+
+        // [0...max]
+        var extent = data.getDataExtent(valueDim);
+        extent[0] = 0;
+
+        // In the case some sector angle is smaller than minAngle
+        var restAngle = PI2$4;
+        var valueSumLargerThanMinAngle = 0;
+
+        var currentAngle = startAngle;
+        var dir = clockwise ? 1 : -1;
+
+        data.each(valueDim, function (value, idx) {
+            var angle;
+            if (isNaN(value)) {
+                data.setItemLayout(idx, {
+                    angle: NaN,
+                    startAngle: NaN,
+                    endAngle: NaN,
+                    clockwise: clockwise,
+                    cx: cx,
+                    cy: cy,
+                    r0: r0,
+                    r: roseType
+                        ? NaN
+                        : r
+                });
+                return;
+            }
+
+            // FIXME 兼容 2.0 但是 roseType 是 area 的时候才是这样？
+            if (roseType !== 'area') {
+                angle = (sum === 0 && stillShowZeroSum)
+                    ? unitRadian : (value * unitRadian);
+            }
+            else {
+                angle = PI2$4 / validDataCount;
+            }
+
+            if (angle < minAngle) {
+                angle = minAngle;
+                restAngle -= minAngle;
+            }
+            else {
+                valueSumLargerThanMinAngle += value;
+            }
+
+            var endAngle = currentAngle + dir * angle;
+            data.setItemLayout(idx, {
+                angle: angle,
+                startAngle: currentAngle,
+                endAngle: endAngle,
+                clockwise: clockwise,
+                cx: cx,
+                cy: cy,
+                r0: r0,
+                r: roseType
+                    ? linearMap(value, extent, [r0, r])
+                    : r
+            });
+
+            currentAngle = endAngle;
+        });
+
+        // Some sector is constrained by minAngle
+        // Rest sectors needs recalculate angle
+        if (restAngle < PI2$4 && validDataCount) {
+            // Average the angle if rest angle is not enough after all angles is
+            // Constrained by minAngle
