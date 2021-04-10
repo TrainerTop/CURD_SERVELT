@@ -44134,3 +44134,287 @@ var RadarModel = extendComponentModel({
 * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 * KIND, either express or implied.  See the License for the
 * specific language governing permissions and limitations
+* under the License.
+*/
+
+var axisBuilderAttrs$1 = [
+    'axisLine', 'axisTickLabel', 'axisName'
+];
+
+extendComponentView({
+
+    type: 'radar',
+
+    render: function (radarModel, ecModel, api) {
+        var group = this.group;
+        group.removeAll();
+
+        this._buildAxes(radarModel);
+        this._buildSplitLineAndArea(radarModel);
+    },
+
+    _buildAxes: function (radarModel) {
+        var radar = radarModel.coordinateSystem;
+        var indicatorAxes = radar.getIndicatorAxes();
+        var axisBuilders = map(indicatorAxes, function (indicatorAxis) {
+            var axisBuilder = new AxisBuilder(indicatorAxis.model, {
+                position: [radar.cx, radar.cy],
+                rotation: indicatorAxis.angle,
+                labelDirection: -1,
+                tickDirection: -1,
+                nameDirection: 1
+            });
+            return axisBuilder;
+        });
+
+        each$1(axisBuilders, function (axisBuilder) {
+            each$1(axisBuilderAttrs$1, axisBuilder.add, axisBuilder);
+            this.group.add(axisBuilder.getGroup());
+        }, this);
+    },
+
+    _buildSplitLineAndArea: function (radarModel) {
+        var radar = radarModel.coordinateSystem;
+        var indicatorAxes = radar.getIndicatorAxes();
+        if (!indicatorAxes.length) {
+            return;
+        }
+        var shape = radarModel.get('shape');
+        var splitLineModel = radarModel.getModel('splitLine');
+        var splitAreaModel = radarModel.getModel('splitArea');
+        var lineStyleModel = splitLineModel.getModel('lineStyle');
+        var areaStyleModel = splitAreaModel.getModel('areaStyle');
+
+        var showSplitLine = splitLineModel.get('show');
+        var showSplitArea = splitAreaModel.get('show');
+        var splitLineColors = lineStyleModel.get('color');
+        var splitAreaColors = areaStyleModel.get('color');
+
+        splitLineColors = isArray(splitLineColors) ? splitLineColors : [splitLineColors];
+        splitAreaColors = isArray(splitAreaColors) ? splitAreaColors : [splitAreaColors];
+
+        var splitLines = [];
+        var splitAreas = [];
+
+        function getColorIndex(areaOrLine, areaOrLineColorList, idx) {
+            var colorIndex = idx % areaOrLineColorList.length;
+            areaOrLine[colorIndex] = areaOrLine[colorIndex] || [];
+            return colorIndex;
+        }
+
+        if (shape === 'circle') {
+            var ticksRadius = indicatorAxes[0].getTicksCoords();
+            var cx = radar.cx;
+            var cy = radar.cy;
+            for (var i = 0; i < ticksRadius.length; i++) {
+                if (showSplitLine) {
+                    var colorIndex = getColorIndex(splitLines, splitLineColors, i);
+                    splitLines[colorIndex].push(new Circle({
+                        shape: {
+                            cx: cx,
+                            cy: cy,
+                            r: ticksRadius[i].coord
+                        }
+                    }));
+                }
+                if (showSplitArea && i < ticksRadius.length - 1) {
+                    var colorIndex = getColorIndex(splitAreas, splitAreaColors, i);
+                    splitAreas[colorIndex].push(new Ring({
+                        shape: {
+                            cx: cx,
+                            cy: cy,
+                            r0: ticksRadius[i].coord,
+                            r: ticksRadius[i + 1].coord
+                        }
+                    }));
+                }
+            }
+        }
+        // Polyyon
+        else {
+            var realSplitNumber;
+            var axesTicksPoints = map(indicatorAxes, function (indicatorAxis, idx) {
+                var ticksCoords = indicatorAxis.getTicksCoords();
+                realSplitNumber = realSplitNumber == null
+                    ? ticksCoords.length - 1
+                    : Math.min(ticksCoords.length - 1, realSplitNumber);
+                return map(ticksCoords, function (tickCoord) {
+                    return radar.coordToPoint(tickCoord.coord, idx);
+                });
+            });
+
+            var prevPoints = [];
+            for (var i = 0; i <= realSplitNumber; i++) {
+                var points = [];
+                for (var j = 0; j < indicatorAxes.length; j++) {
+                    points.push(axesTicksPoints[j][i]);
+                }
+                // Close
+                if (points[0]) {
+                    points.push(points[0].slice());
+                }
+                else {
+                    if (__DEV__) {
+                        console.error('Can\'t draw value axis ' + i);
+                    }
+                }
+
+                if (showSplitLine) {
+                    var colorIndex = getColorIndex(splitLines, splitLineColors, i);
+                    splitLines[colorIndex].push(new Polyline({
+                        shape: {
+                            points: points
+                        }
+                    }));
+                }
+                if (showSplitArea && prevPoints) {
+                    var colorIndex = getColorIndex(splitAreas, splitAreaColors, i - 1);
+                    splitAreas[colorIndex].push(new Polygon({
+                        shape: {
+                            points: points.concat(prevPoints)
+                        }
+                    }));
+                }
+                prevPoints = points.slice().reverse();
+            }
+        }
+
+        var lineStyle = lineStyleModel.getLineStyle();
+        var areaStyle = areaStyleModel.getAreaStyle();
+        // Add splitArea before splitLine
+        each$1(splitAreas, function (splitAreas, idx) {
+            this.group.add(mergePath(
+                splitAreas, {
+                    style: defaults({
+                        stroke: 'none',
+                        fill: splitAreaColors[idx % splitAreaColors.length]
+                    }, areaStyle),
+                    silent: true
+                }
+            ));
+        }, this);
+
+        each$1(splitLines, function (splitLines, idx) {
+            this.group.add(mergePath(
+                splitLines, {
+                    style: defaults({
+                        fill: 'none',
+                        stroke: splitLineColors[idx % splitLineColors.length]
+                    }, lineStyle),
+                    silent: true
+                }
+            ));
+        }, this);
+
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var RadarSeries = SeriesModel.extend({
+
+    type: 'series.radar',
+
+    dependencies: ['radar'],
+
+
+    // Overwrite
+    init: function (option) {
+        RadarSeries.superApply(this, 'init', arguments);
+
+        // Enable legend selection for each data item
+        // Use a function instead of direct access because data reference may changed
+        this.legendDataProvider = function () {
+            return this.getRawData();
+        };
+    },
+
+    getInitialData: function (option, ecModel) {
+        return createListSimply(this, {
+            generateCoord: 'indicator_',
+            generateCoordCount: Infinity
+        });
+    },
+
+    formatTooltip: function (dataIndex) {
+        var data = this.getData();
+        var coordSys = this.coordinateSystem;
+        var indicatorAxes = coordSys.getIndicatorAxes();
+        var name = this.getData().getName(dataIndex);
+        return encodeHTML(name === '' ? this.name : name) + '<br/>'
+            + map(indicatorAxes, function (axis, idx) {
+                var val = data.get(data.mapDimension(axis.dim), dataIndex);
+                return encodeHTML(axis.name + ' : ' + val);
+            }).join('<br />');
+    },
+
+    defaultOption: {
+        zlevel: 0,
+        z: 2,
+        coordinateSystem: 'radar',
+        legendHoverLink: true,
+        radarIndex: 0,
+        lineStyle: {
+            width: 2,
+            type: 'solid'
+        },
+        label: {
+            position: 'top'
+        },
+        // areaStyle: {
+        // },
+        // itemStyle: {}
+        symbol: 'emptyCircle',
+        symbolSize: 4
+        // symbolRotate: null
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
