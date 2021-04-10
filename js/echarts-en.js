@@ -43848,3 +43848,289 @@ Radar.prototype.resize = function (radarModel, api) {
     this.r = parsePercent$1(radius[1], viewSize);
 
     each$1(this._indicatorAxes, function (indicatorAxis, idx) {
+        indicatorAxis.setExtent(this.r0, this.r);
+        var angle = (this.startAngle + idx * Math.PI * 2 / this._indicatorAxes.length);
+        // Normalize to [-PI, PI]
+        angle = Math.atan2(Math.sin(angle), Math.cos(angle));
+        indicatorAxis.angle = angle;
+    }, this);
+};
+
+Radar.prototype.update = function (ecModel, api) {
+    var indicatorAxes = this._indicatorAxes;
+    var radarModel = this._model;
+    each$1(indicatorAxes, function (indicatorAxis) {
+        indicatorAxis.scale.setExtent(Infinity, -Infinity);
+    });
+    ecModel.eachSeriesByType('radar', function (radarSeries, idx) {
+        if (radarSeries.get('coordinateSystem') !== 'radar'
+            || ecModel.getComponent('radar', radarSeries.get('radarIndex')) !== radarModel
+        ) {
+            return;
+        }
+        var data = radarSeries.getData();
+        each$1(indicatorAxes, function (indicatorAxis) {
+            indicatorAxis.scale.unionExtentFromData(data, data.mapDimension(indicatorAxis.dim));
+        });
+    }, this);
+
+    var splitNumber = radarModel.get('splitNumber');
+
+    function increaseInterval(interval) {
+        var exp10 = Math.pow(10, Math.floor(Math.log(interval) / Math.LN10));
+        // Increase interval
+        var f = interval / exp10;
+        if (f === 2) {
+            f = 5;
+        }
+        else { // f is 2 or 5
+            f *= 2;
+        }
+        return f * exp10;
+    }
+    // Force all the axis fixing the maxSplitNumber.
+    each$1(indicatorAxes, function (indicatorAxis, idx) {
+        var rawExtent = getScaleExtent(indicatorAxis.scale, indicatorAxis.model);
+        niceScaleExtent(indicatorAxis.scale, indicatorAxis.model);
+
+        var axisModel = indicatorAxis.model;
+        var scale = indicatorAxis.scale;
+        var fixedMin = axisModel.getMin();
+        var fixedMax = axisModel.getMax();
+        var interval = scale.getInterval();
+
+        if (fixedMin != null && fixedMax != null) {
+            // User set min, max, divide to get new interval
+            scale.setExtent(+fixedMin, +fixedMax);
+            scale.setInterval(
+                (fixedMax - fixedMin) / splitNumber
+            );
+        }
+        else if (fixedMin != null) {
+            var max;
+            // User set min, expand extent on the other side
+            do {
+                max = fixedMin + interval * splitNumber;
+                scale.setExtent(+fixedMin, max);
+                // Interval must been set after extent
+                // FIXME
+                scale.setInterval(interval);
+
+                interval = increaseInterval(interval);
+            } while (max < rawExtent[1] && isFinite(max) && isFinite(rawExtent[1]));
+        }
+        else if (fixedMax != null) {
+            var min;
+            // User set min, expand extent on the other side
+            do {
+                min = fixedMax - interval * splitNumber;
+                scale.setExtent(min, +fixedMax);
+                scale.setInterval(interval);
+                interval = increaseInterval(interval);
+            } while (min > rawExtent[0] && isFinite(min) && isFinite(rawExtent[0]));
+        }
+        else {
+            var nicedSplitNumber = scale.getTicks().length - 1;
+            if (nicedSplitNumber > splitNumber) {
+                interval = increaseInterval(interval);
+            }
+            // PENDING
+            var center = Math.round((rawExtent[0] + rawExtent[1]) / 2 / interval) * interval;
+            var halfSplitNumber = Math.round(splitNumber / 2);
+            scale.setExtent(
+                round$2(center - halfSplitNumber * interval),
+                round$2(center + (splitNumber - halfSplitNumber) * interval)
+            );
+            scale.setInterval(interval);
+        }
+    });
+};
+
+/**
+ * Radar dimensions is based on the data
+ * @type {Array}
+ */
+Radar.dimensions = [];
+
+Radar.create = function (ecModel, api) {
+    var radarList = [];
+    ecModel.eachComponent('radar', function (radarModel) {
+        var radar = new Radar(radarModel, ecModel, api);
+        radarList.push(radar);
+        radarModel.coordinateSystem = radar;
+    });
+    ecModel.eachSeriesByType('radar', function (radarSeries) {
+        if (radarSeries.get('coordinateSystem') === 'radar') {
+            // Inject coordinate system
+            radarSeries.coordinateSystem = radarList[radarSeries.get('radarIndex') || 0];
+        }
+    });
+    return radarList;
+};
+
+CoordinateSystemManager.register('radar', Radar);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var valueAxisDefault = axisDefault.valueAxis;
+
+function defaultsShow(opt, show) {
+    return defaults({
+        show: show
+    }, opt);
+}
+
+var RadarModel = extendComponentModel({
+
+    type: 'radar',
+
+    optionUpdated: function () {
+        var boundaryGap = this.get('boundaryGap');
+        var splitNumber = this.get('splitNumber');
+        var scale = this.get('scale');
+        var axisLine = this.get('axisLine');
+        var axisTick = this.get('axisTick');
+        var axisLabel = this.get('axisLabel');
+        var nameTextStyle = this.get('name');
+        var showName = this.get('name.show');
+        var nameFormatter = this.get('name.formatter');
+        var nameGap = this.get('nameGap');
+        var triggerEvent = this.get('triggerEvent');
+
+        var indicatorModels = map(this.get('indicator') || [], function (indicatorOpt) {
+            // PENDING
+            if (indicatorOpt.max != null && indicatorOpt.max > 0 && !indicatorOpt.min) {
+                indicatorOpt.min = 0;
+            }
+            else if (indicatorOpt.min != null && indicatorOpt.min < 0 && !indicatorOpt.max) {
+                indicatorOpt.max = 0;
+            }
+            var iNameTextStyle = nameTextStyle;
+            if (indicatorOpt.color != null) {
+                iNameTextStyle = defaults({color: indicatorOpt.color}, nameTextStyle);
+            }
+            // Use same configuration
+            indicatorOpt = merge(clone(indicatorOpt), {
+                boundaryGap: boundaryGap,
+                splitNumber: splitNumber,
+                scale: scale,
+                axisLine: axisLine,
+                axisTick: axisTick,
+                axisLabel: axisLabel,
+                // Competitable with 2 and use text
+                name: indicatorOpt.text,
+                nameLocation: 'end',
+                nameGap: nameGap,
+                // min: 0,
+                nameTextStyle: iNameTextStyle,
+                triggerEvent: triggerEvent
+            }, false);
+            if (!showName) {
+                indicatorOpt.name = '';
+            }
+            if (typeof nameFormatter === 'string') {
+                var indName = indicatorOpt.name;
+                indicatorOpt.name = nameFormatter.replace('{value}', indName != null ? indName : '');
+            }
+            else if (typeof nameFormatter === 'function') {
+                indicatorOpt.name = nameFormatter(
+                    indicatorOpt.name, indicatorOpt
+                );
+            }
+            var model = extend(
+                new Model(indicatorOpt, null, this.ecModel),
+                axisModelCommonMixin
+            );
+
+            // For triggerEvent.
+            model.mainType = 'radar';
+            model.componentIndex = this.componentIndex;
+
+            return model;
+        }, this);
+
+        this.getIndicatorModels = function () {
+            return indicatorModels;
+        };
+    },
+
+    defaultOption: {
+
+        zlevel: 0,
+
+        z: 0,
+
+        center: ['50%', '50%'],
+
+        radius: '75%',
+
+        startAngle: 90,
+
+        name: {
+            show: true
+            // formatter: null
+            // textStyle: {}
+        },
+
+        boundaryGap: [0, 0],
+
+        splitNumber: 5,
+
+        nameGap: 15,
+
+        scale: false,
+
+        // Polygon or circle
+        shape: 'polygon',
+
+        axisLine: merge(
+            {
+                lineStyle: {
+                    color: '#bbb'
+                }
+            },
+            valueAxisDefault.axisLine
+        ),
+        axisLabel: defaultsShow(valueAxisDefault.axisLabel, false),
+        axisTick: defaultsShow(valueAxisDefault.axisTick, false),
+        splitLine: defaultsShow(valueAxisDefault.splitLine, true),
+        splitArea: defaultsShow(valueAxisDefault.splitArea, true),
+
+        // {text, min, max}
+        indicator: []
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
