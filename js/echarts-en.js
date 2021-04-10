@@ -43603,3 +43603,248 @@ extendChartView({
             symbolDraw && symbolDraw.remove();
             symbolDraw = this._symbolDraw = isLargeDraw
                 ? new LargeSymbolDraw()
+                : new SymbolDraw();
+            this._isLargeDraw = isLargeDraw;
+            this.group.removeAll();
+        }
+
+        this.group.add(symbolDraw.group);
+
+        return symbolDraw;
+    },
+
+    remove: function (ecModel, api) {
+        this._symbolDraw && this._symbolDraw.remove(true);
+        this._symbolDraw = null;
+    },
+
+    dispose: function () {}
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// import * as zrUtil from 'zrender/src/core/util';
+
+// In case developer forget to include grid component
+registerVisual(visualSymbol('scatter', 'circle'));
+registerLayout(pointsLayout('scatter'));
+
+// echarts.registerProcessor(function (ecModel, api) {
+//     ecModel.eachSeriesByType('scatter', function (seriesModel) {
+//         var data = seriesModel.getData();
+//         var coordSys = seriesModel.coordinateSystem;
+//         if (coordSys.type !== 'geo') {
+//             return;
+//         }
+//         var startPt = coordSys.pointToData([0, 0]);
+//         var endPt = coordSys.pointToData([api.getWidth(), api.getHeight()]);
+
+//         var dims = zrUtil.map(coordSys.dimensions, function (dim) {
+//             return data.mapDimension(dim);
+//         });
+//         var range = {};
+//         range[dims[0]] = [Math.min(startPt[0], endPt[0]), Math.max(startPt[0], endPt[0])];
+//         range[dims[1]] = [Math.min(startPt[1], endPt[1]), Math.max(startPt[1], endPt[1])];
+
+//         data.selectRange(range);
+//     });
+// });
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+function IndicatorAxis(dim, scale, radiusExtent) {
+    Axis.call(this, dim, scale, radiusExtent);
+
+    /**
+     * Axis type
+     *  - 'category'
+     *  - 'value'
+     *  - 'time'
+     *  - 'log'
+     * @type {string}
+     */
+    this.type = 'value';
+
+    this.angle = 0;
+
+    /**
+     * Indicator name
+     * @type {string}
+     */
+    this.name = '';
+    /**
+     * @type {module:echarts/model/Model}
+     */
+    this.model;
+}
+
+inherits(IndicatorAxis, Axis);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// TODO clockwise
+
+function Radar(radarModel, ecModel, api) {
+
+    this._model = radarModel;
+    /**
+     * Radar dimensions
+     * @type {Array.<string>}
+     */
+    this.dimensions = [];
+
+    this._indicatorAxes = map(radarModel.getIndicatorModels(), function (indicatorModel, idx) {
+        var dim = 'indicator_' + idx;
+        var indicatorAxis = new IndicatorAxis(dim, new IntervalScale());
+        indicatorAxis.name = indicatorModel.get('name');
+        // Inject model and axis
+        indicatorAxis.model = indicatorModel;
+        indicatorModel.axis = indicatorAxis;
+        this.dimensions.push(dim);
+        return indicatorAxis;
+    }, this);
+
+    this.resize(radarModel, api);
+
+    /**
+     * @type {number}
+     * @readOnly
+     */
+    this.cx;
+    /**
+     * @type {number}
+     * @readOnly
+     */
+    this.cy;
+    /**
+     * @type {number}
+     * @readOnly
+     */
+    this.r;
+    /**
+     * @type {number}
+     * @readOnly
+     */
+    this.r0;
+    /**
+     * @type {number}
+     * @readOnly
+     */
+    this.startAngle;
+}
+
+Radar.prototype.getIndicatorAxes = function () {
+    return this._indicatorAxes;
+};
+
+Radar.prototype.dataToPoint = function (value, indicatorIndex) {
+    var indicatorAxis = this._indicatorAxes[indicatorIndex];
+
+    return this.coordToPoint(indicatorAxis.dataToCoord(value), indicatorIndex);
+};
+
+Radar.prototype.coordToPoint = function (coord, indicatorIndex) {
+    var indicatorAxis = this._indicatorAxes[indicatorIndex];
+    var angle = indicatorAxis.angle;
+    var x = this.cx + coord * Math.cos(angle);
+    var y = this.cy - coord * Math.sin(angle);
+    return [x, y];
+};
+
+Radar.prototype.pointToData = function (pt) {
+    var dx = pt[0] - this.cx;
+    var dy = pt[1] - this.cy;
+    var radius = Math.sqrt(dx * dx + dy * dy);
+    dx /= radius;
+    dy /= radius;
+
+    var radian = Math.atan2(-dy, dx);
+
+    // Find the closest angle
+    // FIXME index can calculated directly
+    var minRadianDiff = Infinity;
+    var closestAxis;
+    var closestAxisIdx = -1;
+    for (var i = 0; i < this._indicatorAxes.length; i++) {
+        var indicatorAxis = this._indicatorAxes[i];
+        var diff = Math.abs(radian - indicatorAxis.angle);
+        if (diff < minRadianDiff) {
+            closestAxis = indicatorAxis;
+            closestAxisIdx = i;
+            minRadianDiff = diff;
+        }
+    }
+
+    return [closestAxisIdx, +(closestAxis && closestAxis.coodToData(radius))];
+};
+
+Radar.prototype.resize = function (radarModel, api) {
+    var center = radarModel.get('center');
+    var viewWidth = api.getWidth();
+    var viewHeight = api.getHeight();
+    var viewSize = Math.min(viewWidth, viewHeight) / 2;
+    this.cx = parsePercent$1(center[0], viewWidth);
+    this.cy = parsePercent$1(center[1], viewHeight);
+
+    this.startAngle = radarModel.get('startAngle') * Math.PI / 180;
+
+    // radius may be single value like `20`, `'80%'`, or array like `[10, '80%']`
+    var radius = radarModel.get('radius');
+    if (typeof radius === 'string' || typeof radius === 'number') {
+        radius = [0, radius];
+    }
+    this.r0 = parsePercent$1(radius[0], viewSize);
+    this.r = parsePercent$1(radius[1], viewSize);
+
+    each$1(this._indicatorAxes, function (indicatorAxis, idx) {
