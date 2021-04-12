@@ -44661,3 +44661,267 @@ extendChartView({
 var radarLayout = function (ecModel) {
     ecModel.eachSeriesByType('radar', function (seriesModel) {
         var data = seriesModel.getData();
+        var points = [];
+        var coordSys = seriesModel.coordinateSystem;
+        if (!coordSys) {
+            return;
+        }
+
+        function pointsConverter(val, idx) {
+            points[idx] = points[idx] || [];
+            points[idx][i] = coordSys.dataToPoint(val, i);
+        }
+        var axes = coordSys.getIndicatorAxes();
+        for (var i = 0; i < axes.length; i++) {
+            data.each(data.mapDimension(axes[i].dim), pointsConverter);
+        }
+
+        data.each(function (idx) {
+            // Close polygon
+            points[idx][0] && points[idx].push(points[idx][0].slice());
+            data.setItemLayout(idx, points[idx]);
+        });
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Backward compat for radar chart in 2
+var backwardCompat$1 = function (option) {
+    var polarOptArr = option.polar;
+    if (polarOptArr) {
+        if (!isArray(polarOptArr)) {
+            polarOptArr = [polarOptArr];
+        }
+        var polarNotRadar = [];
+        each$1(polarOptArr, function (polarOpt, idx) {
+            if (polarOpt.indicator) {
+                if (polarOpt.type && !polarOpt.shape) {
+                    polarOpt.shape = polarOpt.type;
+                }
+                option.radar = option.radar || [];
+                if (!isArray(option.radar)) {
+                    option.radar = [option.radar];
+                }
+                option.radar.push(polarOpt);
+            }
+            else {
+                polarNotRadar.push(polarOpt);
+            }
+        });
+        option.polar = polarNotRadar;
+    }
+    each$1(option.series, function (seriesOpt) {
+        if (seriesOpt && seriesOpt.type === 'radar' && seriesOpt.polarIndex) {
+            seriesOpt.radarIndex = seriesOpt.polarIndex;
+        }
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+// Must use radar component
+registerVisual(dataColor('radar'));
+registerVisual(visualSymbol('radar', 'circle'));
+registerLayout(radarLayout);
+registerProcessor(dataFilter('radar'));
+registerPreprocessor(backwardCompat$1);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Fix for 南海诸岛
+
+var geoCoord = [126, 25];
+
+var points$1 = [
+    [[0, 3.5], [7, 11.2], [15, 11.9], [30, 7], [42, 0.7], [52, 0.7],
+        [56, 7.7], [59, 0.7], [64, 0.7], [64, 0], [5, 0], [0, 3.5]],
+    [[13, 16.1], [19, 14.7], [16, 21.7], [11, 23.1], [13, 16.1]],
+    [[12, 32.2], [14, 38.5], [15, 38.5], [13, 32.2], [12, 32.2]],
+    [[16, 47.6], [12, 53.2], [13, 53.2], [18, 47.6], [16, 47.6]],
+    [[6, 64.4], [8, 70], [9, 70], [8, 64.4], [6, 64.4]],
+    [[23, 82.6], [29, 79.8], [30, 79.8], [25, 82.6], [23, 82.6]],
+    [[37, 70.7], [43, 62.3], [44, 62.3], [39, 70.7], [37, 70.7]],
+    [[48, 51.1], [51, 45.5], [53, 45.5], [50, 51.1], [48, 51.1]],
+    [[51, 35], [51, 28.7], [53, 28.7], [53, 35], [51, 35]],
+    [[52, 22.4], [55, 17.5], [56, 17.5], [53, 22.4], [52, 22.4]],
+    [[58, 12.6], [62, 7], [63, 7], [60, 12.6], [58, 12.6]],
+    [[0, 3.5], [0, 93.1], [64, 93.1], [64, 0], [63, 0], [63, 92.4],
+        [1, 92.4], [1, 3.5], [0, 3.5]]
+];
+
+for (var i$1 = 0; i$1 < points$1.length; i$1++) {
+    for (var k = 0; k < points$1[i$1].length; k++) {
+        points$1[i$1][k][0] /= 10.5;
+        points$1[i$1][k][1] /= -10.5 / 0.75;
+
+        points$1[i$1][k][0] += geoCoord[0];
+        points$1[i$1][k][1] += geoCoord[1];
+    }
+}
+
+var fixNanhai = function (mapType, regions) {
+    if (mapType === 'china') {
+        regions.push(new Region(
+            '南海诸岛',
+            map(points$1, function (exterior) {
+                return {
+                    type: 'polygon',
+                    exterior: exterior
+                };
+            }), geoCoord
+        ));
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var coordsOffsetMap = {
+    '南海诸岛': [32, 80],
+    // 全国
+    '广东': [0, -10],
+    '香港': [10, 5],
+    '澳门': [-10, 10],
+    //'北京': [-10, 0],
+    '天津': [5, 5]
+};
+
+var fixTextCoord = function (mapType, region) {
+    if (mapType === 'china') {
+        var coordFix = coordsOffsetMap[region.name];
+        if (coordFix) {
+            var cp = region.center;
+            cp[0] += coordFix[0] / 10.5;
+            cp[1] += -coordFix[1] / (10.5 / 0.75);
+        }
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var geoCoordMap = {
+    'Russia': [100, 60],
+    'United States': [-99, 38],
+    'United States of America': [-99, 38]
+};
+
+var fixGeoCoord = function (mapType, region) {
+    if (mapType === 'world') {
+        var geoCoord = geoCoordMap[region.name];
+        if (geoCoord) {
+            var cp = region.center;
+            cp[0] = geoCoord[0];
+            cp[1] = geoCoord[1];
+        }
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Fix for 钓鱼岛
+
+// var Region = require('../Region');
+// var zrUtil = require('zrender/src/core/util');
