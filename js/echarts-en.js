@@ -45180,3 +45180,233 @@ function buildGraphic(mapRecord, boundingRect) {
 *
 *   http://www.apache.org/licenses/LICENSE-2.0
 *
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var loaders = {
+    geoJSON: geoJSONLoader,
+    svg: geoSVGLoader
+};
+
+var geoSourceManager = {
+
+    /**
+     * @param {string} mapName
+     * @param {Object} nameMap
+     * @return {Object} source {regions, regionsMap, nameCoordMap, boundingRect}
+     */
+    load: function (mapName, nameMap) {
+        var regions = [];
+        var regionsMap = createHashMap();
+        var nameCoordMap = createHashMap();
+        var boundingRect;
+        var mapRecords = retrieveMap(mapName);
+
+        each$1(mapRecords, function (record) {
+            var singleSource = loaders[record.type].load(mapName, record);
+
+            each$1(singleSource.regions, function (region) {
+                var regionName = region.name;
+
+                // Try use the alias in geoNameMap
+                if (nameMap && nameMap.hasOwnProperty(regionName)) {
+                    region = region.cloneShallow(regionName = nameMap[regionName]);
+                }
+
+                regions.push(region);
+                regionsMap.set(regionName, region);
+                nameCoordMap.set(regionName, region.center);
+            });
+
+            var rect = singleSource.boundingRect;
+            if (rect) {
+                boundingRect
+                    ? boundingRect.union(rect)
+                    : (boundingRect = rect.clone());
+            }
+        });
+
+        return {
+            regions: regions,
+            regionsMap: regionsMap,
+            nameCoordMap: nameCoordMap,
+            // FIXME Always return new ?
+            boundingRect: boundingRect || new BoundingRect(0, 0, 0, 0)
+        };
+    },
+
+    /**
+     * @param {string} mapName
+     * @param {string} hostKey For cache.
+     * @return {Array.<module:zrender/Element>} Roots.
+     */
+    makeGraphic: makeInvoker('makeGraphic'),
+
+    /**
+     * @param {string} mapName
+     * @param {string} hostKey For cache.
+     */
+    removeGraphic: makeInvoker('removeGraphic')
+};
+
+function makeInvoker(methodName) {
+    return function (mapName, hostKey) {
+        var mapRecords = retrieveMap(mapName);
+        var results = [];
+
+        each$1(mapRecords, function (record) {
+            var method = loaders[record.type][methodName];
+            method && results.push(method(mapName, record, hostKey));
+        });
+
+        return results;
+    };
+}
+
+function mapNotExistsError(mapName) {
+    if (__DEV__) {
+        console.error(
+            'Map ' + mapName + ' not exists. You can download map file on http://echarts.baidu.com/download-map.html'
+        );
+    }
+}
+
+function retrieveMap(mapName) {
+    var mapRecords = mapDataStorage.retrieveMap(mapName) || [];
+
+    if (__DEV__) {
+        if (!mapRecords.length) {
+            mapNotExistsError(mapName);
+        }
+    }
+
+    return mapRecords;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var MapSeries = SeriesModel.extend({
+
+    type: 'series.map',
+
+    dependencies: ['geo'],
+
+    layoutMode: 'box',
+
+    /**
+     * Only first map series of same mapType will drawMap
+     * @type {boolean}
+     */
+    needsDrawMap: false,
+
+    /**
+     * Group of all map series with same mapType
+     * @type {boolean}
+     */
+    seriesGroup: [],
+
+    getInitialData: function (option) {
+        var data = createListSimply(this, ['value']);
+        var valueDim = data.mapDimension('value');
+        var dataNameMap = createHashMap();
+        var selectTargetList = [];
+        var toAppendNames = [];
+
+        for (var i = 0, len = data.count(); i < len; i++) {
+            var name = data.getName(i);
+            dataNameMap.set(name, true);
+            selectTargetList.push({
+                name: name,
+                value: data.get(valueDim, i),
+                selected: retrieveRawAttr(data, i, 'selected')
+            });
+        }
+
+        var geoSource = geoSourceManager.load(this.getMapType(), this.option.nameMap);
+        each$1(geoSource.regions, function (region) {
+            var name = region.name;
+            if (!dataNameMap.get(name)) {
+                selectTargetList.push({name: name});
+                toAppendNames.push(name);
+            }
+        });
+
+        this.updateSelectedMap(selectTargetList);
+
+        // Complete data with missing regions. The consequent processes (like visual
+        // map and render) can not be performed without a "full data". For example,
+        // find `dataIndex` by name.
+        data.appendValues([], toAppendNames);
+
+        return data;
+    },
+
+    /**
+     * If no host geo model, return null, which means using a
+     * inner exclusive geo model.
+     */
+    getHostGeoModel: function () {
+        var geoIndex = this.option.geoIndex;
+        return geoIndex != null
+            ? this.dependentModels.geo[geoIndex]
+            : null;
+    },
+
+    getMapType: function () {
+        return (this.getHostGeoModel() || this).option.map;
+    },
+
+    // _fillOption: function (option, mapName) {
+        // Shallow clone
+        // option = zrUtil.extend({}, option);
+
+        // option.data = geoCreator.getFilledRegions(option.data, mapName, option.nameMap);
+
+        // return option;
+    // },
+
+    getRawValue: function (dataIndex) {
+        // Use value stored in data instead because it is calculated from multiple series
+        // FIXME Provide all value of multiple series ?
+        var data = this.getData();
+        return data.get(data.mapDimension('value'), dataIndex);
+    },
+
+    /**
+     * Get model of region
+     * @param  {string} name
+     * @return {module:echarts/model/Model}
+     */
+    getRegionModel: function (regionName) {
+        var data = this.getData();
+        return data.getItemModel(data.indexOfName(regionName));
+    },
+
+    /**
+     * Map tooltip formatter
+     *
+     * @param {number} dataIndex
+     */
+    formatTooltip: function (dataIndex) {
