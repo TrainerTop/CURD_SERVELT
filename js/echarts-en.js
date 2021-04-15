@@ -44925,3 +44925,258 @@ var fixGeoCoord = function (mapType, region) {
 
 // var Region = require('../Region');
 // var zrUtil = require('zrender/src/core/util');
+
+// var geoCoord = [126, 25];
+
+var points$2 = [
+    [
+        [123.45165252685547, 25.73527164402261],
+        [123.49731445312499, 25.73527164402261],
+        [123.49731445312499, 25.750734064600884],
+        [123.45165252685547, 25.750734064600884],
+        [123.45165252685547, 25.73527164402261]
+    ]
+];
+
+var fixDiaoyuIsland = function (mapType, region) {
+    if (mapType === 'china' && region.name === '台湾') {
+        region.geometries.push({
+            type: 'polygon',
+            exterior: points$2[0]
+        });
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Built-in GEO fixer.
+var inner$7 = makeInner();
+
+var geoJSONLoader = {
+
+    /**
+     * @param {string} mapName
+     * @param {Object} mapRecord {specialAreas, geoJSON}
+     * @return {Object} {regions, boundingRect}
+     */
+    load: function (mapName, mapRecord) {
+
+        var parsed = inner$7(mapRecord).parsed;
+
+        if (parsed) {
+            return parsed;
+        }
+
+        var specialAreas = mapRecord.specialAreas || {};
+        var geoJSON = mapRecord.geoJSON;
+        var regions;
+
+        // https://jsperf.com/try-catch-performance-overhead
+        try {
+            regions = geoJSON ? parseGeoJson$1(geoJSON) : [];
+        }
+        catch (e) {
+            throw new Error('Invalid geoJson format\n' + e.message);
+        }
+
+        each$1(regions, function (region) {
+            var regionName = region.name;
+
+            fixTextCoord(mapName, region);
+            fixGeoCoord(mapName, region);
+            fixDiaoyuIsland(mapName, region);
+
+            // Some area like Alaska in USA map needs to be tansformed
+            // to look better
+            var specialArea = specialAreas[regionName];
+            if (specialArea) {
+                region.transformTo(
+                    specialArea.left, specialArea.top, specialArea.width, specialArea.height
+                );
+            }
+        });
+
+        fixNanhai(mapName, regions);
+
+        return (inner$7(mapRecord).parsed = {
+            regions: regions,
+            boundingRect: getBoundingRect$1(regions)
+        });
+    }
+};
+
+function getBoundingRect$1(regions) {
+    var rect;
+    for (var i = 0; i < regions.length; i++) {
+        var regionRect = regions[i].getBoundingRect();
+        rect = rect || regionRect.clone();
+        rect.union(regionRect);
+    }
+    return rect;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var inner$8 = makeInner();
+
+var geoSVGLoader = {
+
+    /**
+     * @param {string} mapName
+     * @param {Object} mapRecord {specialAreas, geoJSON}
+     * @return {Object} {root, boundingRect}
+     */
+    load: function (mapName, mapRecord) {
+        var originRoot = inner$8(mapRecord).originRoot;
+        if (originRoot) {
+            return {
+                root: originRoot,
+                boundingRect: inner$8(mapRecord).boundingRect
+            };
+        }
+
+        var graphic = buildGraphic(mapRecord);
+
+        inner$8(mapRecord).originRoot = graphic.root;
+        inner$8(mapRecord).boundingRect = graphic.boundingRect;
+
+        return graphic;
+    },
+
+    makeGraphic: function (mapName, mapRecord, hostKey) {
+        // For performance consideration (in large SVG), graphic only maked
+        // when necessary and reuse them according to hostKey.
+        var field = inner$8(mapRecord);
+        var rootMap = field.rootMap || (field.rootMap = createHashMap());
+
+        var root = rootMap.get(hostKey);
+        if (root) {
+            return root;
+        }
+
+        var originRoot = field.originRoot;
+        var boundingRect = field.boundingRect;
+
+        // For performance, if originRoot is not used by a view,
+        // assign it to a view, but not reproduce graphic elements.
+        if (!field.originRootHostKey) {
+            field.originRootHostKey = hostKey;
+            root = originRoot;
+        }
+        else {
+            root = buildGraphic(mapRecord, boundingRect).root;
+        }
+
+        return rootMap.set(hostKey, root);
+    },
+
+    removeGraphic: function (mapName, mapRecord, hostKey) {
+        var field = inner$8(mapRecord);
+        var rootMap = field.rootMap;
+        rootMap && rootMap.removeKey(hostKey);
+        if (hostKey === field.originRootHostKey) {
+            field.originRootHostKey = null;
+        }
+    }
+};
+
+function buildGraphic(mapRecord, boundingRect) {
+    var svgXML = mapRecord.svgXML;
+    var result;
+    var root;
+
+    try {
+        result = svgXML && parseSVG(svgXML, {
+            ignoreViewBox: true,
+            ignoreRootClip: true
+        }) || {};
+        root = result.root;
+        assert$1(root != null);
+    }
+    catch (e) {
+        throw new Error('Invalid svg format\n' + e.message);
+    }
+
+    var svgWidth = result.width;
+    var svgHeight = result.height;
+    var viewBoxRect = result.viewBoxRect;
+
+    if (!boundingRect) {
+        boundingRect = (svgWidth == null || svgHeight == null)
+            // If svg width / height not specified, calculate
+            // bounding rect as the width / height
+            ? root.getBoundingRect()
+            : new BoundingRect(0, 0, 0, 0);
+
+        if (svgWidth != null) {
+            boundingRect.width = svgWidth;
+        }
+        if (svgHeight != null) {
+            boundingRect.height = svgHeight;
+        }
+    }
+
+    if (viewBoxRect) {
+        var viewBoxTransform = makeViewBoxTransform(viewBoxRect, boundingRect.width, boundingRect.height);
+        var elRoot = root;
+        root = new Group();
+        root.add(elRoot);
+        elRoot.scale = viewBoxTransform.scale;
+        elRoot.position = viewBoxTransform.position;
+    }
+
+    root.setClipPath(new Rect({
+        shape: boundingRect.plain()
+    }));
+
+    return {
+        root: root,
+        boundingRect: boundingRect
+    };
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
