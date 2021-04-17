@@ -45962,3 +45962,268 @@ function onIrrelevantElement(e, api, targetCoordSysModel) {
     var model = api.getComponentByElement(e.topTarget);
     // If model is axisModel, it works only if it is injected with coordinateSystem.
     var coordSys = model && model.coordinateSystem;
+    return model
+        && model !== targetCoordSysModel
+        && !IRRELEVANT_EXCLUDES[model.mainType]
+        && (coordSys && coordSys.model !== targetCoordSysModel);
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+function getFixedItemStyle(model, scale) {
+    var itemStyle = model.getItemStyle();
+    var areaColor = model.get('areaColor');
+
+    // If user want the color not to be changed when hover,
+    // they should both set areaColor and color to be null.
+    if (areaColor != null) {
+        itemStyle.fill = areaColor;
+    }
+
+    return itemStyle;
+}
+
+function updateMapSelectHandler(mapDraw, mapOrGeoModel, regionsGroup, api, fromView) {
+    regionsGroup.off('click');
+    regionsGroup.off('mousedown');
+
+    if (mapOrGeoModel.get('selectedMode')) {
+
+        regionsGroup.on('mousedown', function () {
+            mapDraw._mouseDownFlag = true;
+        });
+
+        regionsGroup.on('click', function (e) {
+            if (!mapDraw._mouseDownFlag) {
+                return;
+            }
+            mapDraw._mouseDownFlag = false;
+
+            var el = e.target;
+            while (!el.__regions) {
+                el = el.parent;
+            }
+            if (!el) {
+                return;
+            }
+
+            var action = {
+                type: (mapOrGeoModel.mainType === 'geo' ? 'geo' : 'map') + 'ToggleSelect',
+                batch: map(el.__regions, function (region) {
+                    return {
+                        name: region.name,
+                        from: fromView.uid
+                    };
+                })
+            };
+            action[mapOrGeoModel.mainType + 'Id'] = mapOrGeoModel.id;
+
+            api.dispatchAction(action);
+
+            updateMapSelected(mapOrGeoModel, regionsGroup);
+        });
+    }
+}
+
+function updateMapSelected(mapOrGeoModel, regionsGroup) {
+    // FIXME
+    regionsGroup.eachChild(function (otherRegionEl) {
+        each$1(otherRegionEl.__regions, function (region) {
+            otherRegionEl.trigger(mapOrGeoModel.isSelected(region.name) ? 'emphasis' : 'normal');
+        });
+    });
+}
+
+/**
+ * @alias module:echarts/component/helper/MapDraw
+ * @param {module:echarts/ExtensionAPI} api
+ * @param {boolean} updateGroup
+ */
+function MapDraw(api, updateGroup) {
+
+    var group = new Group();
+
+    /**
+     * @type {string}
+     * @private
+     */
+    this.uid = getUID('ec_map_draw');
+
+    /**
+     * @type {module:echarts/component/helper/RoamController}
+     * @private
+     */
+    this._controller = new RoamController(api.getZr());
+
+    /**
+     * @type {Object} {target, zoom, zoomLimit}
+     * @private
+     */
+    this._controllerHost = {target: updateGroup ? group : null};
+
+    /**
+     * @type {module:zrender/container/Group}
+     * @readOnly
+     */
+    this.group = group;
+
+    /**
+     * @type {boolean}
+     * @private
+     */
+    this._updateGroup = updateGroup;
+
+    /**
+     * This flag is used to make sure that only one among
+     * `pan`, `zoom`, `click` can occurs, otherwise 'selected'
+     * action may be triggered when `pan`, which is unexpected.
+     * @type {booelan}
+     */
+    this._mouseDownFlag;
+
+    /**
+     * @type {string}
+     */
+    this._mapName;
+
+    /**
+     * @type {boolean}
+     */
+    this._initialized;
+
+    /**
+     * @type {module:zrender/container/Group}
+     */
+    group.add(this._regionsGroup = new Group());
+
+    /**
+     * @type {module:zrender/container/Group}
+     */
+    group.add(this._backgroundGroup = new Group());
+}
+
+MapDraw.prototype = {
+
+    constructor: MapDraw,
+
+    draw: function (mapOrGeoModel, ecModel, api, fromView, payload) {
+
+        var isGeo = mapOrGeoModel.mainType === 'geo';
+
+        // Map series has data. GEO model that controlled by map series
+        // will be assigned with map data. Other GEO model has no data.
+        var data = mapOrGeoModel.getData && mapOrGeoModel.getData();
+        isGeo && ecModel.eachComponent({mainType: 'series', subType: 'map'}, function (mapSeries) {
+            if (!data && mapSeries.getHostGeoModel() === mapOrGeoModel) {
+                data = mapSeries.getData();
+            }
+        });
+
+        var geo = mapOrGeoModel.coordinateSystem;
+
+        this._updateBackground(geo);
+
+        var regionsGroup = this._regionsGroup;
+        var group = this.group;
+
+        var scale = geo.scale;
+        var transform = {
+            position: geo.position,
+            scale: scale
+        };
+
+        // No animation when first draw or in action
+        if (!regionsGroup.childAt(0) || payload) {
+            group.attr(transform);
+        }
+        else {
+            updateProps(group, transform, mapOrGeoModel);
+        }
+
+        regionsGroup.removeAll();
+
+        var itemStyleAccessPath = ['itemStyle'];
+        var hoverItemStyleAccessPath = ['emphasis', 'itemStyle'];
+        var labelAccessPath = ['label'];
+        var hoverLabelAccessPath = ['emphasis', 'label'];
+        var nameMap = createHashMap();
+
+        each$1(geo.regions, function (region) {
+
+            // Consider in GeoJson properties.name may be duplicated, for example,
+            // there is multiple region named "United Kindom" or "France" (so many
+            // colonies). And it is not appropriate to merge them in geo, which
+            // will make them share the same label and bring trouble in label
+            // location calculation.
+            var regionGroup = nameMap.get(region.name)
+                || nameMap.set(region.name, new Group());
+
+            var compoundPath = new CompoundPath({
+                shape: {
+                    paths: []
+                }
+            });
+            regionGroup.add(compoundPath);
+
+            var regionModel = mapOrGeoModel.getRegionModel(region.name) || mapOrGeoModel;
+
+            var itemStyleModel = regionModel.getModel(itemStyleAccessPath);
+            var hoverItemStyleModel = regionModel.getModel(hoverItemStyleAccessPath);
+            var itemStyle = getFixedItemStyle(itemStyleModel, scale);
+            var hoverItemStyle = getFixedItemStyle(hoverItemStyleModel, scale);
+
+            var labelModel = regionModel.getModel(labelAccessPath);
+            var hoverLabelModel = regionModel.getModel(hoverLabelAccessPath);
+
+            var dataIdx;
+            // Use the itemStyle in data if has data
+            if (data) {
+                dataIdx = data.indexOfName(region.name);
+                // Only visual color of each item will be used. It can be encoded by dataRange
+                // But visual color of series is used in symbol drawing
+                //
+                // Visual color for each series is for the symbol draw
+                var visualColor = data.getItemVisual(dataIdx, 'color', true);
+                if (visualColor) {
+                    itemStyle.fill = visualColor;
+                }
+            }
+
+            each$1(region.geometries, function (geometry) {
+                if (geometry.type !== 'polygon') {
+                    return;
+                }
+                compoundPath.shape.paths.push(new Polygon({
+                    shape: {
+                        points: geometry.exterior
+                    }
+                }));
+
+                for (var i = 0; i < (geometry.interiors ? geometry.interiors.length : 0); i++) {
+                    compoundPath.shape.paths.push(new Polygon({
+                        shape: {
+                            points: geometry.interiors[i]
+                        }
+                    }));
+                }
+            });
+
+            compoundPath.setStyle(itemStyle);
+            compoundPath.style.strokeNoScale = true;
