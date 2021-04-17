@@ -45691,3 +45691,274 @@ function RoamController(zr) {
 
         if (controlType === true || (controlType === 'move' || controlType === 'pan')) {
             zr.on('mousedown', mousedownHandler);
+            zr.on('mousemove', mousemoveHandler);
+            zr.on('mouseup', mouseupHandler);
+        }
+        if (controlType === true || (controlType === 'scale' || controlType === 'zoom')) {
+            zr.on('mousewheel', mousewheelHandler);
+            zr.on('pinch', pinchHandler);
+        }
+    };
+
+    this.disable = function () {
+        zr.off('mousedown', mousedownHandler);
+        zr.off('mousemove', mousemoveHandler);
+        zr.off('mouseup', mouseupHandler);
+        zr.off('mousewheel', mousewheelHandler);
+        zr.off('pinch', pinchHandler);
+    };
+
+    this.dispose = this.disable;
+
+    this.isDragging = function () {
+        return this._dragging;
+    };
+
+    this.isPinching = function () {
+        return this._pinching;
+    };
+}
+
+mixin(RoamController, Eventful);
+
+
+function mousedown(e) {
+    if (isMiddleOrRightButtonOnMouseUpDown(e)
+        || (e.target && e.target.draggable)
+    ) {
+        return;
+    }
+
+    var x = e.offsetX;
+    var y = e.offsetY;
+
+    // Only check on mosedown, but not mousemove.
+    // Mouse can be out of target when mouse moving.
+    if (this.pointerChecker && this.pointerChecker(e, x, y)) {
+        this._x = x;
+        this._y = y;
+        this._dragging = true;
+    }
+}
+
+function mousemove(e) {
+    if (!this._dragging
+        || !isAvailableBehavior('moveOnMouseMove', e, this._opt)
+        || e.gestureEvent === 'pinch'
+        || isTaken(this._zr, 'globalPan')
+    ) {
+        return;
+    }
+
+    var x = e.offsetX;
+    var y = e.offsetY;
+
+    var oldX = this._x;
+    var oldY = this._y;
+
+    var dx = x - oldX;
+    var dy = y - oldY;
+
+    this._x = x;
+    this._y = y;
+
+    this._opt.preventDefaultMouseMove && stop(e.event);
+
+    trigger(this, 'pan', 'moveOnMouseMove', e, {
+        dx: dx, dy: dy, oldX: oldX, oldY: oldY, newX: x, newY: y
+    });
+}
+
+function mouseup(e) {
+    if (!isMiddleOrRightButtonOnMouseUpDown(e)) {
+        this._dragging = false;
+    }
+}
+
+function mousewheel(e) {
+    var shouldZoom = isAvailableBehavior('zoomOnMouseWheel', e, this._opt);
+    var shouldMove = isAvailableBehavior('moveOnMouseWheel', e, this._opt);
+    var wheelDelta = e.wheelDelta;
+    var absWheelDeltaDelta = Math.abs(wheelDelta);
+    var originX = e.offsetX;
+    var originY = e.offsetY;
+
+    // wheelDelta maybe -0 in chrome mac.
+    if (wheelDelta === 0 || (!shouldZoom && !shouldMove)) {
+        return;
+    }
+
+    // If both `shouldZoom` and `shouldMove` is true, trigger
+    // their event both, and the final behavior is determined
+    // by event listener themselves.
+
+    if (shouldZoom) {
+        // Convenience:
+        // Mac and VM Windows on Mac: scroll up: zoom out.
+        // Windows: scroll up: zoom in.
+
+        // FIXME: Should do more test in different environment.
+        // wheelDelta is too complicated in difference nvironment
+        // (https://developer.mozilla.org/en-US/docs/Web/Events/mousewheel),
+        // although it has been normallized by zrender.
+        // wheelDelta of mouse wheel is bigger than touch pad.
+        var factor = absWheelDeltaDelta > 3 ? 1.4 : absWheelDeltaDelta > 1 ? 1.2 : 1.1;
+        var scale = wheelDelta > 0 ? factor : 1 / factor;
+        checkPointerAndTrigger(this, 'zoom', 'zoomOnMouseWheel', e, {
+            scale: scale, originX: originX, originY: originY
+        });
+    }
+
+    if (shouldMove) {
+        // FIXME: Should do more test in different environment.
+        var absDelta = Math.abs(wheelDelta);
+        // wheelDelta of mouse wheel is bigger than touch pad.
+        var scrollDelta = (wheelDelta > 0 ? 1 : -1) * (absDelta > 3 ? 0.4 : absDelta > 1 ? 0.15 : 0.05);
+        checkPointerAndTrigger(this, 'scrollMove', 'moveOnMouseWheel', e, {
+            scrollDelta: scrollDelta, originX: originX, originY: originY
+        });
+    }
+}
+
+function pinch(e) {
+    if (isTaken(this._zr, 'globalPan')) {
+        return;
+    }
+    var scale = e.pinchScale > 1 ? 1.1 : 1 / 1.1;
+    checkPointerAndTrigger(this, 'zoom', null, e, {
+        scale: scale, originX: e.pinchX, originY: e.pinchY
+    });
+}
+
+function checkPointerAndTrigger(controller, eventName, behaviorToCheck, e, contollerEvent) {
+    if (controller.pointerChecker
+        && controller.pointerChecker(e, contollerEvent.originX, contollerEvent.originY)
+    ) {
+        // When mouse is out of roamController rect,
+        // default befavoius should not be be disabled, otherwise
+        // page sliding is disabled, contrary to expectation.
+        stop(e.event);
+
+        trigger(controller, eventName, behaviorToCheck, e, contollerEvent);
+    }
+}
+
+function trigger(controller, eventName, behaviorToCheck, e, contollerEvent) {
+    // Also provide behavior checker for event listener, for some case that
+    // multiple components share one listener.
+    contollerEvent.isAvailableBehavior = bind(isAvailableBehavior, null, behaviorToCheck, e);
+    controller.trigger(eventName, contollerEvent);
+}
+
+// settings: {
+//     zoomOnMouseWheel
+//     moveOnMouseMove
+//     moveOnMouseWheel
+// }
+// The value can be: true / false / 'shift' / 'ctrl' / 'alt'.
+function isAvailableBehavior(behaviorToCheck, e, settings) {
+    var setting = settings[behaviorToCheck];
+    return !behaviorToCheck || (
+        setting && (!isString(setting) || e.event[setting + 'Key'])
+    );
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+/**
+ * For geo and graph.
+ *
+ * @param {Object} controllerHost
+ * @param {module:zrender/Element} controllerHost.target
+ */
+function updateViewOnPan(controllerHost, dx, dy) {
+    var target = controllerHost.target;
+    var pos = target.position;
+    pos[0] += dx;
+    pos[1] += dy;
+    target.dirty();
+}
+
+/**
+ * For geo and graph.
+ *
+ * @param {Object} controllerHost
+ * @param {module:zrender/Element} controllerHost.target
+ * @param {number} controllerHost.zoom
+ * @param {number} controllerHost.zoomLimit like: {min: 1, max: 2}
+ */
+function updateViewOnZoom(controllerHost, zoomDelta, zoomX, zoomY) {
+    var target = controllerHost.target;
+    var zoomLimit = controllerHost.zoomLimit;
+    var pos = target.position;
+    var scale = target.scale;
+
+    var newZoom = controllerHost.zoom = controllerHost.zoom || 1;
+    newZoom *= zoomDelta;
+    if (zoomLimit) {
+        var zoomMin = zoomLimit.min || 0;
+        var zoomMax = zoomLimit.max || Infinity;
+        newZoom = Math.max(
+            Math.min(zoomMax, newZoom),
+            zoomMin
+        );
+    }
+    var zoomScale = newZoom / controllerHost.zoom;
+    controllerHost.zoom = newZoom;
+    // Keep the mouse center when scaling
+    pos[0] -= (zoomX - pos[0]) * (zoomScale - 1);
+    pos[1] -= (zoomY - pos[1]) * (zoomScale - 1);
+    scale[0] *= zoomScale;
+    scale[1] *= zoomScale;
+
+    target.dirty();
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+var IRRELEVANT_EXCLUDES = {'axisPointer': 1, 'tooltip': 1, 'brush': 1};
+
+/**
+ * Avoid that: mouse click on a elements that is over geo or graph,
+ * but roam is triggered.
+ */
+function onIrrelevantElement(e, api, targetCoordSysModel) {
+    var model = api.getComponentByElement(e.topTarget);
+    // If model is axisModel, it works only if it is injected with coordinateSystem.
+    var coordSys = model && model.coordinateSystem;
