@@ -46227,3 +46227,267 @@ MapDraw.prototype = {
 
             compoundPath.setStyle(itemStyle);
             compoundPath.style.strokeNoScale = true;
+            compoundPath.culling = true;
+            // Label
+            var showLabel = labelModel.get('show');
+            var hoverShowLabel = hoverLabelModel.get('show');
+
+            var isDataNaN = data && isNaN(data.get(data.mapDimension('value'), dataIdx));
+            var itemLayout = data && data.getItemLayout(dataIdx);
+            // In the following cases label will be drawn
+            // 1. In map series and data value is NaN
+            // 2. In geo component
+            // 4. Region has no series legendSymbol, which will be add a showLabel flag in mapSymbolLayout
+            if (
+                (isGeo || isDataNaN && (showLabel || hoverShowLabel))
+                || (itemLayout && itemLayout.showLabel)
+            ) {
+                var query = !isGeo ? dataIdx : region.name;
+                var labelFetcher;
+
+                // Consider dataIdx not found.
+                if (!data || dataIdx >= 0) {
+                    labelFetcher = mapOrGeoModel;
+                }
+
+                var textEl = new Text({
+                    position: region.center.slice(),
+                    // FIXME
+                    // label rotation is not support yet in geo or regions of series-map
+                    // that has no data. The rotation will be effected by this `scale`.
+                    // So needed to change to RectText?
+                    scale: [1 / scale[0], 1 / scale[1]],
+                    z2: 10,
+                    silent: true
+                });
+
+                setLabelStyle(
+                    textEl.style, textEl.hoverStyle = {}, labelModel, hoverLabelModel,
+                    {
+                        labelFetcher: labelFetcher,
+                        labelDataIndex: query,
+                        defaultText: region.name,
+                        useInsideStyle: false
+                    },
+                    {
+                        textAlign: 'center',
+                        textVerticalAlign: 'middle'
+                    }
+                );
+
+                regionGroup.add(textEl);
+            }
+
+            // setItemGraphicEl, setHoverStyle after all polygons and labels
+            // are added to the rigionGroup
+            if (data) {
+                data.setItemGraphicEl(dataIdx, regionGroup);
+            }
+            else {
+                var regionModel = mapOrGeoModel.getRegionModel(region.name);
+                // Package custom mouse event for geo component
+                compoundPath.eventData = {
+                    componentType: 'geo',
+                    componentIndex: mapOrGeoModel.componentIndex,
+                    geoIndex: mapOrGeoModel.componentIndex,
+                    name: region.name,
+                    region: (regionModel && regionModel.option) || {}
+                };
+            }
+
+            var groupRegions = regionGroup.__regions || (regionGroup.__regions = []);
+            groupRegions.push(region);
+
+            setHoverStyle(
+                regionGroup,
+                hoverItemStyle,
+                {hoverSilentOnTouch: !!mapOrGeoModel.get('selectedMode')}
+            );
+
+            regionsGroup.add(regionGroup);
+        });
+
+        this._updateController(mapOrGeoModel, ecModel, api);
+
+        updateMapSelectHandler(this, mapOrGeoModel, regionsGroup, api, fromView);
+
+        updateMapSelected(mapOrGeoModel, regionsGroup);
+    },
+
+    remove: function () {
+        this._regionsGroup.removeAll();
+        this._backgroundGroup.removeAll();
+        this._controller.dispose();
+        this._mapName && geoSourceManager.removeGraphic(this._mapName, this.uid);
+        this._mapName = null;
+        this._controllerHost = {};
+    },
+
+    _updateBackground: function (geo) {
+        var mapName = geo.map;
+
+        if (this._mapName !== mapName) {
+            each$1(geoSourceManager.makeGraphic(mapName, this.uid), function (root) {
+                this._backgroundGroup.add(root);
+            }, this);
+        }
+
+        this._mapName = mapName;
+    },
+
+    _updateController: function (mapOrGeoModel, ecModel, api) {
+        var geo = mapOrGeoModel.coordinateSystem;
+        var controller = this._controller;
+        var controllerHost = this._controllerHost;
+
+        controllerHost.zoomLimit = mapOrGeoModel.get('scaleLimit');
+        controllerHost.zoom = geo.getZoom();
+
+        // roamType is will be set default true if it is null
+        controller.enable(mapOrGeoModel.get('roam') || false);
+        var mainType = mapOrGeoModel.mainType;
+
+        function makeActionBase() {
+            var action = {
+                type: 'geoRoam',
+                componentType: mainType
+            };
+            action[mainType + 'Id'] = mapOrGeoModel.id;
+            return action;
+        }
+
+        controller.off('pan').on('pan', function (e) {
+            this._mouseDownFlag = false;
+
+            updateViewOnPan(controllerHost, e.dx, e.dy);
+
+            api.dispatchAction(extend(makeActionBase(), {
+                dx: e.dx,
+                dy: e.dy
+            }));
+        }, this);
+
+        controller.off('zoom').on('zoom', function (e) {
+            this._mouseDownFlag = false;
+
+            updateViewOnZoom(controllerHost, e.scale, e.originX, e.originY);
+
+            api.dispatchAction(extend(makeActionBase(), {
+                zoom: e.scale,
+                originX: e.originX,
+                originY: e.originY
+            }));
+
+            if (this._updateGroup) {
+                var scale = this.group.scale;
+                this._regionsGroup.traverse(function (el) {
+                    if (el.type === 'text') {
+                        el.attr('scale', [1 / scale[0], 1 / scale[1]]);
+                    }
+                });
+            }
+        }, this);
+
+        controller.setPointerChecker(function (e, x, y) {
+            return geo.getViewRectAfterRoam().contain(x, y)
+                && !onIrrelevantElement(e, api, mapOrGeoModel);
+        });
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var HIGH_DOWN_PROP = '__seriesMapHighDown';
+var RECORD_VERSION_PROP = '__seriesMapCallKey';
+
+extendChartView({
+
+    type: 'map',
+
+    render: function (mapModel, ecModel, api, payload) {
+        // Not render if it is an toggleSelect action from self
+        if (payload && payload.type === 'mapToggleSelect'
+            && payload.from === this.uid
+        ) {
+            return;
+        }
+
+        var group = this.group;
+        group.removeAll();
+
+        if (mapModel.getHostGeoModel()) {
+            return;
+        }
+
+        // Not update map if it is an roam action from self
+        if (!(payload && payload.type === 'geoRoam'
+                && payload.componentType === 'series'
+                && payload.seriesId === mapModel.id
+            )
+        ) {
+            if (mapModel.needsDrawMap) {
+                var mapDraw = this._mapDraw || new MapDraw(api, true);
+                group.add(mapDraw.group);
+
+                mapDraw.draw(mapModel, ecModel, api, this, payload);
+
+                this._mapDraw = mapDraw;
+            }
+            else {
+                // Remove drawed map
+                this._mapDraw && this._mapDraw.remove();
+                this._mapDraw = null;
+            }
+        }
+        else {
+            var mapDraw = this._mapDraw;
+            mapDraw && group.add(mapDraw.group);
+        }
+
+        mapModel.get('showLegendSymbol') && ecModel.getComponent('legend')
+            && this._renderSymbols(mapModel, ecModel, api);
+    },
+
+    remove: function () {
+        this._mapDraw && this._mapDraw.remove();
+        this._mapDraw = null;
+        this.group.removeAll();
+    },
+
+    dispose: function () {
+        this._mapDraw && this._mapDraw.remove();
+        this._mapDraw = null;
+    },
+
+    _renderSymbols: function (mapModel, ecModel, api) {
+        var originalData = mapModel.originalData;
+        var group = this.group;
+
+        originalData.each(originalData.mapDimension('value'), function (value, originalDataIndex) {
+            if (isNaN(value)) {
+                return;
+            }
+
+            var layout = originalData.getItemLayout(originalDataIndex);
+
+            if (!layout || !layout.point) {
+                // Not exists in map
+                return;
+            }
