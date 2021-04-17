@@ -45410,3 +45410,284 @@ var MapSeries = SeriesModel.extend({
      * @param {number} dataIndex
      */
     formatTooltip: function (dataIndex) {
+        // FIXME orignalData and data is a bit confusing
+        var data = this.getData();
+        var formattedValue = addCommas(this.getRawValue(dataIndex));
+        var name = data.getName(dataIndex);
+
+        var seriesGroup = this.seriesGroup;
+        var seriesNames = [];
+        for (var i = 0; i < seriesGroup.length; i++) {
+            var otherIndex = seriesGroup[i].originalData.indexOfName(name);
+            var valueDim = data.mapDimension('value');
+            if (!isNaN(seriesGroup[i].originalData.get(valueDim, otherIndex))) {
+                seriesNames.push(
+                    encodeHTML(seriesGroup[i].name)
+                );
+            }
+        }
+
+        return seriesNames.join(', ') + '<br />'
+            + encodeHTML(name + ' : ' + formattedValue);
+    },
+
+    /**
+     * @implement
+     */
+    getTooltipPosition: function (dataIndex) {
+        if (dataIndex != null) {
+            var name = this.getData().getName(dataIndex);
+            var geo = this.coordinateSystem;
+            var region = geo.getRegion(name);
+
+            return region && geo.dataToPoint(region.center);
+        }
+    },
+
+    setZoom: function (zoom) {
+        this.option.zoom = zoom;
+    },
+
+    setCenter: function (center) {
+        this.option.center = center;
+    },
+
+    defaultOption: {
+        // 一级层叠
+        zlevel: 0,
+        // 二级层叠
+        z: 2,
+
+        coordinateSystem: 'geo',
+
+        // map should be explicitly specified since ec3.
+        map: '',
+
+        // If `geoIndex` is not specified, a exclusive geo will be
+        // created. Otherwise use the specified geo component, and
+        // `map` and `mapType` are ignored.
+        // geoIndex: 0,
+
+        // 'center' | 'left' | 'right' | 'x%' | {number}
+        left: 'center',
+        // 'center' | 'top' | 'bottom' | 'x%' | {number}
+        top: 'center',
+        // right
+        // bottom
+        // width:
+        // height
+
+        // Aspect is width / height. Inited to be geoJson bbox aspect
+        // This parameter is used for scale this aspect
+        aspectScale: 0.75,
+
+        ///// Layout with center and size
+        // If you wan't to put map in a fixed size box with right aspect ratio
+        // This two properties may more conveninet
+        // layoutCenter: [50%, 50%]
+        // layoutSize: 100
+
+
+        // 数值合并方式，默认加和，可选为：
+        // 'sum' | 'average' | 'max' | 'min'
+        // mapValueCalculation: 'sum',
+        // 地图数值计算结果小数精度
+        // mapValuePrecision: 0,
+
+
+        // 显示图例颜色标识（系列标识的小圆点），图例开启时有效
+        showLegendSymbol: true,
+        // 选择模式，默认关闭，可选single，multiple
+        // selectedMode: false,
+        dataRangeHoverLink: true,
+        // 是否开启缩放及漫游模式
+        // roam: false,
+
+        // Define left-top, right-bottom coords to control view
+        // For example, [ [180, 90], [-180, -90] ],
+        // higher priority than center and zoom
+        boundingCoords: null,
+
+        // Default on center of map
+        center: null,
+
+        zoom: 1,
+
+        scaleLimit: null,
+
+        label: {
+            show: false,
+            color: '#000'
+        },
+        // scaleLimit: null,
+        itemStyle: {
+            borderWidth: 0.5,
+            borderColor: '#444',
+            areaColor: '#eee'
+        },
+
+        emphasis: {
+            label: {
+                show: true,
+                color: 'rgb(100,0,0)'
+            },
+            itemStyle: {
+                areaColor: 'rgba(255,215,0,0.8)'
+            }
+        }
+    }
+
+});
+
+mixin(MapSeries, selectableMixin);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var ATTR = '\0_ec_interaction_mutex';
+
+function take(zr, resourceKey, userKey) {
+    var store = getStore(zr);
+    store[resourceKey] = userKey;
+}
+
+function release(zr, resourceKey, userKey) {
+    var store = getStore(zr);
+    var uKey = store[resourceKey];
+
+    if (uKey === userKey) {
+        store[resourceKey] = null;
+    }
+}
+
+function isTaken(zr, resourceKey) {
+    return !!getStore(zr)[resourceKey];
+}
+
+function getStore(zr) {
+    return zr[ATTR] || (zr[ATTR] = {});
+}
+
+/**
+ * payload: {
+ *     type: 'takeGlobalCursor',
+ *     key: 'dataZoomSelect', or 'brush', or ...,
+ *         If no userKey, release global cursor.
+ * }
+ */
+registerAction(
+    {type: 'takeGlobalCursor', event: 'globalCursorTaken', update: 'update'},
+    function () {}
+);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @alias module:echarts/component/helper/RoamController
+ * @constructor
+ * @mixin {module:zrender/mixin/Eventful}
+ *
+ * @param {module:zrender/zrender~ZRender} zr
+ */
+function RoamController(zr) {
+
+    /**
+     * @type {Function}
+     */
+    this.pointerChecker;
+
+    /**
+     * @type {module:zrender}
+     */
+    this._zr = zr;
+
+    /**
+     * @type {Object}
+     */
+    this._opt = {};
+
+    // Avoid two roamController bind the same handler
+    var bind$$1 = bind;
+    var mousedownHandler = bind$$1(mousedown, this);
+    var mousemoveHandler = bind$$1(mousemove, this);
+    var mouseupHandler = bind$$1(mouseup, this);
+    var mousewheelHandler = bind$$1(mousewheel, this);
+    var pinchHandler = bind$$1(pinch, this);
+
+    Eventful.call(this);
+
+    /**
+     * @param {Function} pointerChecker
+     *                   input: x, y
+     *                   output: boolean
+     */
+    this.setPointerChecker = function (pointerChecker) {
+        this.pointerChecker = pointerChecker;
+    };
+
+    /**
+     * Notice: only enable needed types. For example, if 'zoom'
+     * is not needed, 'zoom' should not be enabled, otherwise
+     * default mousewheel behaviour (scroll page) will be disabled.
+     *
+     * @param  {boolean|string} [controlType=true] Specify the control type,
+     *                          which can be null/undefined or true/false
+     *                          or 'pan/move' or 'zoom'/'scale'
+     * @param {Object} [opt]
+     * @param {Object} [opt.zoomOnMouseWheel=true] The value can be: true / false / 'shift' / 'ctrl' / 'alt'.
+     * @param {Object} [opt.moveOnMouseMove=true] The value can be: true / false / 'shift' / 'ctrl' / 'alt'.
+     * @param {Object} [opt.moveOnMouseWheel=false] The value can be: true / false / 'shift' / 'ctrl' / 'alt'.
+     * @param {Object} [opt.preventDefaultMouseMove=true] When pan.
+     */
+    this.enable = function (controlType, opt) {
+
+        // Disable previous first
+        this.disable();
+
+        this._opt = defaults(clone(opt) || {}, {
+            zoomOnMouseWheel: true,
+            moveOnMouseMove: true,
+            // By default, wheel do not trigger move.
+            moveOnMouseWheel: false,
+            preventDefaultMouseMove: true
+        });
+
+        if (controlType == null) {
+            controlType = true;
+        }
+
+        if (controlType === true || (controlType === 'move' || controlType === 'pan')) {
+            zr.on('mousedown', mousedownHandler);
