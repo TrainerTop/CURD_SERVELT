@@ -47604,3 +47604,260 @@ var mapVisual = function (ecModel) {
     ecModel.eachSeriesByType('map', function (seriesModel) {
         var colorList = seriesModel.get('color');
         var itemStyleModel = seriesModel.getModel('itemStyle');
+
+        var areaColor = itemStyleModel.get('areaColor');
+        var color = itemStyleModel.get('color')
+            || colorList[seriesModel.seriesIndex % colorList.length];
+
+        seriesModel.getData().setVisual({
+            'areaColor': areaColor,
+            'color': color
+        });
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// FIXME 公用？
+/**
+ * @param {Array.<module:echarts/data/List>} datas
+ * @param {string} statisticType 'average' 'sum'
+ * @inner
+ */
+function dataStatistics(datas, statisticType) {
+    var dataNameMap = {};
+
+    each$1(datas, function (data) {
+        data.each(data.mapDimension('value'), function (value, idx) {
+            // Add prefix to avoid conflict with Object.prototype.
+            var mapKey = 'ec-' + data.getName(idx);
+            dataNameMap[mapKey] = dataNameMap[mapKey] || [];
+            if (!isNaN(value)) {
+                dataNameMap[mapKey].push(value);
+            }
+        });
+    });
+
+    return datas[0].map(datas[0].mapDimension('value'), function (value, idx) {
+        var mapKey = 'ec-' + datas[0].getName(idx);
+        var sum = 0;
+        var min = Infinity;
+        var max = -Infinity;
+        var len = dataNameMap[mapKey].length;
+        for (var i = 0; i < len; i++) {
+            min = Math.min(min, dataNameMap[mapKey][i]);
+            max = Math.max(max, dataNameMap[mapKey][i]);
+            sum += dataNameMap[mapKey][i];
+        }
+        var result;
+        if (statisticType === 'min') {
+            result = min;
+        }
+        else if (statisticType === 'max') {
+            result = max;
+        }
+        else if (statisticType === 'average') {
+            result = sum / len;
+        }
+        else {
+            result = sum;
+        }
+        return len === 0 ? NaN : result;
+    });
+}
+
+var mapDataStatistic = function (ecModel) {
+    var seriesGroups = {};
+    ecModel.eachSeriesByType('map', function (seriesModel) {
+        var hostGeoModel = seriesModel.getHostGeoModel();
+        var key = hostGeoModel ? 'o' + hostGeoModel.id : 'i' + seriesModel.getMapType();
+        (seriesGroups[key] = seriesGroups[key] || []).push(seriesModel);
+    });
+
+    each$1(seriesGroups, function (seriesList, key) {
+        var data = dataStatistics(
+            map(seriesList, function (seriesModel) {
+                return seriesModel.getData();
+            }),
+            seriesList[0].get('mapValueCalculation')
+        );
+
+        for (var i = 0; i < seriesList.length; i++) {
+            seriesList[i].originalData = seriesList[i].getData();
+        }
+
+        // FIXME Put where?
+        for (var i = 0; i < seriesList.length; i++) {
+            seriesList[i].seriesGroup = seriesList;
+            seriesList[i].needsDrawMap = i === 0 && !seriesList[i].getHostGeoModel();
+
+            seriesList[i].setData(data.cloneShallow());
+            seriesList[i].mainSeries = seriesList[0];
+        }
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var backwardCompat$2 = function (option) {
+    // Save geoCoord
+    var mapSeries = [];
+    each$1(option.series, function (seriesOpt) {
+        if (seriesOpt && seriesOpt.type === 'map') {
+            mapSeries.push(seriesOpt);
+            seriesOpt.map = seriesOpt.map || seriesOpt.mapType;
+            // Put x, y, width, height, x2, y2 in the top level
+            defaults(seriesOpt, seriesOpt.mapLocation);
+        }
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+registerLayout(mapSymbolLayout);
+registerVisual(mapVisual);
+registerProcessor(PRIORITY.PROCESSOR.STATISTIC, mapDataStatistic);
+registerPreprocessor(backwardCompat$2);
+
+createDataSelectAction('map', [{
+    type: 'mapToggleSelect',
+    event: 'mapselectchanged',
+    method: 'toggleSelected'
+}, {
+    type: 'mapSelect',
+    event: 'mapselected',
+    method: 'select'
+}, {
+    type: 'mapUnSelect',
+    event: 'mapunselected',
+    method: 'unSelect'
+}]);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Link lists and struct (graph or tree)
+ */
+
+var each$7 = each$1;
+
+var DATAS = '\0__link_datas';
+var MAIN_DATA = '\0__link_mainData';
+
+// Caution:
+// In most case, either list or its shallow clones (see list.cloneShallow)
+// is active in echarts process. So considering heap memory consumption,
+// we do not clone tree or graph, but share them among list and its shallow clones.
+// But in some rare case, we have to keep old list (like do animation in chart). So
+// please take care that both the old list and the new list share the same tree/graph.
+
+/**
+ * @param {Object} opt
+ * @param {module:echarts/data/List} opt.mainData
+ * @param {Object} [opt.struct] For example, instance of Graph or Tree.
+ * @param {string} [opt.structAttr] designation: list[structAttr] = struct;
+ * @param {Object} [opt.datas] {dataType: data},
+ *                 like: {node: nodeList, edge: edgeList}.
+ *                 Should contain mainData.
+ * @param {Object} [opt.datasAttr] {dataType: attr},
+ *                 designation: struct[datasAttr[dataType]] = list;
+ */
+function linkList(opt) {
+    var mainData = opt.mainData;
+    var datas = opt.datas;
+
+    if (!datas) {
+        datas = {main: mainData};
+        opt.datasAttr = {main: 'data'};
+    }
+    opt.datas = opt.mainData = null;
+
+    linkAll(mainData, datas, opt);
+
+    // Porxy data original methods.
+    each$7(datas, function (data) {
+        each$7(mainData.TRANSFERABLE_METHODS, function (methodName) {
+            data.wrapMethod(methodName, curry(transferInjection, opt));
+        });
+
+    });
+
+    // Beyond transfer, additional features should be added to `cloneShallow`.
+    mainData.wrapMethod('cloneShallow', curry(cloneShallowInjection, opt));
+
+    // Only mainData trigger change, because struct.update may trigger
+    // another changable methods, which may bring about dead lock.
+    each$7(mainData.CHANGABLE_METHODS, function (methodName) {
+        mainData.wrapMethod(methodName, curry(changeInjection, opt));
+    });
+
+    // Make sure datas contains mainData.
+    assert$1(datas[mainData.dataType] === mainData);
