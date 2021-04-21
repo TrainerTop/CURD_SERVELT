@@ -48152,3 +48152,271 @@ TreeNode.prototype = {
     /**
      * @param {Object} layout
      * @param {boolean=} [merge=false]
+     */
+    setLayout: function (layout, merge$$1) {
+        this.dataIndex >= 0
+            && this.hostTree.data.setItemLayout(this.dataIndex, layout, merge$$1);
+    },
+
+    /**
+     * @return {Object} layout
+     */
+    getLayout: function () {
+        return this.hostTree.data.getItemLayout(this.dataIndex);
+    },
+
+    /**
+     * @param {string} [path]
+     * @return {module:echarts/model/Model}
+     */
+    getModel: function (path) {
+        if (this.dataIndex < 0) {
+            return;
+        }
+        var hostTree = this.hostTree;
+        var itemModel = hostTree.data.getItemModel(this.dataIndex);
+        var levelModel = this.getLevelModel();
+        var leavesModel;
+        if (!levelModel && (this.children.length === 0 || (this.children.length !== 0 && this.isExpand === false))) {
+            leavesModel = this.getLeavesModel();
+        }
+        return itemModel.getModel(path, (levelModel || leavesModel || hostTree.hostModel).getModel(path));
+    },
+
+    /**
+     * @return {module:echarts/model/Model}
+     */
+    getLevelModel: function () {
+        return (this.hostTree.levelModels || [])[this.depth];
+    },
+
+    /**
+     * @return {module:echarts/model/Model}
+     */
+    getLeavesModel: function () {
+        return this.hostTree.leavesModel;
+    },
+
+    /**
+     * @example
+     *  setItemVisual('color', color);
+     *  setItemVisual({
+     *      'color': color
+     *  });
+     */
+    setVisual: function (key, value) {
+        this.dataIndex >= 0
+            && this.hostTree.data.setItemVisual(this.dataIndex, key, value);
+    },
+
+    /**
+     * Get item visual
+     */
+    getVisual: function (key, ignoreParent) {
+        return this.hostTree.data.getItemVisual(this.dataIndex, key, ignoreParent);
+    },
+
+    /**
+     * @public
+     * @return {number}
+     */
+    getRawIndex: function () {
+        return this.hostTree.data.getRawIndex(this.dataIndex);
+    },
+
+    /**
+     * @public
+     * @return {string}
+     */
+    getId: function () {
+        return this.hostTree.data.getId(this.dataIndex);
+    },
+
+    /**
+     * if this is an ancestor of another node
+     *
+     * @public
+     * @param {TreeNode} node another node
+     * @return {boolean} if is ancestor
+     */
+    isAncestorOf: function (node) {
+        var parent = node.parentNode;
+        while (parent) {
+            if (parent === this) {
+                return true;
+            }
+            parent = parent.parentNode;
+        }
+        return false;
+    },
+
+    /**
+     * if this is an descendant of another node
+     *
+     * @public
+     * @param {TreeNode} node another node
+     * @return {boolean} if is descendant
+     */
+    isDescendantOf: function (node) {
+        return node !== this && node.isAncestorOf(this);
+    }
+};
+
+/**
+ * @constructor
+ * @alias module:echarts/data/Tree
+ * @param {module:echarts/model/Model} hostModel
+ * @param {Array.<Object>} levelOptions
+ * @param {Object} leavesOption
+ */
+function Tree(hostModel, levelOptions, leavesOption) {
+    /**
+     * @type {module:echarts/data/Tree~TreeNode}
+     * @readOnly
+     */
+    this.root;
+
+    /**
+     * @type {module:echarts/data/List}
+     * @readOnly
+     */
+    this.data;
+
+    /**
+     * Index of each item is the same as the raw index of coresponding list item.
+     * @private
+     * @type {Array.<module:echarts/data/Tree~TreeNode}
+     */
+    this._nodes = [];
+
+    /**
+     * @private
+     * @readOnly
+     * @type {module:echarts/model/Model}
+     */
+    this.hostModel = hostModel;
+
+    /**
+     * @private
+     * @readOnly
+     * @type {Array.<module:echarts/model/Model}
+     */
+    this.levelModels = map(levelOptions || [], function (levelDefine) {
+        return new Model(levelDefine, hostModel, hostModel.ecModel);
+    });
+
+    this.leavesModel = new Model(leavesOption || {}, hostModel, hostModel.ecModel);
+}
+
+Tree.prototype = {
+
+    constructor: Tree,
+
+    type: 'tree',
+
+    /**
+     * Travel this subtree (include this node).
+     * Usage:
+     *    node.eachNode(function () { ... }); // preorder
+     *    node.eachNode('preorder', function () { ... }); // preorder
+     *    node.eachNode('postorder', function () { ... }); // postorder
+     *    node.eachNode(
+     *        {order: 'postorder', attr: 'viewChildren'},
+     *        function () { ... }
+     *    ); // postorder
+     *
+     * @param {(Object|string)} options If string, means order.
+     * @param {string=} options.order 'preorder' or 'postorder'
+     * @param {string=} options.attr 'children' or 'viewChildren'
+     * @param {Function} cb
+     * @param {Object}   [context]
+     */
+    eachNode: function (options, cb, context) {
+        this.root.eachNode(options, cb, context);
+    },
+
+    /**
+     * @param {number} dataIndex
+     * @return {module:echarts/data/Tree~TreeNode}
+     */
+    getNodeByDataIndex: function (dataIndex) {
+        var rawIndex = this.data.getRawIndex(dataIndex);
+        return this._nodes[rawIndex];
+    },
+
+    /**
+     * @param {string} name
+     * @return {module:echarts/data/Tree~TreeNode}
+     */
+    getNodeByName: function (name) {
+        return this.root.getNodeByName(name);
+    },
+
+    /**
+     * Update item available by list,
+     * when list has been performed options like 'filterSelf' or 'map'.
+     */
+    update: function () {
+        var data = this.data;
+        var nodes = this._nodes;
+
+        for (var i = 0, len = nodes.length; i < len; i++) {
+            nodes[i].dataIndex = -1;
+        }
+
+        for (var i = 0, len = data.count(); i < len; i++) {
+            nodes[data.getRawIndex(i)].dataIndex = i;
+        }
+    },
+
+    /**
+     * Clear all layouts
+     */
+    clearLayouts: function () {
+        this.data.clearItemLayouts();
+    }
+};
+
+/**
+ * data node format:
+ * {
+ *     name: ...
+ *     value: ...
+ *     children: [
+ *         {
+ *             name: ...
+ *             value: ...
+ *             children: ...
+ *         },
+ *         ...
+ *     ]
+ * }
+ *
+ * @static
+ * @param {Object} dataRoot Root node.
+ * @param {module:echarts/model/Model} hostModel
+ * @param {Object} treeOptions
+ * @param {Array.<Object>} treeOptions.levels
+ * @param {Array.<Object>} treeOptions.leaves
+ * @return module:echarts/data/Tree
+ */
+Tree.createTree = function (dataRoot, hostModel, treeOptions) {
+
+    var tree = new Tree(hostModel, treeOptions.levels, treeOptions.leaves);
+    var listData = [];
+    var dimMax = 1;
+
+    buildHierarchy(dataRoot);
+
+    function buildHierarchy(dataNode, parentNode) {
+        var value = dataNode.value;
+        dimMax = Math.max(dimMax, isArray(value) ? value.length : 1);
+
+        listData.push(dataNode);
+
+        var node = new TreeNode(dataNode.name, tree);
+        parentNode
+            ? addChild(node, parentNode)
+            : (tree.root = node);
+
+        tree._nodes.push(node);
