@@ -47861,3 +47861,294 @@ function linkList(opt) {
 
     // Make sure datas contains mainData.
     assert$1(datas[mainData.dataType] === mainData);
+}
+
+function transferInjection(opt, res) {
+    if (isMainData(this)) {
+        // Transfer datas to new main data.
+        var datas = extend({}, this[DATAS]);
+        datas[this.dataType] = res;
+        linkAll(res, datas, opt);
+    }
+    else {
+        // Modify the reference in main data to point newData.
+        linkSingle(res, this.dataType, this[MAIN_DATA], opt);
+    }
+    return res;
+}
+
+function changeInjection(opt, res) {
+    opt.struct && opt.struct.update(this);
+    return res;
+}
+
+function cloneShallowInjection(opt, res) {
+    // cloneShallow, which brings about some fragilities, may be inappropriate
+    // to be exposed as an API. So for implementation simplicity we can make
+    // the restriction that cloneShallow of not-mainData should not be invoked
+    // outside, but only be invoked here.
+    each$7(res[DATAS], function (data, dataType) {
+        data !== res && linkSingle(data.cloneShallow(), dataType, res, opt);
+    });
+    return res;
+}
+
+/**
+ * Supplement method to List.
+ *
+ * @public
+ * @param {string} [dataType] If not specified, return mainData.
+ * @return {module:echarts/data/List}
+ */
+function getLinkedData(dataType) {
+    var mainData = this[MAIN_DATA];
+    return (dataType == null || mainData == null)
+        ? mainData
+        : mainData[DATAS][dataType];
+}
+
+function isMainData(data) {
+    return data[MAIN_DATA] === data;
+}
+
+function linkAll(mainData, datas, opt) {
+    mainData[DATAS] = {};
+    each$7(datas, function (data, dataType) {
+        linkSingle(data, dataType, mainData, opt);
+    });
+}
+
+function linkSingle(data, dataType, mainData, opt) {
+    mainData[DATAS][dataType] = data;
+    data[MAIN_DATA] = mainData;
+    data.dataType = dataType;
+
+    if (opt.struct) {
+        data[opt.structAttr] = opt.struct;
+        opt.struct[opt.datasAttr[dataType]] = data;
+    }
+
+    // Supplement method.
+    data.getLinkedData = getLinkedData;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Tree data structure
+ *
+ * @module echarts/data/Tree
+ */
+
+/**
+ * @constructor module:echarts/data/Tree~TreeNode
+ * @param {string} name
+ * @param {module:echarts/data/Tree} hostTree
+ */
+var TreeNode = function (name, hostTree) {
+    /**
+     * @type {string}
+     */
+    this.name = name || '';
+
+    /**
+     * Depth of node
+     *
+     * @type {number}
+     * @readOnly
+     */
+    this.depth = 0;
+
+    /**
+     * Height of the subtree rooted at this node.
+     * @type {number}
+     * @readOnly
+     */
+    this.height = 0;
+
+    /**
+     * @type {module:echarts/data/Tree~TreeNode}
+     * @readOnly
+     */
+    this.parentNode = null;
+
+    /**
+     * Reference to list item.
+     * Do not persistent dataIndex outside,
+     * besause it may be changed by list.
+     * If dataIndex -1,
+     * this node is logical deleted (filtered) in list.
+     *
+     * @type {Object}
+     * @readOnly
+     */
+    this.dataIndex = -1;
+
+    /**
+     * @type {Array.<module:echarts/data/Tree~TreeNode>}
+     * @readOnly
+     */
+    this.children = [];
+
+    /**
+     * @type {Array.<module:echarts/data/Tree~TreeNode>}
+     * @pubilc
+     */
+    this.viewChildren = [];
+
+    /**
+     * @type {moduel:echarts/data/Tree}
+     * @readOnly
+     */
+    this.hostTree = hostTree;
+};
+
+TreeNode.prototype = {
+
+    constructor: TreeNode,
+
+    /**
+     * The node is removed.
+     * @return {boolean} is removed.
+     */
+    isRemoved: function () {
+        return this.dataIndex < 0;
+    },
+
+    /**
+     * Travel this subtree (include this node).
+     * Usage:
+     *    node.eachNode(function () { ... }); // preorder
+     *    node.eachNode('preorder', function () { ... }); // preorder
+     *    node.eachNode('postorder', function () { ... }); // postorder
+     *    node.eachNode(
+     *        {order: 'postorder', attr: 'viewChildren'},
+     *        function () { ... }
+     *    ); // postorder
+     *
+     * @param {(Object|string)} options If string, means order.
+     * @param {string=} options.order 'preorder' or 'postorder'
+     * @param {string=} options.attr 'children' or 'viewChildren'
+     * @param {Function} cb If in preorder and return false,
+     *                      its subtree will not be visited.
+     * @param {Object} [context]
+     */
+    eachNode: function (options, cb, context) {
+        if (typeof options === 'function') {
+            context = cb;
+            cb = options;
+            options = null;
+        }
+
+        options = options || {};
+        if (isString(options)) {
+            options = {order: options};
+        }
+
+        var order = options.order || 'preorder';
+        var children = this[options.attr || 'children'];
+
+        var suppressVisitSub;
+        order === 'preorder' && (suppressVisitSub = cb.call(context, this));
+
+        for (var i = 0; !suppressVisitSub && i < children.length; i++) {
+            children[i].eachNode(options, cb, context);
+        }
+
+        order === 'postorder' && cb.call(context, this);
+    },
+
+    /**
+     * Update depth and height of this subtree.
+     *
+     * @param  {number} depth
+     */
+    updateDepthAndHeight: function (depth) {
+        var height = 0;
+        this.depth = depth;
+        for (var i = 0; i < this.children.length; i++) {
+            var child = this.children[i];
+            child.updateDepthAndHeight(depth + 1);
+            if (child.height > height) {
+                height = child.height;
+            }
+        }
+        this.height = height + 1;
+    },
+
+    /**
+     * @param  {string} id
+     * @return {module:echarts/data/Tree~TreeNode}
+     */
+    getNodeById: function (id) {
+        if (this.getId() === id) {
+            return this;
+        }
+        for (var i = 0, children = this.children, len = children.length; i < len; i++) {
+            var res = children[i].getNodeById(id);
+            if (res) {
+                return res;
+            }
+        }
+    },
+
+    /**
+     * @param {module:echarts/data/Tree~TreeNode} node
+     * @return {boolean}
+     */
+    contains: function (node) {
+        if (node === this) {
+            return true;
+        }
+        for (var i = 0, children = this.children, len = children.length; i < len; i++) {
+            var res = children[i].contains(node);
+            if (res) {
+                return res;
+            }
+        }
+    },
+
+    /**
+     * @param {boolean} includeSelf Default false.
+     * @return {Array.<module:echarts/data/Tree~TreeNode>} order: [root, child, grandchild, ...]
+     */
+    getAncestors: function (includeSelf) {
+        var ancestors = [];
+        var node = includeSelf ? this : this.parentNode;
+        while (node) {
+            ancestors.push(node);
+            node = node.parentNode;
+        }
+        ancestors.reverse();
+        return ancestors;
+    },
+
+    /**
+     * @param {string|Array=} [dimension='value'] Default 'value'. can be 0, 1, 2, 3
+     * @return {number} Value.
+     */
+    getValue: function (dimension) {
+        var data = this.hostTree.data;
+        return data.get(data.getDimension(dimension || 'value'), this.dataIndex);
+    },
+
+    /**
+     * @param {Object} layout
+     * @param {boolean=} [merge=false]
