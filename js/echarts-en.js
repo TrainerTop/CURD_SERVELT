@@ -49000,3 +49000,286 @@ function defaultSeparation(node1, node2) {
 */
 
 /**
+ * @file This file used to draw tree view.
+ * @author Deqing Li(annong035@gmail.com)
+ */
+
+extendChartView({
+
+    type: 'tree',
+
+    /**
+     * Init the chart
+     * @override
+     * @param  {module:echarts/model/Global} ecModel
+     * @param  {module:echarts/ExtensionAPI} api
+     */
+    init: function (ecModel, api) {
+
+        /**
+         * @private
+         * @type {module:echarts/data/Tree}
+         */
+        this._oldTree;
+
+        /**
+         * @private
+         * @type {module:zrender/container/Group}
+         */
+        this._mainGroup = new Group();
+
+        /**
+         * @private
+         * @type {module:echarts/componet/helper/RoamController}
+         */
+        this._controller = new RoamController(api.getZr());
+
+        this._controllerHost = {target: this.group};
+
+        this.group.add(this._mainGroup);
+    },
+
+    render: function (seriesModel, ecModel, api, payload) {
+        var data = seriesModel.getData();
+
+        var layoutInfo = seriesModel.layoutInfo;
+
+        var group = this._mainGroup;
+
+        var layout = seriesModel.get('layout');
+
+        if (layout === 'radial') {
+            group.attr('position', [layoutInfo.x + layoutInfo.width / 2, layoutInfo.y + layoutInfo.height / 2]);
+        }
+        else {
+            group.attr('position', [layoutInfo.x, layoutInfo.y]);
+        }
+
+        this._updateViewCoordSys(seriesModel);
+        this._updateController(seriesModel, ecModel, api);
+
+        var oldData = this._data;
+
+        var seriesScope = {
+            expandAndCollapse: seriesModel.get('expandAndCollapse'),
+            layout: layout,
+            orient: seriesModel.getOrient(),
+            curvature: seriesModel.get('lineStyle.curveness'),
+            symbolRotate: seriesModel.get('symbolRotate'),
+            symbolOffset: seriesModel.get('symbolOffset'),
+            hoverAnimation: seriesModel.get('hoverAnimation'),
+            useNameLabel: true,
+            fadeIn: true
+        };
+
+        data.diff(oldData)
+            .add(function (newIdx) {
+                if (symbolNeedsDraw$1(data, newIdx)) {
+                    // Create node and edge
+                    updateNode(data, newIdx, null, group, seriesModel, seriesScope);
+                }
+            })
+            .update(function (newIdx, oldIdx) {
+                var symbolEl = oldData.getItemGraphicEl(oldIdx);
+                if (!symbolNeedsDraw$1(data, newIdx)) {
+                    symbolEl && removeNode(oldData, oldIdx, symbolEl, group, seriesModel, seriesScope);
+                    return;
+                }
+                // Update node and edge
+                updateNode(data, newIdx, symbolEl, group, seriesModel, seriesScope);
+            })
+            .remove(function (oldIdx) {
+                var symbolEl = oldData.getItemGraphicEl(oldIdx);
+                // When remove a collapsed node of subtree, since the collapsed
+                // node haven't been initialized with a symbol element,
+                // you can't found it's symbol element through index.
+                // so if we want to remove the symbol element we should insure
+                // that the symbol element is not null.
+                if (symbolEl) {
+                    removeNode(oldData, oldIdx, symbolEl, group, seriesModel, seriesScope);
+                }
+            })
+            .execute();
+
+        this._nodeScaleRatio = seriesModel.get('nodeScaleRatio');
+
+        this._updateNodeAndLinkScale(seriesModel);
+
+        if (seriesScope.expandAndCollapse === true) {
+            data.eachItemGraphicEl(function (el, dataIndex) {
+                el.off('click').on('click', function () {
+                    api.dispatchAction({
+                        type: 'treeExpandAndCollapse',
+                        seriesId: seriesModel.id,
+                        dataIndex: dataIndex
+                    });
+                });
+            });
+        }
+        this._data = data;
+    },
+
+    _updateViewCoordSys: function (seriesModel) {
+        var data = seriesModel.getData();
+        var points = [];
+        data.each(function (idx) {
+            var layout = data.getItemLayout(idx);
+            if (layout && !isNaN(layout.x) && !isNaN(layout.y)) {
+                points.push([+layout.x, +layout.y]);
+            }
+        });
+        var min = [];
+        var max = [];
+        fromPoints(points, min, max);
+        // If width or height is 0
+        if (max[0] - min[0] === 0) {
+            max[0] += 1;
+            min[0] -= 1;
+        }
+        if (max[1] - min[1] === 0) {
+            max[1] += 1;
+            min[1] -= 1;
+        }
+
+        var viewCoordSys = seriesModel.coordinateSystem = new View();
+        viewCoordSys.zoomLimit = seriesModel.get('scaleLimit');
+
+        viewCoordSys.setBoundingRect(min[0], min[1], max[0] - min[0], max[1] - min[1]);
+
+        viewCoordSys.setCenter(seriesModel.get('center'));
+        viewCoordSys.setZoom(seriesModel.get('zoom'));
+
+        // Here we use viewCoordSys just for computing the 'position' and 'scale' of the group
+        this.group.attr({
+            position: viewCoordSys.position,
+            scale: viewCoordSys.scale
+        });
+
+        this._viewCoordSys = viewCoordSys;
+    },
+
+    _updateController: function (seriesModel, ecModel, api) {
+        var controller = this._controller;
+        var controllerHost = this._controllerHost;
+        var group = this.group;
+        controller.setPointerChecker(function (e, x, y) {
+            var rect = group.getBoundingRect();
+            rect.applyTransform(group.transform);
+            return rect.contain(x, y)
+                && !onIrrelevantElement(e, api, seriesModel);
+        });
+
+        controller.enable(seriesModel.get('roam'));
+        controllerHost.zoomLimit = seriesModel.get('scaleLimit');
+        controllerHost.zoom = seriesModel.coordinateSystem.getZoom();
+
+        controller
+            .off('pan')
+            .off('zoom')
+            .on('pan', function (e) {
+                updateViewOnPan(controllerHost, e.dx, e.dy);
+                api.dispatchAction({
+                    seriesId: seriesModel.id,
+                    type: 'treeRoam',
+                    dx: e.dx,
+                    dy: e.dy
+                });
+            }, this)
+            .on('zoom', function (e) {
+                updateViewOnZoom(controllerHost, e.scale, e.originX, e.originY);
+                api.dispatchAction({
+                    seriesId: seriesModel.id,
+                    type: 'treeRoam',
+                    zoom: e.scale,
+                    originX: e.originX,
+                    originY: e.originY
+                });
+                this._updateNodeAndLinkScale(seriesModel);
+            }, this);
+    },
+
+    _updateNodeAndLinkScale: function (seriesModel) {
+        var data = seriesModel.getData();
+
+        var nodeScale = this._getNodeGlobalScale(seriesModel);
+        var invScale = [nodeScale, nodeScale];
+
+        data.eachItemGraphicEl(function (el, idx) {
+            el.attr('scale', invScale);
+        });
+    },
+
+    _getNodeGlobalScale: function (seriesModel) {
+        var coordSys = seriesModel.coordinateSystem;
+        if (coordSys.type !== 'view') {
+            return 1;
+        }
+
+        var nodeScaleRatio = this._nodeScaleRatio;
+
+        var groupScale = coordSys.scale;
+        var groupZoom = (groupScale && groupScale[0]) || 1;
+        // Scale node when zoom changes
+        var roamZoom = coordSys.getZoom();
+        var nodeScale = (roamZoom - 1) * nodeScaleRatio + 1;
+
+        return nodeScale / groupZoom;
+    },
+
+    dispose: function () {
+        this._controller && this._controller.dispose();
+        this._controllerHost = {};
+    },
+
+    remove: function () {
+        this._mainGroup.removeAll();
+        this._data = null;
+    }
+
+});
+
+function symbolNeedsDraw$1(data, dataIndex) {
+    var layout = data.getItemLayout(dataIndex);
+
+    return layout
+        && !isNaN(layout.x) && !isNaN(layout.y)
+        && data.getItemVisual(dataIndex, 'symbol') !== 'none';
+}
+
+function getTreeNodeStyle(node, itemModel, seriesScope) {
+    seriesScope.itemModel = itemModel;
+    seriesScope.itemStyle = itemModel.getModel('itemStyle').getItemStyle();
+    seriesScope.hoverItemStyle = itemModel.getModel('emphasis.itemStyle').getItemStyle();
+    seriesScope.lineStyle = itemModel.getModel('lineStyle').getLineStyle();
+    seriesScope.labelModel = itemModel.getModel('label');
+    seriesScope.hoverLabelModel = itemModel.getModel('emphasis.label');
+
+    if (node.isExpand === false && node.children.length !== 0) {
+        seriesScope.symbolInnerColor = seriesScope.itemStyle.fill;
+    }
+    else {
+        seriesScope.symbolInnerColor = '#fff';
+    }
+
+    return seriesScope;
+}
+
+function updateNode(data, dataIndex, symbolEl, group, seriesModel, seriesScope) {
+    var isInit = !symbolEl;
+    var node = data.tree.getNodeByDataIndex(dataIndex);
+    var itemModel = node.getModel();
+    var seriesScope = getTreeNodeStyle(node, itemModel, seriesScope);
+    var virtualRoot = data.tree.root;
+
+    var source = node.parentNode === virtualRoot ? node : node.parentNode || node;
+    var sourceSymbolEl = data.getItemGraphicEl(source.dataIndex);
+    var sourceLayout = source.getLayout();
+    var sourceOldLayout = sourceSymbolEl
+        ? {
+            x: sourceSymbolEl.position[0],
+            y: sourceSymbolEl.position[1],
+            rawX: sourceSymbolEl.__radialOldRawX,
+            rawY: sourceSymbolEl.__radialOldRawY
+        }
+        : sourceLayout;
+    var targetLayout = node.getLayout();
