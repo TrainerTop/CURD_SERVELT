@@ -49283,3 +49283,287 @@ function updateNode(data, dataIndex, symbolEl, group, seriesModel, seriesScope) 
         }
         : sourceLayout;
     var targetLayout = node.getLayout();
+
+    if (isInit) {
+        symbolEl = new SymbolClz$1(data, dataIndex, seriesScope);
+        symbolEl.attr('position', [sourceOldLayout.x, sourceOldLayout.y]);
+    }
+    else {
+        symbolEl.updateData(data, dataIndex, seriesScope);
+    }
+
+    symbolEl.__radialOldRawX = symbolEl.__radialRawX;
+    symbolEl.__radialOldRawY = symbolEl.__radialRawY;
+    symbolEl.__radialRawX = targetLayout.rawX;
+    symbolEl.__radialRawY = targetLayout.rawY;
+
+    group.add(symbolEl);
+    data.setItemGraphicEl(dataIndex, symbolEl);
+    updateProps(symbolEl, {
+        position: [targetLayout.x, targetLayout.y]
+    }, seriesModel);
+
+    var symbolPath = symbolEl.getSymbolPath();
+
+    if (seriesScope.layout === 'radial') {
+        var realRoot = virtualRoot.children[0];
+        var rootLayout = realRoot.getLayout();
+        var length = realRoot.children.length;
+        var rad;
+        var isLeft;
+
+        if (targetLayout.x === rootLayout.x && node.isExpand === true) {
+            var center = {};
+            center.x = (realRoot.children[0].getLayout().x + realRoot.children[length - 1].getLayout().x) / 2;
+            center.y = (realRoot.children[0].getLayout().y + realRoot.children[length - 1].getLayout().y) / 2;
+            rad = Math.atan2(center.y - rootLayout.y, center.x - rootLayout.x);
+            if (rad < 0) {
+                rad = Math.PI * 2 + rad;
+            }
+            isLeft = center.x < rootLayout.x;
+            if (isLeft) {
+                rad = rad - Math.PI;
+            }
+        }
+        else {
+            rad = Math.atan2(targetLayout.y - rootLayout.y, targetLayout.x - rootLayout.x);
+            if (rad < 0) {
+                rad = Math.PI * 2 + rad;
+            }
+            if (node.children.length === 0 || (node.children.length !== 0 && node.isExpand === false)) {
+                isLeft = targetLayout.x < rootLayout.x;
+                if (isLeft) {
+                    rad = rad - Math.PI;
+                }
+            }
+            else {
+                isLeft = targetLayout.x > rootLayout.x;
+                if (!isLeft) {
+                    rad = rad - Math.PI;
+                }
+            }
+        }
+
+        var textPosition = isLeft ? 'left' : 'right';
+        symbolPath.setStyle({
+            textPosition: textPosition,
+            textRotation: -rad,
+            textOrigin: 'center',
+            verticalAlign: 'middle'
+        });
+    }
+
+    if (node.parentNode && node.parentNode !== virtualRoot) {
+        var edge = symbolEl.__edge;
+        if (!edge) {
+            edge = symbolEl.__edge = new BezierCurve({
+                shape: getEdgeShape(seriesScope, sourceOldLayout, sourceOldLayout),
+                style: defaults({opacity: 0, strokeNoScale: true}, seriesScope.lineStyle)
+            });
+        }
+
+        updateProps(edge, {
+            shape: getEdgeShape(seriesScope, sourceLayout, targetLayout),
+            style: {opacity: 1}
+        }, seriesModel);
+
+        group.add(edge);
+    }
+}
+
+function removeNode(data, dataIndex, symbolEl, group, seriesModel, seriesScope) {
+    var node = data.tree.getNodeByDataIndex(dataIndex);
+    var virtualRoot = data.tree.root;
+    var itemModel = node.getModel();
+    var seriesScope = getTreeNodeStyle(node, itemModel, seriesScope);
+
+    var source = node.parentNode === virtualRoot ? node : node.parentNode || node;
+    var sourceLayout;
+    while (sourceLayout = source.getLayout(), sourceLayout == null) {
+        source = source.parentNode === virtualRoot ? source : source.parentNode || source;
+    }
+
+    updateProps(symbolEl, {
+        position: [sourceLayout.x + 1, sourceLayout.y + 1]
+    }, seriesModel, function () {
+        group.remove(symbolEl);
+        data.setItemGraphicEl(dataIndex, null);
+    });
+
+    symbolEl.fadeOut(null, {keepLabel: true});
+
+    var edge = symbolEl.__edge;
+    if (edge) {
+        updateProps(edge, {
+            shape: getEdgeShape(seriesScope, sourceLayout, sourceLayout),
+            style: {
+                opacity: 0
+            }
+        }, seriesModel, function () {
+            group.remove(edge);
+        });
+    }
+}
+
+function getEdgeShape(seriesScope, sourceLayout, targetLayout) {
+    var cpx1;
+    var cpy1;
+    var cpx2;
+    var cpy2;
+    var orient = seriesScope.orient;
+    var x1;
+    var x2;
+    var y1;
+    var y2;
+
+    if (seriesScope.layout === 'radial') {
+        x1 = sourceLayout.rawX;
+        y1 = sourceLayout.rawY;
+        x2 = targetLayout.rawX;
+        y2 = targetLayout.rawY;
+
+        var radialCoor1 = radialCoordinate(x1, y1);
+        var radialCoor2 = radialCoordinate(x1, y1 + (y2 - y1) * seriesScope.curvature);
+        var radialCoor3 = radialCoordinate(x2, y2 + (y1 - y2) * seriesScope.curvature);
+        var radialCoor4 = radialCoordinate(x2, y2);
+
+        return {
+            x1: radialCoor1.x,
+            y1: radialCoor1.y,
+            x2: radialCoor4.x,
+            y2: radialCoor4.y,
+            cpx1: radialCoor2.x,
+            cpy1: radialCoor2.y,
+            cpx2: radialCoor3.x,
+            cpy2: radialCoor3.y
+        };
+    }
+    else {
+        x1 = sourceLayout.x;
+        y1 = sourceLayout.y;
+        x2 = targetLayout.x;
+        y2 = targetLayout.y;
+
+        if (orient === 'LR' || orient === 'RL') {
+            cpx1 = x1 + (x2 - x1) * seriesScope.curvature;
+            cpy1 = y1;
+            cpx2 = x2 + (x1 - x2) * seriesScope.curvature;
+            cpy2 = y2;
+        }
+        if (orient === 'TB' || orient === 'BT') {
+            cpx1 = x1;
+            cpy1 = y1 + (y2 - y1) * seriesScope.curvature;
+            cpx2 = x2;
+            cpy2 = y2 + (y1 - y2) * seriesScope.curvature;
+        }
+    }
+
+    return {
+        x1: x1,
+        y1: y1,
+        x2: x2,
+        y2: y2,
+        cpx1: cpx1,
+        cpy1: cpy1,
+        cpx2: cpx2,
+        cpy2: cpy2
+    };
+
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file Register the actions of the tree
+ * @author Deqing Li(annong035@gmail.com)
+ */
+
+registerAction({
+    type: 'treeExpandAndCollapse',
+    event: 'treeExpandAndCollapse',
+    update: 'update'
+}, function (payload, ecModel) {
+    ecModel.eachComponent({mainType: 'series', subType: 'tree', query: payload}, function (seriesModel) {
+        var dataIndex = payload.dataIndex;
+        var tree = seriesModel.getData().tree;
+        var node = tree.getNodeByDataIndex(dataIndex);
+        node.isExpand = !node.isExpand;
+
+    });
+});
+
+registerAction({
+    type: 'treeRoam',
+    event: 'treeRoam',
+    // Here we set 'none' instead of 'update', because roam action
+    // just need to update the transform matrix without having to recalculate
+    // the layout. So don't need to go through the whole update process, such
+    // as 'dataPrcocess', 'coordSystemUpdate', 'layout' and so on.
+    update: 'none'
+}, function (payload, ecModel) {
+    ecModel.eachComponent({mainType: 'series', subType: 'tree', query: payload}, function (seriesModel) {
+        var coordSys = seriesModel.coordinateSystem;
+        var res = updateCenterAndZoom(coordSys, payload);
+
+        seriesModel.setCenter
+            && seriesModel.setCenter(res.center);
+
+        seriesModel.setZoom
+            && seriesModel.setZoom(res.zoom);
+    });
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+/**
+ * Traverse the tree from bottom to top and do something
+ * @param  {module:echarts/data/Tree~TreeNode} root  The real root of the tree
+ * @param  {Function} callback
+ */
+function eachAfter(root, callback, separation) {
+    var nodes = [root];
+    var next = [];
+    var node;
+
+    while (node = nodes.pop()) { // jshint ignore:line
+        next.push(node);
+        if (node.isExpand) {
+            var children = node.children;
+            if (children.length) {
+                for (var i = 0; i < children.length; i++) {
+                    nodes.push(children[i]);
