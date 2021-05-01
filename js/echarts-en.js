@@ -50620,3 +50620,293 @@ extendChartView({
     },
 
     /**
+     * @private
+     */
+    _giveContainerGroup: function (layoutInfo) {
+        var containerGroup = this._containerGroup;
+        if (!containerGroup) {
+            // FIXME
+            // 加一层containerGroup是为了clip，但是现在clip功能并没有实现。
+            containerGroup = this._containerGroup = new Group$2();
+            this._initEvents(containerGroup);
+            this.group.add(containerGroup);
+        }
+        containerGroup.attr('position', [layoutInfo.x, layoutInfo.y]);
+
+        return containerGroup;
+    },
+
+    /**
+     * @private
+     */
+    _doRender: function (containerGroup, seriesModel, reRoot) {
+        var thisTree = seriesModel.getData().tree;
+        var oldTree = this._oldTree;
+
+        // Clear last shape records.
+        var lastsForAnimation = createStorage();
+        var thisStorage = createStorage();
+        var oldStorage = this._storage;
+        var willInvisibleEls = [];
+        var doRenderNode = curry(
+            renderNode, seriesModel,
+            thisStorage, oldStorage, reRoot,
+            lastsForAnimation, willInvisibleEls
+        );
+
+        // Notice: when thisTree and oldTree are the same tree (see list.cloneShallow),
+        // the oldTree is actually losted, so we can not find all of the old graphic
+        // elements from tree. So we use this stragegy: make element storage, move
+        // from old storage to new storage, clear old storage.
+
+        dualTravel(
+            thisTree.root ? [thisTree.root] : [],
+            (oldTree && oldTree.root) ? [oldTree.root] : [],
+            containerGroup,
+            thisTree === oldTree || !oldTree,
+            0
+        );
+
+        // Process all removing.
+        var willDeleteEls = clearStorage(oldStorage);
+
+        this._oldTree = thisTree;
+        this._storage = thisStorage;
+
+        return {
+            lastsForAnimation: lastsForAnimation,
+            willDeleteEls: willDeleteEls,
+            renderFinally: renderFinally
+        };
+
+        function dualTravel(thisViewChildren, oldViewChildren, parentGroup, sameTree, depth) {
+            // When 'render' is triggered by action,
+            // 'this' and 'old' may be the same tree,
+            // we use rawIndex in that case.
+            if (sameTree) {
+                oldViewChildren = thisViewChildren;
+                each$8(thisViewChildren, function (child, index) {
+                    !child.isRemoved() && processNode(index, index);
+                });
+            }
+            // Diff hierarchically (diff only in each subtree, but not whole).
+            // because, consistency of view is important.
+            else {
+                (new DataDiffer(oldViewChildren, thisViewChildren, getKey, getKey))
+                    .add(processNode)
+                    .update(processNode)
+                    .remove(curry(processNode, null))
+                    .execute();
+            }
+
+            function getKey(node) {
+                // Identify by name or raw index.
+                return node.getId();
+            }
+
+            function processNode(newIndex, oldIndex) {
+                var thisNode = newIndex != null ? thisViewChildren[newIndex] : null;
+                var oldNode = oldIndex != null ? oldViewChildren[oldIndex] : null;
+
+                var group = doRenderNode(thisNode, oldNode, parentGroup, depth);
+
+                group && dualTravel(
+                    thisNode && thisNode.viewChildren || [],
+                    oldNode && oldNode.viewChildren || [],
+                    group,
+                    sameTree,
+                    depth + 1
+                );
+            }
+        }
+
+        function clearStorage(storage) {
+            var willDeleteEls = createStorage();
+            storage && each$8(storage, function (store, storageName) {
+                var delEls = willDeleteEls[storageName];
+                each$8(store, function (el) {
+                    el && (delEls.push(el), el.__tmWillDelete = 1);
+                });
+            });
+            return willDeleteEls;
+        }
+
+        function renderFinally() {
+            each$8(willDeleteEls, function (els) {
+                each$8(els, function (el) {
+                    el.parent && el.parent.remove(el);
+                });
+            });
+            each$8(willInvisibleEls, function (el) {
+                el.invisible = true;
+                // Setting invisible is for optimizing, so no need to set dirty,
+                // just mark as invisible.
+                el.dirty();
+            });
+        }
+    },
+
+    /**
+     * @private
+     */
+    _doAnimation: function (containerGroup, renderResult, seriesModel, reRoot) {
+        if (!seriesModel.get('animation')) {
+            return;
+        }
+
+        var duration = seriesModel.get('animationDurationUpdate');
+        var easing = seriesModel.get('animationEasing');
+        var animationWrap = createWrap();
+
+        // Make delete animations.
+        each$8(renderResult.willDeleteEls, function (store, storageName) {
+            each$8(store, function (el, rawIndex) {
+                if (el.invisible) {
+                    return;
+                }
+
+                var parent = el.parent; // Always has parent, and parent is nodeGroup.
+                var target;
+
+                if (reRoot && reRoot.direction === 'drillDown') {
+                    target = parent === reRoot.rootNodeGroup
+                        // This is the content element of view root.
+                        // Only `content` will enter this branch, because
+                        // `background` and `nodeGroup` will not be deleted.
+                        ? {
+                            shape: {
+                                x: 0,
+                                y: 0,
+                                width: parent.__tmNodeWidth,
+                                height: parent.__tmNodeHeight
+                            },
+                            style: {
+                                opacity: 0
+                            }
+                        }
+                        // Others.
+                        : {style: {opacity: 0}};
+                }
+                else {
+                    var targetX = 0;
+                    var targetY = 0;
+
+                    if (!parent.__tmWillDelete) {
+                        // Let node animate to right-bottom corner, cooperating with fadeout,
+                        // which is appropriate for user understanding.
+                        // Divided by 2 for reRoot rolling up effect.
+                        targetX = parent.__tmNodeWidth / 2;
+                        targetY = parent.__tmNodeHeight / 2;
+                    }
+
+                    target = storageName === 'nodeGroup'
+                        ? {position: [targetX, targetY], style: {opacity: 0}}
+                        : {
+                            shape: {x: targetX, y: targetY, width: 0, height: 0},
+                            style: {opacity: 0}
+                        };
+                }
+
+                target && animationWrap.add(el, target, duration, easing);
+            });
+        });
+
+        // Make other animations
+        each$8(this._storage, function (store, storageName) {
+            each$8(store, function (el, rawIndex) {
+                var last = renderResult.lastsForAnimation[storageName][rawIndex];
+                var target = {};
+
+                if (!last) {
+                    return;
+                }
+
+                if (storageName === 'nodeGroup') {
+                    if (last.old) {
+                        target.position = el.position.slice();
+                        el.attr('position', last.old);
+                    }
+                }
+                else {
+                    if (last.old) {
+                        target.shape = extend({}, el.shape);
+                        el.setShape(last.old);
+                    }
+
+                    if (last.fadein) {
+                        el.setStyle('opacity', 0);
+                        target.style = {opacity: 1};
+                    }
+                    // When animation is stopped for succedent animation starting,
+                    // el.style.opacity might not be 1
+                    else if (el.style.opacity !== 1) {
+                        target.style = {opacity: 1};
+                    }
+                }
+
+                animationWrap.add(el, target, duration, easing);
+            });
+        }, this);
+
+        this._state = 'animating';
+
+        animationWrap
+            .done(bind$1(function () {
+                this._state = 'ready';
+                renderResult.renderFinally();
+            }, this))
+            .start();
+    },
+
+    /**
+     * @private
+     */
+    _resetController: function (api) {
+        var controller = this._controller;
+
+        // Init controller.
+        if (!controller) {
+            controller = this._controller = new RoamController(api.getZr());
+            controller.enable(this.seriesModel.get('roam'));
+            controller.on('pan', bind$1(this._onPan, this));
+            controller.on('zoom', bind$1(this._onZoom, this));
+        }
+
+        var rect = new BoundingRect(0, 0, api.getWidth(), api.getHeight());
+        controller.setPointerChecker(function (e, x, y) {
+            return rect.contain(x, y);
+        });
+    },
+
+    /**
+     * @private
+     */
+    _clearController: function () {
+        var controller = this._controller;
+        if (controller) {
+            controller.dispose();
+            controller = null;
+        }
+    },
+
+    /**
+     * @private
+     */
+    _onPan: function (e) {
+        if (this._state !== 'animating'
+            && (Math.abs(e.dx) > DRAG_THRESHOLD || Math.abs(e.dy) > DRAG_THRESHOLD)
+        ) {
+            // These param must not be cached.
+            var root = this.seriesModel.getData().tree.root;
+
+            if (!root) {
+                return;
+            }
+
+            var rootLayout = root.getLayout();
+
+            if (!rootLayout) {
+                return;
+            }
+
+            this.api.dispatchAction({
