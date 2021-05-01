@@ -50370,3 +50370,253 @@ function packEventData(el, seriesModel, itemNode) {
 *   http://www.apache.org/licenses/LICENSE-2.0
 *
 * Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @param {number} [time=500] Time in ms
+ * @param {string} [easing='linear']
+ * @param {number} [delay=0]
+ * @param {Function} [callback]
+ *
+ * @example
+ *  // Animate position
+ *  animation
+ *      .createWrap()
+ *      .add(el1, {position: [10, 10]})
+ *      .add(el2, {shape: {width: 500}, style: {fill: 'red'}}, 400)
+ *      .done(function () { // done })
+ *      .start('cubicOut');
+ */
+function createWrap() {
+
+    var storage = [];
+    var elExistsMap = {};
+    var doneCallback;
+
+    return {
+
+        /**
+         * Caution: a el can only be added once, otherwise 'done'
+         * might not be called. This method checks this (by el.id),
+         * suppresses adding and returns false when existing el found.
+         *
+         * @param {modele:zrender/Element} el
+         * @param {Object} target
+         * @param {number} [time=500]
+         * @param {number} [delay=0]
+         * @param {string} [easing='linear']
+         * @return {boolean} Whether adding succeeded.
+         *
+         * @example
+         *     add(el, target, time, delay, easing);
+         *     add(el, target, time, easing);
+         *     add(el, target, time);
+         *     add(el, target);
+         */
+        add: function (el, target, time, delay, easing) {
+            if (isString(delay)) {
+                easing = delay;
+                delay = 0;
+            }
+
+            if (elExistsMap[el.id]) {
+                return false;
+            }
+            elExistsMap[el.id] = 1;
+
+            storage.push(
+                {el: el, target: target, time: time, delay: delay, easing: easing}
+            );
+
+            return true;
+        },
+
+        /**
+         * Only execute when animation finished. Will not execute when any
+         * of 'stop' or 'stopAnimation' called.
+         *
+         * @param {Function} callback
+         */
+        done: function (callback) {
+            doneCallback = callback;
+            return this;
+        },
+
+        /**
+         * Will stop exist animation firstly.
+         */
+        start: function () {
+            var count = storage.length;
+
+            for (var i = 0, len = storage.length; i < len; i++) {
+                var item = storage[i];
+                item.el.animateTo(item.target, item.time, item.delay, item.easing, done);
+            }
+
+            return this;
+
+            function done() {
+                count--;
+                if (!count) {
+                    storage.length = 0;
+                    elExistsMap = {};
+                    doneCallback && doneCallback();
+                }
+            }
+        }
+    };
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var bind$1 = bind;
+var Group$2 = Group;
+var Rect$1 = Rect;
+var each$8 = each$1;
+
+var DRAG_THRESHOLD = 3;
+var PATH_LABEL_NOAMAL = ['label'];
+var PATH_LABEL_EMPHASIS = ['emphasis', 'label'];
+var PATH_UPPERLABEL_NORMAL = ['upperLabel'];
+var PATH_UPPERLABEL_EMPHASIS = ['emphasis', 'upperLabel'];
+var Z_BASE = 10; // Should bigger than every z.
+var Z_BG = 1;
+var Z_CONTENT = 2;
+
+var getItemStyleEmphasis = makeStyleMapper([
+    ['fill', 'color'],
+    // `borderColor` and `borderWidth` has been occupied,
+    // so use `stroke` to indicate the stroke of the rect.
+    ['stroke', 'strokeColor'],
+    ['lineWidth', 'strokeWidth'],
+    ['shadowBlur'],
+    ['shadowOffsetX'],
+    ['shadowOffsetY'],
+    ['shadowColor']
+]);
+var getItemStyleNormal = function (model) {
+    // Normal style props should include emphasis style props.
+    var itemStyle = getItemStyleEmphasis(model);
+    // Clear styles set by emphasis.
+    itemStyle.stroke = itemStyle.fill = itemStyle.lineWidth = null;
+    return itemStyle;
+};
+
+extendChartView({
+
+    type: 'treemap',
+
+    /**
+     * @override
+     */
+    init: function (o, api) {
+
+        /**
+         * @private
+         * @type {module:zrender/container/Group}
+         */
+        this._containerGroup;
+
+        /**
+         * @private
+         * @type {Object.<string, Array.<module:zrender/container/Group>>}
+         */
+        this._storage = createStorage();
+
+        /**
+         * @private
+         * @type {module:echarts/data/Tree}
+         */
+        this._oldTree;
+
+        /**
+         * @private
+         * @type {module:echarts/chart/treemap/Breadcrumb}
+         */
+        this._breadcrumb;
+
+        /**
+         * @private
+         * @type {module:echarts/component/helper/RoamController}
+         */
+        this._controller;
+
+        /**
+         * 'ready', 'animating'
+         * @private
+         */
+        this._state = 'ready';
+    },
+
+    /**
+     * @override
+     */
+    render: function (seriesModel, ecModel, api, payload) {
+
+        var models = ecModel.findComponents({
+            mainType: 'series', subType: 'treemap', query: payload
+        });
+        if (indexOf(models, seriesModel) < 0) {
+            return;
+        }
+
+        this.seriesModel = seriesModel;
+        this.api = api;
+        this.ecModel = ecModel;
+
+        var types = ['treemapZoomToNode', 'treemapRootToNode'];
+        var targetInfo = retrieveTargetInfo(payload, types, seriesModel);
+        var payloadType = payload && payload.type;
+        var layoutInfo = seriesModel.layoutInfo;
+        var isInit = !this._oldTree;
+        var thisStorage = this._storage;
+
+        // Mark new root when action is treemapRootToNode.
+        var reRoot = (payloadType === 'treemapRootToNode' && targetInfo && thisStorage)
+            ? {
+                rootNodeGroup: thisStorage.nodeGroup[targetInfo.node.getRawIndex()],
+                direction: payload.direction
+            }
+            : null;
+
+        var containerGroup = this._giveContainerGroup(layoutInfo);
+
+        var renderResult = this._doRender(containerGroup, seriesModel, reRoot);
+        (
+            !isInit && (
+                !payloadType
+                || payloadType === 'treemapZoomToNode'
+                || payloadType === 'treemapRootToNode'
+            )
+        )
+            ? this._doAnimation(containerGroup, renderResult, seriesModel, reRoot)
+            : renderResult.renderFinally();
+
+        this._resetController(api);
+
+        this._renderBreadcrumb(seriesModel, api, targetInfo);
+    },
+
+    /**
