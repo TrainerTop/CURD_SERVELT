@@ -50910,3 +50910,270 @@ extendChartView({
             }
 
             this.api.dispatchAction({
+                type: 'treemapMove',
+                from: this.uid,
+                seriesId: this.seriesModel.id,
+                rootRect: {
+                    x: rootLayout.x + e.dx, y: rootLayout.y + e.dy,
+                    width: rootLayout.width, height: rootLayout.height
+                }
+            });
+        }
+    },
+
+    /**
+     * @private
+     */
+    _onZoom: function (e) {
+        var mouseX = e.originX;
+        var mouseY = e.originY;
+
+        if (this._state !== 'animating') {
+            // These param must not be cached.
+            var root = this.seriesModel.getData().tree.root;
+
+            if (!root) {
+                return;
+            }
+
+            var rootLayout = root.getLayout();
+
+            if (!rootLayout) {
+                return;
+            }
+
+            var rect = new BoundingRect(
+                rootLayout.x, rootLayout.y, rootLayout.width, rootLayout.height
+            );
+            var layoutInfo = this.seriesModel.layoutInfo;
+
+            // Transform mouse coord from global to containerGroup.
+            mouseX -= layoutInfo.x;
+            mouseY -= layoutInfo.y;
+
+            // Scale root bounding rect.
+            var m = create$1();
+            translate(m, m, [-mouseX, -mouseY]);
+            scale$1(m, m, [e.scale, e.scale]);
+            translate(m, m, [mouseX, mouseY]);
+
+            rect.applyTransform(m);
+
+            this.api.dispatchAction({
+                type: 'treemapRender',
+                from: this.uid,
+                seriesId: this.seriesModel.id,
+                rootRect: {
+                    x: rect.x, y: rect.y,
+                    width: rect.width, height: rect.height
+                }
+            });
+        }
+    },
+
+    /**
+     * @private
+     */
+    _initEvents: function (containerGroup) {
+        containerGroup.on('click', function (e) {
+            if (this._state !== 'ready') {
+                return;
+            }
+
+            var nodeClick = this.seriesModel.get('nodeClick', true);
+
+            if (!nodeClick) {
+                return;
+            }
+
+            var targetInfo = this.findTarget(e.offsetX, e.offsetY);
+
+            if (!targetInfo) {
+                return;
+            }
+
+            var node = targetInfo.node;
+            if (node.getLayout().isLeafRoot) {
+                this._rootToNode(targetInfo);
+            }
+            else {
+                if (nodeClick === 'zoomToNode') {
+                    this._zoomToNode(targetInfo);
+                }
+                else if (nodeClick === 'link') {
+                    var itemModel = node.hostTree.data.getItemModel(node.dataIndex);
+                    var link = itemModel.get('link', true);
+                    var linkTarget = itemModel.get('target', true) || 'blank';
+                    link && window.open(link, linkTarget);
+                }
+            }
+
+        }, this);
+    },
+
+    /**
+     * @private
+     */
+    _renderBreadcrumb: function (seriesModel, api, targetInfo) {
+        if (!targetInfo) {
+            targetInfo = seriesModel.get('leafDepth', true) != null
+                ? {node: seriesModel.getViewRoot()}
+                // FIXME
+                // better way?
+                // Find breadcrumb tail on center of containerGroup.
+                : this.findTarget(api.getWidth() / 2, api.getHeight() / 2);
+
+            if (!targetInfo) {
+                targetInfo = {node: seriesModel.getData().tree.root};
+            }
+        }
+
+        (this._breadcrumb || (this._breadcrumb = new Breadcrumb(this.group)))
+            .render(seriesModel, api, targetInfo.node, bind$1(onSelect, this));
+
+        function onSelect(node) {
+            if (this._state !== 'animating') {
+                aboveViewRoot(seriesModel.getViewRoot(), node)
+                    ? this._rootToNode({node: node})
+                    : this._zoomToNode({node: node});
+            }
+        }
+    },
+
+    /**
+     * @override
+     */
+    remove: function () {
+        this._clearController();
+        this._containerGroup && this._containerGroup.removeAll();
+        this._storage = createStorage();
+        this._state = 'ready';
+        this._breadcrumb && this._breadcrumb.remove();
+    },
+
+    dispose: function () {
+        this._clearController();
+    },
+
+    /**
+     * @private
+     */
+    _zoomToNode: function (targetInfo) {
+        this.api.dispatchAction({
+            type: 'treemapZoomToNode',
+            from: this.uid,
+            seriesId: this.seriesModel.id,
+            targetNode: targetInfo.node
+        });
+    },
+
+    /**
+     * @private
+     */
+    _rootToNode: function (targetInfo) {
+        this.api.dispatchAction({
+            type: 'treemapRootToNode',
+            from: this.uid,
+            seriesId: this.seriesModel.id,
+            targetNode: targetInfo.node
+        });
+    },
+
+    /**
+     * @public
+     * @param {number} x Global coord x.
+     * @param {number} y Global coord y.
+     * @return {Object} info If not found, return undefined;
+     * @return {number} info.node Target node.
+     * @return {number} info.offsetX x refer to target node.
+     * @return {number} info.offsetY y refer to target node.
+     */
+    findTarget: function (x, y) {
+        var targetInfo;
+        var viewRoot = this.seriesModel.getViewRoot();
+
+        viewRoot.eachNode({attr: 'viewChildren', order: 'preorder'}, function (node) {
+            var bgEl = this._storage.background[node.getRawIndex()];
+            // If invisible, there might be no element.
+            if (bgEl) {
+                var point = bgEl.transformCoordToLocal(x, y);
+                var shape = bgEl.shape;
+
+                // For performance consideration, dont use 'getBoundingRect'.
+                if (shape.x <= point[0]
+                    && point[0] <= shape.x + shape.width
+                    && shape.y <= point[1]
+                    && point[1] <= shape.y + shape.height
+                ) {
+                    targetInfo = {node: node, offsetX: point[0], offsetY: point[1]};
+                }
+                else {
+                    return false; // Suppress visit subtree.
+                }
+            }
+        }, this);
+
+        return targetInfo;
+    }
+
+});
+
+/**
+ * @inner
+ */
+function createStorage() {
+    return {nodeGroup: [], background: [], content: []};
+}
+
+/**
+ * @inner
+ * @return Return undefined means do not travel further.
+ */
+function renderNode(
+    seriesModel, thisStorage, oldStorage, reRoot,
+    lastsForAnimation, willInvisibleEls,
+    thisNode, oldNode, parentGroup, depth
+) {
+    // Whether under viewRoot.
+    if (!thisNode) {
+        // Deleting nodes will be performed finally. This method just find
+        // element from old storage, or create new element, set them to new
+        // storage, and set styles.
+        return;
+    }
+
+    // -------------------------------------------------------------------
+    // Start of closure variables available in "Procedures in renderNode".
+
+    var thisLayout = thisNode.getLayout();
+
+    if (!thisLayout || !thisLayout.isInView) {
+        return;
+    }
+
+    var thisWidth = thisLayout.width;
+    var thisHeight = thisLayout.height;
+    var borderWidth = thisLayout.borderWidth;
+    var thisInvisible = thisLayout.invisible;
+
+    var thisRawIndex = thisNode.getRawIndex();
+    var oldRawIndex = oldNode && oldNode.getRawIndex();
+
+    var thisViewChildren = thisNode.viewChildren;
+    var upperHeight = thisLayout.upperHeight;
+    var isParent = thisViewChildren && thisViewChildren.length;
+    var itemStyleNormalModel = thisNode.getModel('itemStyle');
+    var itemStyleEmphasisModel = thisNode.getModel('emphasis.itemStyle');
+
+    // End of closure ariables available in "Procedures in renderNode".
+    // -----------------------------------------------------------------
+
+    // Node group
+    var group = giveGraphic('nodeGroup', Group$2);
+
+    if (!group) {
+        return;
+    }
+
+    parentGroup.add(group);
+    // x,y are not set when el is above view root.
