@@ -51177,3 +51177,288 @@ function renderNode(
 
     parentGroup.add(group);
     // x,y are not set when el is above view root.
+    group.attr('position', [thisLayout.x || 0, thisLayout.y || 0]);
+    group.__tmNodeWidth = thisWidth;
+    group.__tmNodeHeight = thisHeight;
+
+    if (thisLayout.isAboveViewRoot) {
+        return group;
+    }
+
+    // Background
+    var bg = giveGraphic('background', Rect$1, depth, Z_BG);
+    bg && renderBackground(group, bg, isParent && thisLayout.upperHeight);
+
+    // No children, render content.
+    if (!isParent) {
+        var content = giveGraphic('content', Rect$1, depth, Z_CONTENT);
+        content && renderContent(group, content);
+    }
+
+    return group;
+
+    // ----------------------------
+    // | Procedures in renderNode |
+    // ----------------------------
+
+    function renderBackground(group, bg, useUpperLabel) {
+        // For tooltip.
+        bg.dataIndex = thisNode.dataIndex;
+        bg.seriesIndex = seriesModel.seriesIndex;
+
+        bg.setShape({x: 0, y: 0, width: thisWidth, height: thisHeight});
+        var visualBorderColor = thisNode.getVisual('borderColor', true);
+        var emphasisBorderColor = itemStyleEmphasisModel.get('borderColor');
+
+        updateStyle(bg, function () {
+            var normalStyle = getItemStyleNormal(itemStyleNormalModel);
+            normalStyle.fill = visualBorderColor;
+            var emphasisStyle = getItemStyleEmphasis(itemStyleEmphasisModel);
+            emphasisStyle.fill = emphasisBorderColor;
+
+            if (useUpperLabel) {
+                var upperLabelWidth = thisWidth - 2 * borderWidth;
+
+                prepareText(
+                    normalStyle, emphasisStyle, visualBorderColor, upperLabelWidth, upperHeight,
+                    {x: borderWidth, y: 0, width: upperLabelWidth, height: upperHeight}
+                );
+            }
+            // For old bg.
+            else {
+                normalStyle.text = emphasisStyle.text = null;
+            }
+
+            bg.setStyle(normalStyle);
+            setHoverStyle(bg, emphasisStyle);
+        });
+
+        group.add(bg);
+    }
+
+    function renderContent(group, content) {
+        // For tooltip.
+        content.dataIndex = thisNode.dataIndex;
+        content.seriesIndex = seriesModel.seriesIndex;
+
+        var contentWidth = Math.max(thisWidth - 2 * borderWidth, 0);
+        var contentHeight = Math.max(thisHeight - 2 * borderWidth, 0);
+
+        content.culling = true;
+        content.setShape({
+            x: borderWidth,
+            y: borderWidth,
+            width: contentWidth,
+            height: contentHeight
+        });
+
+        var visualColor = thisNode.getVisual('color', true);
+        updateStyle(content, function () {
+            var normalStyle = getItemStyleNormal(itemStyleNormalModel);
+            normalStyle.fill = visualColor;
+            var emphasisStyle = getItemStyleEmphasis(itemStyleEmphasisModel);
+
+            prepareText(normalStyle, emphasisStyle, visualColor, contentWidth, contentHeight);
+
+            content.setStyle(normalStyle);
+            setHoverStyle(content, emphasisStyle);
+        });
+
+        group.add(content);
+    }
+
+    function updateStyle(element, cb) {
+        if (!thisInvisible) {
+            // If invisible, do not set visual, otherwise the element will
+            // change immediately before animation. We think it is OK to
+            // remain its origin color when moving out of the view window.
+            cb();
+
+            if (!element.__tmWillVisible) {
+                element.invisible = false;
+            }
+        }
+        else {
+            // Delay invisible setting utill animation finished,
+            // avoid element vanish suddenly before animation.
+            !element.invisible && willInvisibleEls.push(element);
+        }
+    }
+
+    function prepareText(normalStyle, emphasisStyle, visualColor, width, height, upperLabelRect) {
+        var nodeModel = thisNode.getModel();
+        var text = retrieve(
+            seriesModel.getFormattedLabel(
+                thisNode.dataIndex, 'normal', null, null, upperLabelRect ? 'upperLabel' : 'label'
+            ),
+            nodeModel.get('name')
+        );
+        if (!upperLabelRect && thisLayout.isLeafRoot) {
+            var iconChar = seriesModel.get('drillDownIcon', true);
+            text = iconChar ? iconChar + ' ' + text : text;
+        }
+
+        var normalLabelModel = nodeModel.getModel(
+            upperLabelRect ? PATH_UPPERLABEL_NORMAL : PATH_LABEL_NOAMAL
+        );
+        var emphasisLabelModel = nodeModel.getModel(
+            upperLabelRect ? PATH_UPPERLABEL_EMPHASIS : PATH_LABEL_EMPHASIS
+        );
+
+        var isShow = normalLabelModel.getShallow('show');
+
+        setLabelStyle(
+            normalStyle, emphasisStyle, normalLabelModel, emphasisLabelModel,
+            {
+                defaultText: isShow ? text : null,
+                autoColor: visualColor,
+                isRectText: true
+            }
+        );
+
+        upperLabelRect && (normalStyle.textRect = clone(upperLabelRect));
+
+        normalStyle.truncate = (isShow && normalLabelModel.get('ellipsis'))
+            ? {
+                outerWidth: width,
+                outerHeight: height,
+                minChar: 2
+            }
+            : null;
+    }
+
+    function giveGraphic(storageName, Ctor, depth, z) {
+        var element = oldRawIndex != null && oldStorage[storageName][oldRawIndex];
+        var lasts = lastsForAnimation[storageName];
+
+        if (element) {
+            // Remove from oldStorage
+            oldStorage[storageName][oldRawIndex] = null;
+            prepareAnimationWhenHasOld(lasts, element, storageName);
+        }
+        // If invisible and no old element, do not create new element (for optimizing).
+        else if (!thisInvisible) {
+            element = new Ctor({z: calculateZ(depth, z)});
+            element.__tmDepth = depth;
+            element.__tmStorageName = storageName;
+            prepareAnimationWhenNoOld(lasts, element, storageName);
+        }
+
+        // Set to thisStorage
+        return (thisStorage[storageName][thisRawIndex] = element);
+    }
+
+    function prepareAnimationWhenHasOld(lasts, element, storageName) {
+        var lastCfg = lasts[thisRawIndex] = {};
+        lastCfg.old = storageName === 'nodeGroup'
+            ? element.position.slice()
+            : extend({}, element.shape);
+    }
+
+    // If a element is new, we need to find the animation start point carefully,
+    // otherwise it will looks strange when 'zoomToNode'.
+    function prepareAnimationWhenNoOld(lasts, element, storageName) {
+        var lastCfg = lasts[thisRawIndex] = {};
+        var parentNode = thisNode.parentNode;
+
+        if (parentNode && (!reRoot || reRoot.direction === 'drillDown')) {
+            var parentOldX = 0;
+            var parentOldY = 0;
+
+            // New nodes appear from right-bottom corner in 'zoomToNode' animation.
+            // For convenience, get old bounding rect from background.
+            var parentOldBg = lastsForAnimation.background[parentNode.getRawIndex()];
+            if (!reRoot && parentOldBg && parentOldBg.old) {
+                parentOldX = parentOldBg.old.width;
+                parentOldY = parentOldBg.old.height;
+            }
+
+            // When no parent old shape found, its parent is new too,
+            // so we can just use {x:0, y:0}.
+            lastCfg.old = storageName === 'nodeGroup'
+                ? [0, parentOldY]
+                : {x: parentOldX, y: parentOldY, width: 0, height: 0};
+        }
+
+        // Fade in, user can be aware that these nodes are new.
+        lastCfg.fadein = storageName !== 'nodeGroup';
+    }
+}
+
+// We can not set all backgroud with the same z, Because the behaviour of
+// drill down and roll up differ background creation sequence from tree
+// hierarchy sequence, which cause that lowser background element overlap
+// upper ones. So we calculate z based on depth.
+// Moreover, we try to shrink down z interval to [0, 1] to avoid that
+// treemap with large z overlaps other components.
+function calculateZ(depth, zInLevel) {
+    var zb = depth * Z_BASE + zInLevel;
+    return (zb - 1) / zb;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file Treemap action
+ */
+
+var noop$1 = function () {};
+
+var actionTypes = [
+    'treemapZoomToNode',
+    'treemapRender',
+    'treemapMove'
+];
+
+for (var i$2 = 0; i$2 < actionTypes.length; i$2++) {
+    registerAction({type: actionTypes[i$2], update: 'updateView'}, noop$1);
+}
+
+registerAction(
+    {type: 'treemapRootToNode', update: 'updateView'},
+    function (payload, ecModel) {
+
+        ecModel.eachComponent(
+            {mainType: 'series', subType: 'treemap', query: payload},
+            handleRootToNode
+        );
+
+        function handleRootToNode(model, index) {
+            var types = ['treemapZoomToNode', 'treemapRootToNode'];
+            var targetInfo = retrieveTargetInfo(payload, types, model);
+
+            if (targetInfo) {
+                var originViewRoot = model.getViewRoot();
+                if (originViewRoot) {
+                    payload.direction = aboveViewRoot(originViewRoot, targetInfo.node)
+                        ? 'rollUp' : 'drillDown';
+                }
+                model.resetViewRoot(targetInfo.node);
+            }
+        }
+    }
+);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
