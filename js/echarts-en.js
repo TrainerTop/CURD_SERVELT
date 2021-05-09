@@ -51970,3 +51970,289 @@ VisualMapping.retrieveVisuals = function (obj) {
 /**
  * Give order to visual types, considering colorSaturation, colorAlpha depends on color.
  *
+ * @public
+ * @param {(Object|Array)} visualTypes If Object, like: {color: ..., colorSaturation: ...}
+ *                                     IF Array, like: ['color', 'symbol', 'colorSaturation']
+ * @return {Array.<string>} Sorted visual types.
+ */
+VisualMapping.prepareVisualTypes = function (visualTypes) {
+    if (isObject$5(visualTypes)) {
+        var types = [];
+        each$9(visualTypes, function (item, type) {
+            types.push(type);
+        });
+        visualTypes = types;
+    }
+    else if (isArray(visualTypes)) {
+        visualTypes = visualTypes.slice();
+    }
+    else {
+        return [];
+    }
+
+    visualTypes.sort(function (type1, type2) {
+        // color should be front of colorSaturation, colorAlpha, ...
+        // symbol and symbolSize do not matter.
+        return (type2 === 'color' && type1 !== 'color' && type1.indexOf('color') === 0)
+            ? 1 : -1;
+    });
+
+    return visualTypes;
+};
+
+/**
+ * 'color', 'colorSaturation', 'colorAlpha', ... are depends on 'color'.
+ * Other visuals are only depends on themself.
+ *
+ * @public
+ * @param {string} visualType1
+ * @param {string} visualType2
+ * @return {boolean}
+ */
+VisualMapping.dependsOn = function (visualType1, visualType2) {
+    return visualType2 === 'color'
+        ? !!(visualType1 && visualType1.indexOf(visualType2) === 0)
+        : visualType1 === visualType2;
+};
+
+/**
+ * @param {number} value
+ * @param {Array.<Object>} pieceList [{value: ..., interval: [min, max]}, ...]
+ *                         Always from small to big.
+ * @param {boolean} [findClosestWhenOutside=false]
+ * @return {number} index
+ */
+VisualMapping.findPieceIndex = function (value, pieceList, findClosestWhenOutside) {
+    var possibleI;
+    var abs = Infinity;
+
+    // value has the higher priority.
+    for (var i = 0, len = pieceList.length; i < len; i++) {
+        var pieceValue = pieceList[i].value;
+        if (pieceValue != null) {
+            if (pieceValue === value
+                // FIXME
+                // It is supposed to compare value according to value type of dimension,
+                // but currently value type can exactly be string or number.
+                // Compromise for numeric-like string (like '12'), especially
+                // in the case that visualMap.categories is ['22', '33'].
+                || (typeof pieceValue === 'string' && pieceValue === value + '')
+            ) {
+                return i;
+            }
+            findClosestWhenOutside && updatePossible(pieceValue, i);
+        }
+    }
+
+    for (var i = 0, len = pieceList.length; i < len; i++) {
+        var piece = pieceList[i];
+        var interval = piece.interval;
+        var close = piece.close;
+
+        if (interval) {
+            if (interval[0] === -Infinity) {
+                if (littleThan(close[1], value, interval[1])) {
+                    return i;
+                }
+            }
+            else if (interval[1] === Infinity) {
+                if (littleThan(close[0], interval[0], value)) {
+                    return i;
+                }
+            }
+            else if (
+                littleThan(close[0], interval[0], value)
+                && littleThan(close[1], value, interval[1])
+            ) {
+                return i;
+            }
+            findClosestWhenOutside && updatePossible(interval[0], i);
+            findClosestWhenOutside && updatePossible(interval[1], i);
+        }
+    }
+
+    if (findClosestWhenOutside) {
+        return value === Infinity
+            ? pieceList.length - 1
+            : value === -Infinity
+            ? 0
+            : possibleI;
+    }
+
+    function updatePossible(val, index) {
+        var newAbs = Math.abs(val - value);
+        if (newAbs < abs) {
+            abs = newAbs;
+            possibleI = index;
+        }
+    }
+
+};
+
+function littleThan(close, a, b) {
+    return close ? a <= b : a < b;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var isArray$2 = isArray;
+
+var ITEM_STYLE_NORMAL = 'itemStyle';
+
+var treemapVisual = {
+    seriesType: 'treemap',
+    reset: function (seriesModel, ecModel, api, payload) {
+        var tree = seriesModel.getData().tree;
+        var root = tree.root;
+        var seriesItemStyleModel = seriesModel.getModel(ITEM_STYLE_NORMAL);
+
+        if (root.isRemoved()) {
+            return;
+        }
+
+        var levelItemStyles = map(tree.levelModels, function (levelModel) {
+            return levelModel ? levelModel.get(ITEM_STYLE_NORMAL) : null;
+        });
+
+        travelTree(
+            root, // Visual should calculate from tree root but not view root.
+            {},
+            levelItemStyles,
+            seriesItemStyleModel,
+            seriesModel.getViewRoot().getAncestors(),
+            seriesModel
+        );
+    }
+};
+
+function travelTree(
+    node, designatedVisual, levelItemStyles, seriesItemStyleModel,
+    viewRootAncestors, seriesModel
+) {
+    var nodeModel = node.getModel();
+    var nodeLayout = node.getLayout();
+
+    // Optimize
+    if (!nodeLayout || nodeLayout.invisible || !nodeLayout.isInView) {
+        return;
+    }
+
+    var nodeItemStyleModel = node.getModel(ITEM_STYLE_NORMAL);
+    var levelItemStyle = levelItemStyles[node.depth];
+    var visuals = buildVisuals(
+        nodeItemStyleModel, designatedVisual, levelItemStyle, seriesItemStyleModel
+    );
+
+    // calculate border color
+    var borderColor = nodeItemStyleModel.get('borderColor');
+    var borderColorSaturation = nodeItemStyleModel.get('borderColorSaturation');
+    var thisNodeColor;
+    if (borderColorSaturation != null) {
+        // For performance, do not always execute 'calculateColor'.
+        thisNodeColor = calculateColor(visuals, node);
+        borderColor = calculateBorderColor(borderColorSaturation, thisNodeColor);
+    }
+    node.setVisual('borderColor', borderColor);
+
+    var viewChildren = node.viewChildren;
+    if (!viewChildren || !viewChildren.length) {
+        thisNodeColor = calculateColor(visuals, node);
+        // Apply visual to this node.
+        node.setVisual('color', thisNodeColor);
+    }
+    else {
+        var mapping = buildVisualMapping(
+            node, nodeModel, nodeLayout, nodeItemStyleModel, visuals, viewChildren
+        );
+
+        // Designate visual to children.
+        each$1(viewChildren, function (child, index) {
+            // If higher than viewRoot, only ancestors of viewRoot is needed to visit.
+            if (child.depth >= viewRootAncestors.length
+                || child === viewRootAncestors[child.depth]
+            ) {
+                var childVisual = mapVisual$1(
+                    nodeModel, visuals, child, index, mapping, seriesModel
+                );
+                travelTree(
+                    child, childVisual, levelItemStyles, seriesItemStyleModel,
+                    viewRootAncestors, seriesModel
+                );
+            }
+        });
+    }
+}
+
+function buildVisuals(
+    nodeItemStyleModel, designatedVisual, levelItemStyle, seriesItemStyleModel
+) {
+    var visuals = extend({}, designatedVisual);
+
+    each$1(['color', 'colorAlpha', 'colorSaturation'], function (visualName) {
+        // Priority: thisNode > thisLevel > parentNodeDesignated > seriesModel
+        var val = nodeItemStyleModel.get(visualName, true); // Ignore parent
+        val == null && levelItemStyle && (val = levelItemStyle[visualName]);
+        val == null && (val = designatedVisual[visualName]);
+        val == null && (val = seriesItemStyleModel.get(visualName));
+
+        val != null && (visuals[visualName] = val);
+    });
+
+    return visuals;
+}
+
+function calculateColor(visuals) {
+    var color = getValueVisualDefine(visuals, 'color');
+
+    if (color) {
+        var colorAlpha = getValueVisualDefine(visuals, 'colorAlpha');
+        var colorSaturation = getValueVisualDefine(visuals, 'colorSaturation');
+        if (colorSaturation) {
+            color = modifyHSL(color, null, null, colorSaturation);
+        }
+        if (colorAlpha) {
+            color = modifyAlpha(color, colorAlpha);
+        }
+
+        return color;
+    }
+}
+
+function calculateBorderColor(borderColorSaturation, thisNodeColor) {
+    return thisNodeColor != null
+            ? modifyHSL(thisNodeColor, null, null, borderColorSaturation)
+            : null;
+}
+
+function getValueVisualDefine(visuals, name) {
+    var value = visuals[name];
+    if (value != null && value !== 'none') {
+        return value;
+    }
+}
+
+function buildVisualMapping(
+    node, nodeModel, nodeLayout, nodeItemStyleModel, visuals, viewChildren
+) {
+    if (!viewChildren || !viewChildren.length) {
+        return;
+    }
+
+    var rangeVisual = getRangeVisual(nodeModel, 'color')
