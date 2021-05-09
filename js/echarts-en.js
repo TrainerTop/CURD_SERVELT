@@ -51462,3 +51462,233 @@ registerAction(
 * distributed with this work for additional information
 * regarding copyright ownership.  The ASF licenses this file
 * to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var each$9 = each$1;
+var isObject$5 = isObject$1;
+
+var CATEGORY_DEFAULT_VISUAL_INDEX = -1;
+
+/**
+ * @param {Object} option
+ * @param {string} [option.type] See visualHandlers.
+ * @param {string} [option.mappingMethod] 'linear' or 'piecewise' or 'category' or 'fixed'
+ * @param {Array.<number>=} [option.dataExtent] [minExtent, maxExtent],
+ *                                              required when mappingMethod is 'linear'
+ * @param {Array.<Object>=} [option.pieceList] [
+ *                                             {value: someValue},
+ *                                             {interval: [min1, max1], visual: {...}},
+ *                                             {interval: [min2, max2]}
+ *                                             ],
+ *                                            required when mappingMethod is 'piecewise'.
+ *                                            Visual for only each piece can be specified.
+ * @param {Array.<string|Object>=} [option.categories] ['cate1', 'cate2']
+ *                                            required when mappingMethod is 'category'.
+ *                                            If no option.categories, categories is set
+ *                                            as [0, 1, 2, ...].
+ * @param {boolean} [option.loop=false] Whether loop mapping when mappingMethod is 'category'.
+ * @param {(Array|Object|*)} [option.visual]  Visual data.
+ *                                            when mappingMethod is 'category',
+ *                                            visual data can be array or object
+ *                                            (like: {cate1: '#222', none: '#fff'})
+ *                                            or primary types (which represents
+ *                                            defualt category visual), otherwise visual
+ *                                            can be array or primary (which will be
+ *                                            normalized to array).
+ *
+ */
+var VisualMapping = function (option) {
+    var mappingMethod = option.mappingMethod;
+    var visualType = option.type;
+
+    /**
+     * @readOnly
+     * @type {Object}
+     */
+    var thisOption = this.option = clone(option);
+
+    /**
+     * @readOnly
+     * @type {string}
+     */
+    this.type = visualType;
+
+    /**
+     * @readOnly
+     * @type {string}
+     */
+    this.mappingMethod = mappingMethod;
+
+    /**
+     * @private
+     * @type {Function}
+     */
+    this._normalizeData = normalizers[mappingMethod];
+
+    var visualHandler = visualHandlers[visualType];
+
+    /**
+     * @public
+     * @type {Function}
+     */
+    this.applyVisual = visualHandler.applyVisual;
+
+    /**
+     * @public
+     * @type {Function}
+     */
+    this.getColorMapper = visualHandler.getColorMapper;
+
+    /**
+     * @private
+     * @type {Function}
+     */
+    this._doMap = visualHandler._doMap[mappingMethod];
+
+    if (mappingMethod === 'piecewise') {
+        normalizeVisualRange(thisOption);
+        preprocessForPiecewise(thisOption);
+    }
+    else if (mappingMethod === 'category') {
+        thisOption.categories
+            ? preprocessForSpecifiedCategory(thisOption)
+            // categories is ordinal when thisOption.categories not specified,
+            // which need no more preprocess except normalize visual.
+            : normalizeVisualRange(thisOption, true);
+    }
+    else { // mappingMethod === 'linear' or 'fixed'
+        assert$1(mappingMethod !== 'linear' || thisOption.dataExtent);
+        normalizeVisualRange(thisOption);
+    }
+};
+
+VisualMapping.prototype = {
+
+    constructor: VisualMapping,
+
+    mapValueToVisual: function (value) {
+        var normalized = this._normalizeData(value);
+        return this._doMap(normalized, value);
+    },
+
+    getNormalizer: function () {
+        return bind(this._normalizeData, this);
+    }
+};
+
+var visualHandlers = VisualMapping.visualHandlers = {
+
+    color: {
+
+        applyVisual: makeApplyVisual('color'),
+
+        /**
+         * Create a mapper function
+         * @return {Function}
+         */
+        getColorMapper: function () {
+            var thisOption = this.option;
+
+            return bind(
+                thisOption.mappingMethod === 'category'
+                    ? function (value, isNormalized) {
+                        !isNormalized && (value = this._normalizeData(value));
+                        return doMapCategory.call(this, value);
+                    }
+                    : function (value, isNormalized, out) {
+                        // If output rgb array
+                        // which will be much faster and useful in pixel manipulation
+                        var returnRGBArray = !!out;
+                        !isNormalized && (value = this._normalizeData(value));
+                        out = fastLerp(value, thisOption.parsedVisual, out);
+                        return returnRGBArray ? out : stringify(out, 'rgba');
+                    },
+                this
+            );
+        },
+
+        _doMap: {
+            linear: function (normalized) {
+                return stringify(
+                    fastLerp(normalized, this.option.parsedVisual),
+                    'rgba'
+                );
+            },
+            category: doMapCategory,
+            piecewise: function (normalized, value) {
+                var result = getSpecifiedVisual.call(this, value);
+                if (result == null) {
+                    result = stringify(
+                        fastLerp(normalized, this.option.parsedVisual),
+                        'rgba'
+                    );
+                }
+                return result;
+            },
+            fixed: doMapFixed
+        }
+    },
+
+    colorHue: makePartialColorVisualHandler(function (color, value) {
+        return modifyHSL(color, value);
+    }),
+
+    colorSaturation: makePartialColorVisualHandler(function (color, value) {
+        return modifyHSL(color, null, value);
+    }),
+
+    colorLightness: makePartialColorVisualHandler(function (color, value) {
+        return modifyHSL(color, null, null, value);
+    }),
+
+    colorAlpha: makePartialColorVisualHandler(function (color, value) {
+        return modifyAlpha(color, value);
+    }),
+
+    opacity: {
+        applyVisual: makeApplyVisual('opacity'),
+        _doMap: makeDoMap([0, 1])
+    },
+
+    liftZ: {
+        applyVisual: makeApplyVisual('liftZ'),
+        _doMap: {
+            linear: doMapFixed,
+            category: doMapFixed,
+            piecewise: doMapFixed,
+            fixed: doMapFixed
+        }
+    },
+
+    symbol: {
+        applyVisual: function (value, getter, setter) {
+            var symbolCfg = this.mapValueToVisual(value);
+            if (isString(symbolCfg)) {
+                setter('symbol', symbolCfg);
+            }
+            else if (isObject$5(symbolCfg)) {
+                for (var name in symbolCfg) {
+                    if (symbolCfg.hasOwnProperty(name)) {
+                        setter(name, symbolCfg[name]);
+                    }
+                }
+            }
+        },
+        _doMap: {
+            linear: doMapToArray,
+            category: doMapCategory,
+            piecewise: function (normalized, value) {
+                var result = getSpecifiedVisual.call(this, value);
+                if (result == null) {
+                    result = doMapToArray.call(this, normalized);
