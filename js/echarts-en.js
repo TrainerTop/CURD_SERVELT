@@ -51692,3 +51692,281 @@ var visualHandlers = VisualMapping.visualHandlers = {
                 var result = getSpecifiedVisual.call(this, value);
                 if (result == null) {
                     result = doMapToArray.call(this, normalized);
+                }
+                return result;
+            },
+            fixed: doMapFixed
+        }
+    },
+
+    symbolSize: {
+        applyVisual: makeApplyVisual('symbolSize'),
+        _doMap: makeDoMap([0, 1])
+    }
+};
+
+
+function preprocessForPiecewise(thisOption) {
+    var pieceList = thisOption.pieceList;
+    thisOption.hasSpecialVisual = false;
+
+    each$1(pieceList, function (piece, index) {
+        piece.originIndex = index;
+        // piece.visual is "result visual value" but not
+        // a visual range, so it does not need to be normalized.
+        if (piece.visual != null) {
+            thisOption.hasSpecialVisual = true;
+        }
+    });
+}
+
+function preprocessForSpecifiedCategory(thisOption) {
+    // Hash categories.
+    var categories = thisOption.categories;
+    var visual = thisOption.visual;
+
+    var categoryMap = thisOption.categoryMap = {};
+    each$9(categories, function (cate, index) {
+        categoryMap[cate] = index;
+    });
+
+    // Process visual map input.
+    if (!isArray(visual)) {
+        var visualArr = [];
+
+        if (isObject$1(visual)) {
+            each$9(visual, function (v, cate) {
+                var index = categoryMap[cate];
+                visualArr[index != null ? index : CATEGORY_DEFAULT_VISUAL_INDEX] = v;
+            });
+        }
+        else { // Is primary type, represents default visual.
+            visualArr[CATEGORY_DEFAULT_VISUAL_INDEX] = visual;
+        }
+
+        visual = setVisualToOption(thisOption, visualArr);
+    }
+
+    // Remove categories that has no visual,
+    // then we can mapping them to CATEGORY_DEFAULT_VISUAL_INDEX.
+    for (var i = categories.length - 1; i >= 0; i--) {
+        if (visual[i] == null) {
+            delete categoryMap[categories[i]];
+            categories.pop();
+        }
+    }
+}
+
+function normalizeVisualRange(thisOption, isCategory) {
+    var visual = thisOption.visual;
+    var visualArr = [];
+
+    if (isObject$1(visual)) {
+        each$9(visual, function (v) {
+            visualArr.push(v);
+        });
+    }
+    else if (visual != null) {
+        visualArr.push(visual);
+    }
+
+    var doNotNeedPair = {color: 1, symbol: 1};
+
+    if (!isCategory
+        && visualArr.length === 1
+        && !doNotNeedPair.hasOwnProperty(thisOption.type)
+    ) {
+        // Do not care visualArr.length === 0, which is illegal.
+        visualArr[1] = visualArr[0];
+    }
+
+    setVisualToOption(thisOption, visualArr);
+}
+
+function makePartialColorVisualHandler(applyValue) {
+    return {
+        applyVisual: function (value, getter, setter) {
+            value = this.mapValueToVisual(value);
+            // Must not be array value
+            setter('color', applyValue(getter('color'), value));
+        },
+        _doMap: makeDoMap([0, 1])
+    };
+}
+
+function doMapToArray(normalized) {
+    var visual = this.option.visual;
+    return visual[
+        Math.round(linearMap(normalized, [0, 1], [0, visual.length - 1], true))
+    ] || {};
+}
+
+function makeApplyVisual(visualType) {
+    return function (value, getter, setter) {
+        setter(visualType, this.mapValueToVisual(value));
+    };
+}
+
+function doMapCategory(normalized) {
+    var visual = this.option.visual;
+    return visual[
+        (this.option.loop && normalized !== CATEGORY_DEFAULT_VISUAL_INDEX)
+            ? normalized % visual.length
+            : normalized
+    ];
+}
+
+function doMapFixed() {
+    return this.option.visual[0];
+}
+
+function makeDoMap(sourceExtent) {
+    return {
+        linear: function (normalized) {
+            return linearMap(normalized, sourceExtent, this.option.visual, true);
+        },
+        category: doMapCategory,
+        piecewise: function (normalized, value) {
+            var result = getSpecifiedVisual.call(this, value);
+            if (result == null) {
+                result = linearMap(normalized, sourceExtent, this.option.visual, true);
+            }
+            return result;
+        },
+        fixed: doMapFixed
+    };
+}
+
+function getSpecifiedVisual(value) {
+    var thisOption = this.option;
+    var pieceList = thisOption.pieceList;
+    if (thisOption.hasSpecialVisual) {
+        var pieceIndex = VisualMapping.findPieceIndex(value, pieceList);
+        var piece = pieceList[pieceIndex];
+        if (piece && piece.visual) {
+            return piece.visual[this.type];
+        }
+    }
+}
+
+function setVisualToOption(thisOption, visualArr) {
+    thisOption.visual = visualArr;
+    if (thisOption.type === 'color') {
+        thisOption.parsedVisual = map(visualArr, function (item) {
+            return parse(item);
+        });
+    }
+    return visualArr;
+}
+
+
+/**
+ * Normalizers by mapping methods.
+ */
+var normalizers = {
+
+    linear: function (value) {
+        return linearMap(value, this.option.dataExtent, [0, 1], true);
+    },
+
+    piecewise: function (value) {
+        var pieceList = this.option.pieceList;
+        var pieceIndex = VisualMapping.findPieceIndex(value, pieceList, true);
+        if (pieceIndex != null) {
+            return linearMap(pieceIndex, [0, pieceList.length - 1], [0, 1], true);
+        }
+    },
+
+    category: function (value) {
+        var index = this.option.categories
+            ? this.option.categoryMap[value]
+            : value; // ordinal
+        return index == null ? CATEGORY_DEFAULT_VISUAL_INDEX : index;
+    },
+
+    fixed: noop
+};
+
+
+
+/**
+ * List available visual types.
+ *
+ * @public
+ * @return {Array.<string>}
+ */
+VisualMapping.listVisualTypes = function () {
+    var visualTypes = [];
+    each$1(visualHandlers, function (handler, key) {
+        visualTypes.push(key);
+    });
+    return visualTypes;
+};
+
+/**
+ * @public
+ */
+VisualMapping.addVisualHandler = function (name, handler) {
+    visualHandlers[name] = handler;
+};
+
+/**
+ * @public
+ */
+VisualMapping.isValidType = function (visualType) {
+    return visualHandlers.hasOwnProperty(visualType);
+};
+
+/**
+ * Convinent method.
+ * Visual can be Object or Array or primary type.
+ *
+ * @public
+ */
+VisualMapping.eachVisual = function (visual, callback, context) {
+    if (isObject$1(visual)) {
+        each$1(visual, callback, context);
+    }
+    else {
+        callback.call(context, visual);
+    }
+};
+
+VisualMapping.mapVisual = function (visual, callback, context) {
+    var isPrimary;
+    var newVisual = isArray(visual)
+        ? []
+        : isObject$1(visual)
+        ? {}
+        : (isPrimary = true, null);
+
+    VisualMapping.eachVisual(visual, function (v, key) {
+        var newVal = callback.call(context, v, key);
+        isPrimary ? (newVisual = newVal) : (newVisual[key] = newVal);
+    });
+    return newVisual;
+};
+
+/**
+ * @public
+ * @param {Object} obj
+ * @return {Object} new object containers visual values.
+ *                 If no visuals, return null.
+ */
+VisualMapping.retrieveVisuals = function (obj) {
+    var ret = {};
+    var hasVisual;
+
+    obj && each$9(visualHandlers, function (h, visualType) {
+        if (obj.hasOwnProperty(visualType)) {
+            ret[visualType] = obj[visualType];
+            hasVisual = true;
+        }
+    });
+
+    return hasVisual ? ret : null;
+};
+
+/**
+ * Give order to visual types, considering colorSaturation, colorAlpha depends on color.
+ *
