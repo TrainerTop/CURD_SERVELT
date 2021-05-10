@@ -52256,3 +52256,293 @@ function buildVisualMapping(
     }
 
     var rangeVisual = getRangeVisual(nodeModel, 'color')
+        || (
+            visuals.color != null
+            && visuals.color !== 'none'
+            && (
+                getRangeVisual(nodeModel, 'colorAlpha')
+                || getRangeVisual(nodeModel, 'colorSaturation')
+            )
+        );
+
+    if (!rangeVisual) {
+        return;
+    }
+
+    var visualMin = nodeModel.get('visualMin');
+    var visualMax = nodeModel.get('visualMax');
+    var dataExtent = nodeLayout.dataExtent.slice();
+    visualMin != null && visualMin < dataExtent[0] && (dataExtent[0] = visualMin);
+    visualMax != null && visualMax > dataExtent[1] && (dataExtent[1] = visualMax);
+
+    var colorMappingBy = nodeModel.get('colorMappingBy');
+    var opt = {
+        type: rangeVisual.name,
+        dataExtent: dataExtent,
+        visual: rangeVisual.range
+    };
+    if (opt.type === 'color'
+        && (colorMappingBy === 'index' || colorMappingBy === 'id')
+    ) {
+        opt.mappingMethod = 'category';
+        opt.loop = true;
+        // categories is ordinal, so do not set opt.categories.
+    }
+    else {
+        opt.mappingMethod = 'linear';
+    }
+
+    var mapping = new VisualMapping(opt);
+    mapping.__drColorMappingBy = colorMappingBy;
+
+    return mapping;
+}
+
+// Notice: If we dont have the attribute 'colorRange', but only use
+// attribute 'color' to represent both concepts of 'colorRange' and 'color',
+// (It means 'colorRange' when 'color' is Array, means 'color' when not array),
+// this problem will be encountered:
+// If a level-1 node dont have children, and its siblings has children,
+// and colorRange is set on level-1, then the node can not be colored.
+// So we separate 'colorRange' and 'color' to different attributes.
+function getRangeVisual(nodeModel, name) {
+    // 'colorRange', 'colorARange', 'colorSRange'.
+    // If not exsits on this node, fetch from levels and series.
+    var range = nodeModel.get(name);
+    return (isArray$2(range) && range.length) ? {name: name, range: range} : null;
+}
+
+function mapVisual$1(nodeModel, visuals, child, index, mapping, seriesModel) {
+    var childVisuals = extend({}, visuals);
+
+    if (mapping) {
+        var mappingType = mapping.type;
+        var colorMappingBy = mappingType === 'color' && mapping.__drColorMappingBy;
+        var value = colorMappingBy === 'index'
+            ? index
+            : colorMappingBy === 'id'
+            ? seriesModel.mapIdToIndex(child.getId())
+            : child.getValue(nodeModel.get('visualDimension'));
+
+        childVisuals[mappingType] = mapping.mapValueToVisual(value);
+    }
+
+    return childVisuals;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/*
+* A third-party license is embeded for some of the code in this file:
+* The treemap layout implementation was originally copied from
+* "d3.js" with some modifications made for this project.
+* (See more details in the comment of the method "squarify" below.)
+* The use of the source code of this file is also subject to the terms
+* and consitions of the license of "d3.js" (BSD-3Clause, see
+* </licenses/LICENSE-d3>).
+*/
+
+var mathMax$4 = Math.max;
+var mathMin$4 = Math.min;
+var retrieveValue = retrieve;
+var each$10 = each$1;
+
+var PATH_BORDER_WIDTH = ['itemStyle', 'borderWidth'];
+var PATH_GAP_WIDTH = ['itemStyle', 'gapWidth'];
+var PATH_UPPER_LABEL_SHOW = ['upperLabel', 'show'];
+var PATH_UPPER_LABEL_HEIGHT = ['upperLabel', 'height'];
+
+/**
+ * @public
+ */
+var treemapLayout = {
+    seriesType: 'treemap',
+    reset: function (seriesModel, ecModel, api, payload) {
+        // Layout result in each node:
+        // {x, y, width, height, area, borderWidth}
+        var ecWidth = api.getWidth();
+        var ecHeight = api.getHeight();
+        var seriesOption = seriesModel.option;
+
+        var layoutInfo = getLayoutRect(
+            seriesModel.getBoxLayoutParams(),
+            {
+                width: api.getWidth(),
+                height: api.getHeight()
+            }
+        );
+
+        var size = seriesOption.size || []; // Compatible with ec2.
+        var containerWidth = parsePercent$1(
+            retrieveValue(layoutInfo.width, size[0]),
+            ecWidth
+        );
+        var containerHeight = parsePercent$1(
+            retrieveValue(layoutInfo.height, size[1]),
+            ecHeight
+        );
+
+        // Fetch payload info.
+        var payloadType = payload && payload.type;
+        var types = ['treemapZoomToNode', 'treemapRootToNode'];
+        var targetInfo = retrieveTargetInfo(payload, types, seriesModel);
+        var rootRect = (payloadType === 'treemapRender' || payloadType === 'treemapMove')
+            ? payload.rootRect : null;
+        var viewRoot = seriesModel.getViewRoot();
+        var viewAbovePath = getPathToRoot(viewRoot);
+
+        if (payloadType !== 'treemapMove') {
+            var rootSize = payloadType === 'treemapZoomToNode'
+                ? estimateRootSize(
+                    seriesModel, targetInfo, viewRoot, containerWidth, containerHeight
+                )
+                : rootRect
+                ? [rootRect.width, rootRect.height]
+                : [containerWidth, containerHeight];
+
+            var sort = seriesOption.sort;
+            if (sort && sort !== 'asc' && sort !== 'desc') {
+                sort = 'desc';
+            }
+            var options = {
+                squareRatio: seriesOption.squareRatio,
+                sort: sort,
+                leafDepth: seriesOption.leafDepth
+            };
+
+            // layout should be cleared because using updateView but not update.
+            viewRoot.hostTree.clearLayouts();
+
+            // TODO
+            // optimize: if out of view clip, do not layout.
+            // But take care that if do not render node out of view clip,
+            // how to calculate start po
+
+            var viewRootLayout = {
+                x: 0, y: 0,
+                width: rootSize[0], height: rootSize[1],
+                area: rootSize[0] * rootSize[1]
+            };
+            viewRoot.setLayout(viewRootLayout);
+
+            squarify(viewRoot, options, false, 0);
+            // Supplement layout.
+            var viewRootLayout = viewRoot.getLayout();
+            each$10(viewAbovePath, function (node, index) {
+                var childValue = (viewAbovePath[index + 1] || viewRoot).getValue();
+                node.setLayout(extend(
+                    {dataExtent: [childValue, childValue], borderWidth: 0, upperHeight: 0},
+                    viewRootLayout
+                ));
+            });
+        }
+
+        var treeRoot = seriesModel.getData().tree.root;
+
+        treeRoot.setLayout(
+            calculateRootPosition(layoutInfo, rootRect, targetInfo),
+            true
+        );
+
+        seriesModel.setLayoutInfo(layoutInfo);
+
+        // FIXME
+        // 现在没有clip功能，暂时取ec高宽。
+        prunning(
+            treeRoot,
+            // Transform to base element coordinate system.
+            new BoundingRect(-layoutInfo.x, -layoutInfo.y, ecWidth, ecHeight),
+            viewAbovePath,
+            viewRoot,
+            0
+        );
+    }
+};
+
+/**
+ * Layout treemap with squarify algorithm.
+ * The original presentation of this algorithm
+ * was made by Mark Bruls, Kees Huizing, and Jarke J. van Wijk
+ * <https://graphics.ethz.ch/teaching/scivis_common/Literature/squarifiedTreeMaps.pdf>.
+ * The implementation of this algorithm was originally copied from "d3.js"
+ * <https://github.com/d3/d3/blob/9cc9a875e636a1dcf36cc1e07bdf77e1ad6e2c74/src/layout/treemap.js>
+ * with some modifications made for this program.
+ * See the license statement at the head of this file.
+ *
+ * @protected
+ * @param {module:echarts/data/Tree~TreeNode} node
+ * @param {Object} options
+ * @param {string} options.sort 'asc' or 'desc'
+ * @param {number} options.squareRatio
+ * @param {boolean} hideChildren
+ * @param {number} depth
+ */
+function squarify(node, options, hideChildren, depth) {
+    var width;
+    var height;
+
+    if (node.isRemoved()) {
+        return;
+    }
+
+    var thisLayout = node.getLayout();
+    width = thisLayout.width;
+    height = thisLayout.height;
+
+    // Considering border and gap
+    var nodeModel = node.getModel();
+    var borderWidth = nodeModel.get(PATH_BORDER_WIDTH);
+    var halfGapWidth = nodeModel.get(PATH_GAP_WIDTH) / 2;
+    var upperLabelHeight = getUpperLabelHeight(nodeModel);
+    var upperHeight = Math.max(borderWidth, upperLabelHeight);
+    var layoutOffset = borderWidth - halfGapWidth;
+    var layoutOffsetUpper = upperHeight - halfGapWidth;
+    var nodeModel = node.getModel();
+
+    node.setLayout({
+        borderWidth: borderWidth,
+        upperHeight: upperHeight,
+        upperLabelHeight: upperLabelHeight
+    }, true);
+
+    width = mathMax$4(width - 2 * layoutOffset, 0);
+    height = mathMax$4(height - layoutOffset - layoutOffsetUpper, 0);
+
+    var totalArea = width * height;
+    var viewChildren = initChildren(
+        node, nodeModel, totalArea, options, hideChildren, depth
+    );
+
+    if (!viewChildren.length) {
+        return;
+    }
+
+    var rect = {x: layoutOffset, y: layoutOffsetUpper, width: width, height: height};
+    var rowFixedLength = mathMin$4(width, height);
+    var best = Infinity; // the best row score so far
+    var row = [];
+    row.area = 0;
+
+    for (var i = 0, len = viewChildren.length; i < len;) {
+        var child = viewChildren[i];
+
+        row.push(child);
+        row.area += child.getLayout().area;
+        var score = worst(row, rowFixedLength, options.squareRatio);
