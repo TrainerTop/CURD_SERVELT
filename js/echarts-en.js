@@ -52546,3 +52546,234 @@ function squarify(node, options, hideChildren, depth) {
         row.push(child);
         row.area += child.getLayout().area;
         var score = worst(row, rowFixedLength, options.squareRatio);
+
+        // continue with this orientation
+        if (score <= best) {
+            i++;
+            best = score;
+        }
+        // abort, and try a different orientation
+        else {
+            row.area -= row.pop().getLayout().area;
+            position(row, rowFixedLength, rect, halfGapWidth, false);
+            rowFixedLength = mathMin$4(rect.width, rect.height);
+            row.length = row.area = 0;
+            best = Infinity;
+        }
+    }
+
+    if (row.length) {
+        position(row, rowFixedLength, rect, halfGapWidth, true);
+    }
+
+    if (!hideChildren) {
+        var childrenVisibleMin = nodeModel.get('childrenVisibleMin');
+        if (childrenVisibleMin != null && totalArea < childrenVisibleMin) {
+            hideChildren = true;
+        }
+    }
+
+    for (var i = 0, len = viewChildren.length; i < len; i++) {
+        squarify(viewChildren[i], options, hideChildren, depth + 1);
+    }
+}
+
+/**
+ * Set area to each child, and calculate data extent for visual coding.
+ */
+function initChildren(node, nodeModel, totalArea, options, hideChildren, depth) {
+    var viewChildren = node.children || [];
+    var orderBy = options.sort;
+    orderBy !== 'asc' && orderBy !== 'desc' && (orderBy = null);
+
+    var overLeafDepth = options.leafDepth != null && options.leafDepth <= depth;
+
+    // leafDepth has higher priority.
+    if (hideChildren && !overLeafDepth) {
+        return (node.viewChildren = []);
+    }
+
+    // Sort children, order by desc.
+    viewChildren = filter(viewChildren, function (child) {
+        return !child.isRemoved();
+    });
+
+    sort$1(viewChildren, orderBy);
+
+    var info = statistic(nodeModel, viewChildren, orderBy);
+
+    if (info.sum === 0) {
+        return (node.viewChildren = []);
+    }
+
+    info.sum = filterByThreshold(nodeModel, totalArea, info.sum, orderBy, viewChildren);
+
+    if (info.sum === 0) {
+        return (node.viewChildren = []);
+    }
+
+    // Set area to each child.
+    for (var i = 0, len = viewChildren.length; i < len; i++) {
+        var area = viewChildren[i].getValue() / info.sum * totalArea;
+        // Do not use setLayout({...}, true), because it is needed to clear last layout.
+        viewChildren[i].setLayout({area: area});
+    }
+
+    if (overLeafDepth) {
+        viewChildren.length && node.setLayout({isLeafRoot: true}, true);
+        viewChildren.length = 0;
+    }
+
+    node.viewChildren = viewChildren;
+    node.setLayout({dataExtent: info.dataExtent}, true);
+
+    return viewChildren;
+}
+
+/**
+ * Consider 'visibleMin'. Modify viewChildren and get new sum.
+ */
+function filterByThreshold(nodeModel, totalArea, sum, orderBy, orderedChildren) {
+
+    // visibleMin is not supported yet when no option.sort.
+    if (!orderBy) {
+        return sum;
+    }
+
+    var visibleMin = nodeModel.get('visibleMin');
+    var len = orderedChildren.length;
+    var deletePoint = len;
+
+    // Always travel from little value to big value.
+    for (var i = len - 1; i >= 0; i--) {
+        var value = orderedChildren[
+            orderBy === 'asc' ? len - i - 1 : i
+        ].getValue();
+
+        if (value / sum * totalArea < visibleMin) {
+            deletePoint = i;
+            sum -= value;
+        }
+    }
+
+    orderBy === 'asc'
+        ? orderedChildren.splice(0, len - deletePoint)
+        : orderedChildren.splice(deletePoint, len - deletePoint);
+
+    return sum;
+}
+
+/**
+ * Sort
+ */
+function sort$1(viewChildren, orderBy) {
+    if (orderBy) {
+        viewChildren.sort(function (a, b) {
+            var diff = orderBy === 'asc'
+                ? a.getValue() - b.getValue() : b.getValue() - a.getValue();
+            return diff === 0
+                ? (orderBy === 'asc'
+                    ? a.dataIndex - b.dataIndex : b.dataIndex - a.dataIndex
+                )
+                : diff;
+        });
+    }
+    return viewChildren;
+}
+
+/**
+ * Statistic
+ */
+function statistic(nodeModel, children, orderBy) {
+    // Calculate sum.
+    var sum = 0;
+    for (var i = 0, len = children.length; i < len; i++) {
+        sum += children[i].getValue();
+    }
+
+    // Statistic data extent for latter visual coding.
+    // Notice: data extent should be calculate based on raw children
+    // but not filtered view children, otherwise visual mapping will not
+    // be stable when zoom (where children is filtered by visibleMin).
+
+    var dimension = nodeModel.get('visualDimension');
+    var dataExtent;
+
+    // The same as area dimension.
+    if (!children || !children.length) {
+        dataExtent = [NaN, NaN];
+    }
+    else if (dimension === 'value' && orderBy) {
+        dataExtent = [
+            children[children.length - 1].getValue(),
+            children[0].getValue()
+        ];
+        orderBy === 'asc' && dataExtent.reverse();
+    }
+    // Other dimension.
+    else {
+        var dataExtent = [Infinity, -Infinity];
+        each$10(children, function (child) {
+            var value = child.getValue(dimension);
+            value < dataExtent[0] && (dataExtent[0] = value);
+            value > dataExtent[1] && (dataExtent[1] = value);
+        });
+    }
+
+    return {sum: sum, dataExtent: dataExtent};
+}
+
+/**
+ * Computes the score for the specified row,
+ * as the worst aspect ratio.
+ */
+function worst(row, rowFixedLength, ratio) {
+    var areaMax = 0;
+    var areaMin = Infinity;
+
+    for (var i = 0, area, len = row.length; i < len; i++) {
+        area = row[i].getLayout().area;
+        if (area) {
+            area < areaMin && (areaMin = area);
+            area > areaMax && (areaMax = area);
+        }
+    }
+
+    var squareArea = row.area * row.area;
+    var f = rowFixedLength * rowFixedLength * ratio;
+
+    return squareArea
+        ? mathMax$4(
+            (f * areaMax) / squareArea,
+            squareArea / (f * areaMin)
+        )
+        : Infinity;
+}
+
+/**
+ * Positions the specified row of nodes. Modifies `rect`.
+ */
+function position(row, rowFixedLength, rect, halfGapWidth, flush) {
+    // When rowFixedLength === rect.width,
+    // it is horizontal subdivision,
+    // rowFixedLength is the width of the subdivision,
+    // rowOtherLength is the height of the subdivision,
+    // and nodes will be positioned from left to right.
+
+    // wh[idx0WhenH] means: when horizontal,
+    //      wh[idx0WhenH] => wh[0] => 'width'.
+    //      xy[idx1WhenH] => xy[1] => 'y'.
+    var idx0WhenH = rowFixedLength === rect.width ? 0 : 1;
+    var idx1WhenH = 1 - idx0WhenH;
+    var xy = ['x', 'y'];
+    var wh = ['width', 'height'];
+
+    var last = rect[xy[idx0WhenH]];
+    var rowOtherLength = rowFixedLength
+        ? row.area / rowFixedLength : 0;
+
+    if (flush || rowOtherLength > rect[wh[idx1WhenH]]) {
+        rowOtherLength = rect[wh[idx1WhenH]]; // over+underflow
+    }
+    for (var i = 0, rowLen = row.length; i < rowLen; i++) {
+        var node = row[i];
