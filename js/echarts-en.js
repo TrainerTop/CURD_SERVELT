@@ -52777,3 +52777,291 @@ function position(row, rowFixedLength, rect, halfGapWidth, flush) {
     }
     for (var i = 0, rowLen = row.length; i < rowLen; i++) {
         var node = row[i];
+        var nodeLayout = {};
+        var step = rowOtherLength
+            ? node.getLayout().area / rowOtherLength : 0;
+
+        var wh1 = nodeLayout[wh[idx1WhenH]] = mathMax$4(rowOtherLength - 2 * halfGapWidth, 0);
+
+        // We use Math.max/min to avoid negative width/height when considering gap width.
+        var remain = rect[xy[idx0WhenH]] + rect[wh[idx0WhenH]] - last;
+        var modWH = (i === rowLen - 1 || remain < step) ? remain : step;
+        var wh0 = nodeLayout[wh[idx0WhenH]] = mathMax$4(modWH - 2 * halfGapWidth, 0);
+
+        nodeLayout[xy[idx1WhenH]] = rect[xy[idx1WhenH]] + mathMin$4(halfGapWidth, wh1 / 2);
+        nodeLayout[xy[idx0WhenH]] = last + mathMin$4(halfGapWidth, wh0 / 2);
+
+        last += modWH;
+        node.setLayout(nodeLayout, true);
+    }
+
+    rect[xy[idx1WhenH]] += rowOtherLength;
+    rect[wh[idx1WhenH]] -= rowOtherLength;
+}
+
+// Return [containerWidth, containerHeight] as defualt.
+function estimateRootSize(seriesModel, targetInfo, viewRoot, containerWidth, containerHeight) {
+    // If targetInfo.node exists, we zoom to the node,
+    // so estimate whold width and heigth by target node.
+    var currNode = (targetInfo || {}).node;
+    var defaultSize = [containerWidth, containerHeight];
+
+    if (!currNode || currNode === viewRoot) {
+        return defaultSize;
+    }
+
+    var parent;
+    var viewArea = containerWidth * containerHeight;
+    var area = viewArea * seriesModel.option.zoomToNodeRatio;
+
+    while (parent = currNode.parentNode) { // jshint ignore:line
+        var sum = 0;
+        var siblings = parent.children;
+
+        for (var i = 0, len = siblings.length; i < len; i++) {
+            sum += siblings[i].getValue();
+        }
+        var currNodeValue = currNode.getValue();
+        if (currNodeValue === 0) {
+            return defaultSize;
+        }
+        area *= sum / currNodeValue;
+
+        // Considering border, suppose aspect ratio is 1.
+        var parentModel = parent.getModel();
+        var borderWidth = parentModel.get(PATH_BORDER_WIDTH);
+        var upperHeight = Math.max(borderWidth, getUpperLabelHeight(parentModel, borderWidth));
+        area += 4 * borderWidth * borderWidth
+            + (3 * borderWidth + upperHeight) * Math.pow(area, 0.5);
+
+        area > MAX_SAFE_INTEGER && (area = MAX_SAFE_INTEGER);
+
+        currNode = parent;
+    }
+
+    area < viewArea && (area = viewArea);
+    var scale = Math.pow(area / viewArea, 0.5);
+
+    return [containerWidth * scale, containerHeight * scale];
+}
+
+// Root postion base on coord of containerGroup
+function calculateRootPosition(layoutInfo, rootRect, targetInfo) {
+    if (rootRect) {
+        return {x: rootRect.x, y: rootRect.y};
+    }
+
+    var defaultPosition = {x: 0, y: 0};
+    if (!targetInfo) {
+        return defaultPosition;
+    }
+
+    // If targetInfo is fetched by 'retrieveTargetInfo',
+    // old tree and new tree are the same tree,
+    // so the node still exists and we can visit it.
+
+    var targetNode = targetInfo.node;
+    var layout = targetNode.getLayout();
+
+    if (!layout) {
+        return defaultPosition;
+    }
+
+    // Transform coord from local to container.
+    var targetCenter = [layout.width / 2, layout.height / 2];
+    var node = targetNode;
+    while (node) {
+        var nodeLayout = node.getLayout();
+        targetCenter[0] += nodeLayout.x;
+        targetCenter[1] += nodeLayout.y;
+        node = node.parentNode;
+    }
+
+    return {
+        x: layoutInfo.width / 2 - targetCenter[0],
+        y: layoutInfo.height / 2 - targetCenter[1]
+    };
+}
+
+// Mark nodes visible for prunning when visual coding and rendering.
+// Prunning depends on layout and root position, so we have to do it after layout.
+function prunning(node, clipRect, viewAbovePath, viewRoot, depth) {
+    var nodeLayout = node.getLayout();
+    var nodeInViewAbovePath = viewAbovePath[depth];
+    var isAboveViewRoot = nodeInViewAbovePath && nodeInViewAbovePath === node;
+
+    if (
+        (nodeInViewAbovePath && !isAboveViewRoot)
+        || (depth === viewAbovePath.length && node !== viewRoot)
+    ) {
+        return;
+    }
+
+    node.setLayout({
+        // isInView means: viewRoot sub tree + viewAbovePath
+        isInView: true,
+        // invisible only means: outside view clip so that the node can not
+        // see but still layout for animation preparation but not render.
+        invisible: !isAboveViewRoot && !clipRect.intersect(nodeLayout),
+        isAboveViewRoot: isAboveViewRoot
+    }, true);
+
+    // Transform to child coordinate.
+    var childClipRect = new BoundingRect(
+        clipRect.x - nodeLayout.x,
+        clipRect.y - nodeLayout.y,
+        clipRect.width,
+        clipRect.height
+    );
+
+    each$10(node.viewChildren || [], function (child) {
+        prunning(child, childClipRect, viewAbovePath, viewRoot, depth + 1);
+    });
+}
+
+function getUpperLabelHeight(model) {
+    return model.get(PATH_UPPER_LABEL_SHOW) ? model.get(PATH_UPPER_LABEL_HEIGHT) : 0;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+registerVisual(treemapVisual);
+registerLayout(treemapLayout);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Graph data structure
+ *
+ * @module echarts/data/Graph
+ * @author Yi Shen(https://www.github.com/pissang)
+ */
+
+// id may be function name of Object, add a prefix to avoid this problem.
+function generateNodeKey(id) {
+    return '_EC_' + id;
+}
+/**
+ * @alias module:echarts/data/Graph
+ * @constructor
+ * @param {boolean} directed
+ */
+var Graph = function (directed) {
+    /**
+     * 是否是有向图
+     * @type {boolean}
+     * @private
+     */
+    this._directed = directed || false;
+
+    /**
+     * @type {Array.<module:echarts/data/Graph.Node>}
+     * @readOnly
+     */
+    this.nodes = [];
+
+    /**
+     * @type {Array.<module:echarts/data/Graph.Edge>}
+     * @readOnly
+     */
+    this.edges = [];
+
+    /**
+     * @type {Object.<string, module:echarts/data/Graph.Node>}
+     * @private
+     */
+    this._nodesMap = {};
+    /**
+     * @type {Object.<string, module:echarts/data/Graph.Edge>}
+     * @private
+     */
+    this._edgesMap = {};
+
+    /**
+     * @type {module:echarts/data/List}
+     * @readOnly
+     */
+    this.data;
+
+    /**
+     * @type {module:echarts/data/List}
+     * @readOnly
+     */
+    this.edgeData;
+};
+
+var graphProto = Graph.prototype;
+/**
+ * @type {string}
+ */
+graphProto.type = 'graph';
+
+/**
+ * If is directed graph
+ * @return {boolean}
+ */
+graphProto.isDirected = function () {
+    return this._directed;
+};
+
+/**
+ * Add a new node
+ * @param {string} id
+ * @param {number} [dataIndex]
+ */
+graphProto.addNode = function (id, dataIndex) {
+    id = id || ('' + dataIndex);
+
+    var nodesMap = this._nodesMap;
+
+    if (nodesMap[generateNodeKey(id)]) {
+        if (__DEV__) {
+            console.error('Graph nodes have duplicate name or id');
+        }
+        return;
+    }
+
+    var node = new Node(id, dataIndex);
+    node.hostGraph = this;
+
+    this.nodes.push(node);
+
+    nodesMap[generateNodeKey(id)] = node;
+    return node;
+};
+
+/**
