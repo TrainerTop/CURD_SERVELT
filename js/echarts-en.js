@@ -53357,3 +53357,272 @@ Node.prototype = {
     /**
     * @return {number}
     */
+    outDegree: function () {
+        return this.outEdges.length;
+    },
+
+    /**
+     * @param {string} [path]
+     * @return {module:echarts/model/Model}
+     */
+    getModel: function (path) {
+        if (this.dataIndex < 0) {
+            return;
+        }
+        var graph = this.hostGraph;
+        var itemModel = graph.data.getItemModel(this.dataIndex);
+
+        return itemModel.getModel(path);
+    }
+};
+
+/**
+ * 图边
+ * @alias module:echarts/data/Graph.Edge
+ * @param {module:echarts/data/Graph.Node} n1
+ * @param {module:echarts/data/Graph.Node} n2
+ * @param {number} [dataIndex=-1]
+ */
+function Edge(n1, n2, dataIndex) {
+
+    /**
+     * 节点1，如果是有向图则为源节点
+     * @type {module:echarts/data/Graph.Node}
+     */
+    this.node1 = n1;
+
+    /**
+     * 节点2，如果是有向图则为目标节点
+     * @type {module:echarts/data/Graph.Node}
+     */
+    this.node2 = n2;
+
+    this.dataIndex = dataIndex == null ? -1 : dataIndex;
+}
+
+/**
+ * @param {string} [path]
+ * @return {module:echarts/model/Model}
+ */
+Edge.prototype.getModel = function (path) {
+    if (this.dataIndex < 0) {
+        return;
+    }
+    var graph = this.hostGraph;
+    var itemModel = graph.edgeData.getItemModel(this.dataIndex);
+
+    return itemModel.getModel(path);
+};
+
+var createGraphDataProxyMixin = function (hostName, dataName) {
+    return {
+        /**
+         * @param {string=} [dimension='value'] Default 'value'. can be 'a', 'b', 'c', 'd', 'e'.
+         * @return {number}
+         */
+        getValue: function (dimension) {
+            var data = this[hostName][dataName];
+            return data.get(data.getDimension(dimension || 'value'), this.dataIndex);
+        },
+
+        /**
+         * @param {Object|string} key
+         * @param {*} [value]
+         */
+        setVisual: function (key, value) {
+            this.dataIndex >= 0
+                && this[hostName][dataName].setItemVisual(this.dataIndex, key, value);
+        },
+
+        /**
+         * @param {string} key
+         * @return {boolean}
+         */
+        getVisual: function (key, ignoreParent) {
+            return this[hostName][dataName].getItemVisual(this.dataIndex, key, ignoreParent);
+        },
+
+        /**
+         * @param {Object} layout
+         * @return {boolean} [merge=false]
+         */
+        setLayout: function (layout, merge$$1) {
+            this.dataIndex >= 0
+                && this[hostName][dataName].setItemLayout(this.dataIndex, layout, merge$$1);
+        },
+
+        /**
+         * @return {Object}
+         */
+        getLayout: function () {
+            return this[hostName][dataName].getItemLayout(this.dataIndex);
+        },
+
+        /**
+         * @return {module:zrender/Element}
+         */
+        getGraphicEl: function () {
+            return this[hostName][dataName].getItemGraphicEl(this.dataIndex);
+        },
+
+        /**
+         * @return {number}
+         */
+        getRawIndex: function () {
+            return this[hostName][dataName].getRawIndex(this.dataIndex);
+        }
+    };
+};
+
+mixin(Node, createGraphDataProxyMixin('hostGraph', 'data'));
+mixin(Edge, createGraphDataProxyMixin('hostGraph', 'edgeData'));
+
+Graph.Node = Node;
+Graph.Edge = Edge;
+
+enableClassCheck(Node);
+enableClassCheck(Edge);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var createGraphFromNodeEdge = function (nodes, edges, seriesModel, directed, beforeLink) {
+    // ??? TODO
+    // support dataset?
+    var graph = new Graph(directed);
+    for (var i = 0; i < nodes.length; i++) {
+        graph.addNode(retrieve(
+            // Id, name, dataIndex
+            nodes[i].id, nodes[i].name, i
+        ), i);
+    }
+
+    var linkNameList = [];
+    var validEdges = [];
+    var linkCount = 0;
+    for (var i = 0; i < edges.length; i++) {
+        var link = edges[i];
+        var source = link.source;
+        var target = link.target;
+        // addEdge may fail when source or target not exists
+        if (graph.addEdge(source, target, linkCount)) {
+            validEdges.push(link);
+            linkNameList.push(retrieve(link.id, source + ' > ' + target));
+            linkCount++;
+        }
+    }
+
+    var coordSys = seriesModel.get('coordinateSystem');
+    var nodeData;
+    if (coordSys === 'cartesian2d' || coordSys === 'polar') {
+        nodeData = createListFromArray(nodes, seriesModel);
+    }
+    else {
+        var coordSysCtor = CoordinateSystemManager.get(coordSys);
+        var coordDimensions = (coordSysCtor && coordSysCtor.type !== 'view')
+            ? (coordSysCtor.dimensions || []) : [];
+        // FIXME: Some geo do not need `value` dimenson, whereas `calendar` needs
+        // `value` dimension, but graph need `value` dimension. It's better to
+        // uniform this behavior.
+        if (indexOf(coordDimensions, 'value') < 0) {
+            coordDimensions.concat(['value']);
+        }
+
+        var dimensionNames = createDimensions(nodes, {
+            coordDimensions: coordDimensions
+        });
+        nodeData = new List(dimensionNames, seriesModel);
+        nodeData.initData(nodes);
+    }
+
+    var edgeData = new List(['value'], seriesModel);
+    edgeData.initData(validEdges, linkNameList);
+
+    beforeLink && beforeLink(nodeData, edgeData);
+
+    linkList({
+        mainData: nodeData,
+        struct: graph,
+        structAttr: 'graph',
+        datas: {node: nodeData, edge: edgeData},
+        datasAttr: {node: 'data', edge: 'edgeData'}
+    });
+
+    // Update dataIndex of nodes and edges because invalid edge may be removed
+    graph.update();
+
+    return graph;
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var GraphSeries = extendSeriesModel({
+
+    type: 'series.graph',
+
+    init: function (option) {
+        GraphSeries.superApply(this, 'init', arguments);
+
+        // Provide data for legend select
+        this.legendDataProvider = function () {
+            return this._categoriesData;
+        };
+
+        this.fillDataTextStyle(option.edges || option.links);
+
+        this._updateCategoriesData();
+    },
+
+    mergeOption: function (option) {
+        GraphSeries.superApply(this, 'mergeOption', arguments);
+
+        this.fillDataTextStyle(option.edges || option.links);
+
+        this._updateCategoriesData();
+    },
+
+    mergeDefaultAndTheme: function (option) {
+        GraphSeries.superApply(this, 'mergeDefaultAndTheme', arguments);
+        defaultEmphasis(option, ['edgeLabel'], ['show']);
+    },
+
+    getInitialData: function (option, ecModel) {
+        var edges = option.edges || option.links || [];
+        var nodes = option.data || option.nodes || [];
+        var self = this;
+
+        if (nodes && edges) {
+            return createGraphFromNodeEdge(nodes, edges, this, true, beforeLink).data;
