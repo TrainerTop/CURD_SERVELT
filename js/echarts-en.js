@@ -53878,3 +53878,291 @@ function isLine(shape) {
 var LinePath = extendShape({
 
     type: 'ec-line',
+
+    style: {
+        stroke: '#000',
+        fill: null
+    },
+
+    shape: {
+        x1: 0,
+        y1: 0,
+        x2: 0,
+        y2: 0,
+        percent: 1,
+        cpx1: null,
+        cpy1: null
+    },
+
+    buildPath: function (ctx, shape) {
+        (isLine(shape) ? straightLineProto : bezierCurveProto).buildPath(ctx, shape);
+    },
+
+    pointAt: function (t) {
+        return isLine(this.shape)
+            ? straightLineProto.pointAt.call(this, t)
+            : bezierCurveProto.pointAt.call(this, t);
+    },
+
+    tangentAt: function (t) {
+        var shape = this.shape;
+        var p = isLine(shape)
+            ? [shape.x2 - shape.x1, shape.y2 - shape.y1]
+            : bezierCurveProto.tangentAt.call(this, t);
+        return normalize(p, p);
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @module echarts/chart/helper/Line
+ */
+
+var SYMBOL_CATEGORIES = ['fromSymbol', 'toSymbol'];
+
+function makeSymbolTypeKey(symbolCategory) {
+    return '_' + symbolCategory + 'Type';
+}
+/**
+ * @inner
+ */
+function createSymbol$1(name, lineData, idx) {
+    var color = lineData.getItemVisual(idx, 'color');
+    var symbolType = lineData.getItemVisual(idx, name);
+    var symbolSize = lineData.getItemVisual(idx, name + 'Size');
+
+    if (!symbolType || symbolType === 'none') {
+        return;
+    }
+
+    if (!isArray(symbolSize)) {
+        symbolSize = [symbolSize, symbolSize];
+    }
+    var symbolPath = createSymbol(
+        symbolType, -symbolSize[0] / 2, -symbolSize[1] / 2,
+        symbolSize[0], symbolSize[1], color
+    );
+
+    symbolPath.name = name;
+
+    return symbolPath;
+}
+
+function createLine(points) {
+    var line = new LinePath({
+        name: 'line'
+    });
+    setLinePoints(line.shape, points);
+    return line;
+}
+
+function setLinePoints(targetShape, points) {
+    var p1 = points[0];
+    var p2 = points[1];
+    var cp1 = points[2];
+    targetShape.x1 = p1[0];
+    targetShape.y1 = p1[1];
+    targetShape.x2 = p2[0];
+    targetShape.y2 = p2[1];
+    targetShape.percent = 1;
+
+    if (cp1) {
+        targetShape.cpx1 = cp1[0];
+        targetShape.cpy1 = cp1[1];
+    }
+    else {
+        targetShape.cpx1 = NaN;
+        targetShape.cpy1 = NaN;
+    }
+}
+
+function updateSymbolAndLabelBeforeLineUpdate() {
+    var lineGroup = this;
+    var symbolFrom = lineGroup.childOfName('fromSymbol');
+    var symbolTo = lineGroup.childOfName('toSymbol');
+    var label = lineGroup.childOfName('label');
+    // Quick reject
+    if (!symbolFrom && !symbolTo && label.ignore) {
+        return;
+    }
+
+    var invScale = 1;
+    var parentNode = this.parent;
+    while (parentNode) {
+        if (parentNode.scale) {
+            invScale /= parentNode.scale[0];
+        }
+        parentNode = parentNode.parent;
+    }
+
+    var line = lineGroup.childOfName('line');
+    // If line not changed
+    // FIXME Parent scale changed
+    if (!this.__dirty && !line.__dirty) {
+        return;
+    }
+
+    var percent = line.shape.percent;
+    var fromPos = line.pointAt(0);
+    var toPos = line.pointAt(percent);
+
+    var d = sub([], toPos, fromPos);
+    normalize(d, d);
+
+    if (symbolFrom) {
+        symbolFrom.attr('position', fromPos);
+        var tangent = line.tangentAt(0);
+        symbolFrom.attr('rotation', Math.PI / 2 - Math.atan2(
+            tangent[1], tangent[0]
+        ));
+        symbolFrom.attr('scale', [invScale * percent, invScale * percent]);
+    }
+    if (symbolTo) {
+        symbolTo.attr('position', toPos);
+        var tangent = line.tangentAt(1);
+        symbolTo.attr('rotation', -Math.PI / 2 - Math.atan2(
+            tangent[1], tangent[0]
+        ));
+        symbolTo.attr('scale', [invScale * percent, invScale * percent]);
+    }
+
+    if (!label.ignore) {
+        label.attr('position', toPos);
+
+        var textPosition;
+        var textAlign;
+        var textVerticalAlign;
+
+        var distance$$1 = 5 * invScale;
+        // End
+        if (label.__position === 'end') {
+            textPosition = [d[0] * distance$$1 + toPos[0], d[1] * distance$$1 + toPos[1]];
+            textAlign = d[0] > 0.8 ? 'left' : (d[0] < -0.8 ? 'right' : 'center');
+            textVerticalAlign = d[1] > 0.8 ? 'top' : (d[1] < -0.8 ? 'bottom' : 'middle');
+        }
+        // Middle
+        else if (label.__position === 'middle') {
+            var halfPercent = percent / 2;
+            var tangent = line.tangentAt(halfPercent);
+            var n = [tangent[1], -tangent[0]];
+            var cp = line.pointAt(halfPercent);
+            if (n[1] > 0) {
+                n[0] = -n[0];
+                n[1] = -n[1];
+            }
+            textPosition = [cp[0] + n[0] * distance$$1, cp[1] + n[1] * distance$$1];
+            textAlign = 'center';
+            textVerticalAlign = 'bottom';
+            var rotation = -Math.atan2(tangent[1], tangent[0]);
+            if (toPos[0] < fromPos[0]) {
+                rotation = Math.PI + rotation;
+            }
+            label.attr('rotation', rotation);
+        }
+        // Start
+        else {
+            textPosition = [-d[0] * distance$$1 + fromPos[0], -d[1] * distance$$1 + fromPos[1]];
+            textAlign = d[0] > 0.8 ? 'right' : (d[0] < -0.8 ? 'left' : 'center');
+            textVerticalAlign = d[1] > 0.8 ? 'bottom' : (d[1] < -0.8 ? 'top' : 'middle');
+        }
+        label.attr({
+            style: {
+                // Use the user specified text align and baseline first
+                textVerticalAlign: label.__verticalAlign || textVerticalAlign,
+                textAlign: label.__textAlign || textAlign
+            },
+            position: textPosition,
+            scale: [invScale, invScale]
+        });
+    }
+}
+
+/**
+ * @constructor
+ * @extends {module:zrender/graphic/Group}
+ * @alias {module:echarts/chart/helper/Line}
+ */
+function Line$1(lineData, idx, seriesScope) {
+    Group.call(this);
+
+    this._createLine(lineData, idx, seriesScope);
+}
+
+var lineProto = Line$1.prototype;
+
+// Update symbol position and rotation
+lineProto.beforeUpdate = updateSymbolAndLabelBeforeLineUpdate;
+
+lineProto._createLine = function (lineData, idx, seriesScope) {
+    var seriesModel = lineData.hostModel;
+    var linePoints = lineData.getItemLayout(idx);
+
+    var line = createLine(linePoints);
+    line.shape.percent = 0;
+    initProps(line, {
+        shape: {
+            percent: 1
+        }
+    }, seriesModel, idx);
+
+    this.add(line);
+
+    var label = new Text({
+        name: 'label',
+        // FIXME
+        // Temporary solution for `focusNodeAdjacency`.
+        // line label do not use the opacity of lineStyle.
+        lineLabelOriginalOpacity: 1
+    });
+    this.add(label);
+
+    each$1(SYMBOL_CATEGORIES, function (symbolCategory) {
+        var symbol = createSymbol$1(symbolCategory, lineData, idx);
+        // symbols must added after line to make sure
+        // it will be updated after line#update.
+        // Or symbol position and rotation update in line#beforeUpdate will be one frame slow
+        this.add(symbol);
+        this[makeSymbolTypeKey(symbolCategory)] = lineData.getItemVisual(idx, symbolCategory);
+    }, this);
+
+    this._updateCommonStl(lineData, idx, seriesScope);
+};
+
+lineProto.updateData = function (lineData, idx, seriesScope) {
+    var seriesModel = lineData.hostModel;
+
+    var line = this.childOfName('line');
+    var linePoints = lineData.getItemLayout(idx);
+    var target = {
+        shape: {}
+    };
+    setLinePoints(target.shape, linePoints);
+    updateProps(line, target, seriesModel, idx);
+
+    each$1(SYMBOL_CATEGORIES, function (symbolCategory) {
+        var symbolType = lineData.getItemVisual(idx, symbolCategory);
+        var key = makeSymbolTypeKey(symbolCategory);
+        // Symbol changed
+        if (this[key] !== symbolType) {
+            this.remove(this.childOfName(symbolCategory));
+            var symbol = createSymbol$1(symbolCategory, lineData, idx);
+            this.add(symbol);
+        }
