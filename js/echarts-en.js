@@ -54166,3 +54166,296 @@ lineProto.updateData = function (lineData, idx, seriesScope) {
             var symbol = createSymbol$1(symbolCategory, lineData, idx);
             this.add(symbol);
         }
+        this[key] = symbolType;
+    }, this);
+
+    this._updateCommonStl(lineData, idx, seriesScope);
+};
+
+lineProto._updateCommonStl = function (lineData, idx, seriesScope) {
+    var seriesModel = lineData.hostModel;
+
+    var line = this.childOfName('line');
+
+    var lineStyle = seriesScope && seriesScope.lineStyle;
+    var hoverLineStyle = seriesScope && seriesScope.hoverLineStyle;
+    var labelModel = seriesScope && seriesScope.labelModel;
+    var hoverLabelModel = seriesScope && seriesScope.hoverLabelModel;
+
+    // Optimization for large dataset
+    if (!seriesScope || lineData.hasItemOption) {
+        var itemModel = lineData.getItemModel(idx);
+
+        lineStyle = itemModel.getModel('lineStyle').getLineStyle();
+        hoverLineStyle = itemModel.getModel('emphasis.lineStyle').getLineStyle();
+
+        labelModel = itemModel.getModel('label');
+        hoverLabelModel = itemModel.getModel('emphasis.label');
+    }
+
+    var visualColor = lineData.getItemVisual(idx, 'color');
+    var visualOpacity = retrieve3(
+        lineData.getItemVisual(idx, 'opacity'),
+        lineStyle.opacity,
+        1
+    );
+
+    line.useStyle(defaults(
+        {
+            strokeNoScale: true,
+            fill: 'none',
+            stroke: visualColor,
+            opacity: visualOpacity
+        },
+        lineStyle
+    ));
+    line.hoverStyle = hoverLineStyle;
+
+    // Update symbol
+    each$1(SYMBOL_CATEGORIES, function (symbolCategory) {
+        var symbol = this.childOfName(symbolCategory);
+        if (symbol) {
+            symbol.setColor(visualColor);
+            symbol.setStyle({
+                opacity: visualOpacity
+            });
+        }
+    }, this);
+
+    var showLabel = labelModel.getShallow('show');
+    var hoverShowLabel = hoverLabelModel.getShallow('show');
+
+    var label = this.childOfName('label');
+    var defaultLabelColor;
+    var baseText;
+
+    // FIXME: the logic below probably should be merged to `graphic.setLabelStyle`.
+    if (showLabel || hoverShowLabel) {
+        defaultLabelColor = visualColor || '#000';
+
+        baseText = seriesModel.getFormattedLabel(idx, 'normal', lineData.dataType);
+        if (baseText == null) {
+            var rawVal = seriesModel.getRawValue(idx);
+            baseText = rawVal == null
+                ? lineData.getName(idx)
+                : isFinite(rawVal)
+                ? round$2(rawVal)
+                : rawVal;
+        }
+    }
+    var normalText = showLabel ? baseText : null;
+    var emphasisText = hoverShowLabel
+        ? retrieve2(
+            seriesModel.getFormattedLabel(idx, 'emphasis', lineData.dataType),
+            baseText
+        )
+        : null;
+
+    var labelStyle = label.style;
+
+    // Always set `textStyle` even if `normalStyle.text` is null, because default
+    // values have to be set on `normalStyle`.
+    if (normalText != null || emphasisText != null) {
+        setTextStyle(label.style, labelModel, {
+            text: normalText
+        }, {
+            autoColor: defaultLabelColor
+        });
+
+        label.__textAlign = labelStyle.textAlign;
+        label.__verticalAlign = labelStyle.textVerticalAlign;
+        // 'start', 'middle', 'end'
+        label.__position = labelModel.get('position') || 'middle';
+    }
+
+    if (emphasisText != null) {
+        // Only these properties supported in this emphasis style here.
+        label.hoverStyle = {
+            text: emphasisText,
+            textFill: hoverLabelModel.getTextColor(true),
+            // For merging hover style to normal style, do not use
+            // `hoverLabelModel.getFont()` here.
+            fontStyle: hoverLabelModel.getShallow('fontStyle'),
+            fontWeight: hoverLabelModel.getShallow('fontWeight'),
+            fontSize: hoverLabelModel.getShallow('fontSize'),
+            fontFamily: hoverLabelModel.getShallow('fontFamily')
+        };
+    }
+    else {
+        label.hoverStyle = {
+            text: null
+        };
+    }
+
+    label.ignore = !showLabel && !hoverShowLabel;
+
+    setHoverStyle(this);
+};
+
+lineProto.highlight = function () {
+    this.trigger('emphasis');
+};
+
+lineProto.downplay = function () {
+    this.trigger('normal');
+};
+
+lineProto.updateLayout = function (lineData, idx) {
+    this.setLinePoints(lineData.getItemLayout(idx));
+};
+
+lineProto.setLinePoints = function (points) {
+    var linePath = this.childOfName('line');
+    setLinePoints(linePath.shape, points);
+    linePath.dirty();
+};
+
+inherits(Line$1, Group);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @module echarts/chart/helper/LineDraw
+ */
+
+// import IncrementalDisplayable from 'zrender/src/graphic/IncrementalDisplayable';
+
+/**
+ * @alias module:echarts/component/marker/LineDraw
+ * @constructor
+ */
+function LineDraw(ctor) {
+    this._ctor = ctor || Line$1;
+
+    this.group = new Group();
+}
+
+var lineDrawProto = LineDraw.prototype;
+
+lineDrawProto.isPersistent = function () {
+    return true;
+};
+
+/**
+ * @param {module:echarts/data/List} lineData
+ */
+lineDrawProto.updateData = function (lineData) {
+    var lineDraw = this;
+    var group = lineDraw.group;
+
+    var oldLineData = lineDraw._lineData;
+    lineDraw._lineData = lineData;
+
+    // There is no oldLineData only when first rendering or switching from
+    // stream mode to normal mode, where previous elements should be removed.
+    if (!oldLineData) {
+        group.removeAll();
+    }
+
+    var seriesScope = makeSeriesScope$1(lineData);
+
+    lineData.diff(oldLineData)
+        .add(function (idx) {
+            doAdd(lineDraw, lineData, idx, seriesScope);
+        })
+        .update(function (newIdx, oldIdx) {
+            doUpdate(lineDraw, oldLineData, lineData, oldIdx, newIdx, seriesScope);
+        })
+        .remove(function (idx) {
+            group.remove(oldLineData.getItemGraphicEl(idx));
+        })
+        .execute();
+};
+
+function doAdd(lineDraw, lineData, idx, seriesScope) {
+    var itemLayout = lineData.getItemLayout(idx);
+
+    if (!lineNeedsDraw(itemLayout)) {
+        return;
+    }
+
+    var el = new lineDraw._ctor(lineData, idx, seriesScope);
+    lineData.setItemGraphicEl(idx, el);
+    lineDraw.group.add(el);
+}
+
+function doUpdate(lineDraw, oldLineData, newLineData, oldIdx, newIdx, seriesScope) {
+    var itemEl = oldLineData.getItemGraphicEl(oldIdx);
+
+    if (!lineNeedsDraw(newLineData.getItemLayout(newIdx))) {
+        lineDraw.group.remove(itemEl);
+        return;
+    }
+
+    if (!itemEl) {
+        itemEl = new lineDraw._ctor(newLineData, newIdx, seriesScope);
+    }
+    else {
+        itemEl.updateData(newLineData, newIdx, seriesScope);
+    }
+
+    newLineData.setItemGraphicEl(newIdx, itemEl);
+
+    lineDraw.group.add(itemEl);
+}
+
+lineDrawProto.updateLayout = function () {
+    var lineData = this._lineData;
+
+    // Do not support update layout in incremental mode.
+    if (!lineData) {
+        return;
+    }
+
+    lineData.eachItemGraphicEl(function (el, idx) {
+        el.updateLayout(lineData, idx);
+    }, this);
+};
+
+lineDrawProto.incrementalPrepareUpdate = function (lineData) {
+    this._seriesScope = makeSeriesScope$1(lineData);
+    this._lineData = null;
+    this.group.removeAll();
+};
+
+lineDrawProto.incrementalUpdate = function (taskParams, lineData) {
+    function updateIncrementalAndHover(el) {
+        if (!el.isGroup) {
+            el.incremental = el.useHoverLayer = true;
+        }
+    }
+
+    for (var idx = taskParams.start; idx < taskParams.end; idx++) {
+        var itemLayout = lineData.getItemLayout(idx);
+
+        if (lineNeedsDraw(itemLayout)) {
+            var el = new this._ctor(lineData, idx, this._seriesScope);
+            el.traverse(updateIncrementalAndHover);
+
+            this.group.add(el);
+            lineData.setItemGraphicEl(idx, el);
+        }
+    }
+};
+
+function makeSeriesScope$1(lineData) {
+    var hostModel = lineData.hostModel;
+    return {
+        lineStyle: hostModel.getModel('lineStyle').getLineStyle(),
