@@ -54719,3 +54719,274 @@ function fadeInItem(item, opacityPath) {
     el.highlight && el.highlight();
     el.traverse(function (child) {
         if (child.type !== 'group') {
+            child.setStyle('opacity', opacity);
+        }
+    });
+}
+
+extendChartView({
+
+    type: 'graph',
+
+    init: function (ecModel, api) {
+        var symbolDraw = new SymbolDraw();
+        var lineDraw = new LineDraw();
+        var group = this.group;
+
+        this._controller = new RoamController(api.getZr());
+        this._controllerHost = {target: group};
+
+        group.add(symbolDraw.group);
+        group.add(lineDraw.group);
+
+        this._symbolDraw = symbolDraw;
+        this._lineDraw = lineDraw;
+
+        this._firstRender = true;
+    },
+
+    render: function (seriesModel, ecModel, api) {
+        var coordSys = seriesModel.coordinateSystem;
+
+        this._model = seriesModel;
+        this._nodeScaleRatio = seriesModel.get('nodeScaleRatio');
+
+        var symbolDraw = this._symbolDraw;
+        var lineDraw = this._lineDraw;
+
+        var group = this.group;
+
+        if (coordSys.type === 'view') {
+            var groupNewProp = {
+                position: coordSys.position,
+                scale: coordSys.scale
+            };
+            if (this._firstRender) {
+                group.attr(groupNewProp);
+            }
+            else {
+                updateProps(group, groupNewProp, seriesModel);
+            }
+        }
+        // Fix edge contact point with node
+        adjustEdge(seriesModel.getGraph(), this._getNodeGlobalScale(seriesModel));
+
+        var data = seriesModel.getData();
+        symbolDraw.updateData(data);
+
+        var edgeData = seriesModel.getEdgeData();
+        lineDraw.updateData(edgeData);
+
+        this._updateNodeAndLinkScale();
+
+        this._updateController(seriesModel, ecModel, api);
+
+        clearTimeout(this._layoutTimeout);
+        var forceLayout = seriesModel.forceLayout;
+        var layoutAnimation = seriesModel.get('force.layoutAnimation');
+        if (forceLayout) {
+            this._startForceLayoutIteration(forceLayout, layoutAnimation);
+        }
+
+        data.eachItemGraphicEl(function (el, idx) {
+            var itemModel = data.getItemModel(idx);
+            // Update draggable
+            el.off('drag').off('dragend');
+            var draggable = itemModel.get('draggable');
+            if (draggable) {
+                el.on('drag', function () {
+                    if (forceLayout) {
+                        forceLayout.warmUp();
+                        !this._layouting
+                            && this._startForceLayoutIteration(forceLayout, layoutAnimation);
+                        forceLayout.setFixed(idx);
+                        // Write position back to layout
+                        data.setItemLayout(idx, el.position);
+                    }
+                }, this).on('dragend', function () {
+                    if (forceLayout) {
+                        forceLayout.setUnfixed(idx);
+                    }
+                }, this);
+            }
+            el.setDraggable(draggable && forceLayout);
+
+            el[FOCUS_ADJACENCY] && el.off('mouseover', el[FOCUS_ADJACENCY]);
+            el[UNFOCUS_ADJACENCY] && el.off('mouseout', el[UNFOCUS_ADJACENCY]);
+
+            if (itemModel.get('focusNodeAdjacency')) {
+                el.on('mouseover', el[FOCUS_ADJACENCY] = function () {
+                    api.dispatchAction({
+                        type: 'focusNodeAdjacency',
+                        seriesId: seriesModel.id,
+                        dataIndex: el.dataIndex
+                    });
+                });
+                el.on('mouseout', el[UNFOCUS_ADJACENCY] = function () {
+                    api.dispatchAction({
+                        type: 'unfocusNodeAdjacency',
+                        seriesId: seriesModel.id
+                    });
+                });
+            }
+
+        }, this);
+
+        data.graph.eachEdge(function (edge) {
+            var el = edge.getGraphicEl();
+
+            el[FOCUS_ADJACENCY] && el.off('mouseover', el[FOCUS_ADJACENCY]);
+            el[UNFOCUS_ADJACENCY] && el.off('mouseout', el[UNFOCUS_ADJACENCY]);
+
+            if (edge.getModel().get('focusNodeAdjacency')) {
+                el.on('mouseover', el[FOCUS_ADJACENCY] = function () {
+                    api.dispatchAction({
+                        type: 'focusNodeAdjacency',
+                        seriesId: seriesModel.id,
+                        edgeDataIndex: edge.dataIndex
+                    });
+                });
+                el.on('mouseout', el[UNFOCUS_ADJACENCY] = function () {
+                    api.dispatchAction({
+                        type: 'unfocusNodeAdjacency',
+                        seriesId: seriesModel.id
+                    });
+                });
+            }
+        });
+
+        var circularRotateLabel = seriesModel.get('layout') === 'circular'
+            && seriesModel.get('circular.rotateLabel');
+        var cx = data.getLayout('cx');
+        var cy = data.getLayout('cy');
+        data.eachItemGraphicEl(function (el, idx) {
+            var symbolPath = el.getSymbolPath();
+            if (circularRotateLabel) {
+                var pos = data.getItemLayout(idx);
+                var rad = Math.atan2(pos[1] - cy, pos[0] - cx);
+                if (rad < 0) {
+                    rad = Math.PI * 2 + rad;
+                }
+                var isLeft = pos[0] < cx;
+                if (isLeft) {
+                    rad = rad - Math.PI;
+                }
+                var textPosition = isLeft ? 'left' : 'right';
+                symbolPath.setStyle({
+                    textRotation: -rad,
+                    textPosition: textPosition,
+                    textOrigin: 'center'
+                });
+                symbolPath.hoverStyle && (symbolPath.hoverStyle.textPosition = textPosition);
+            }
+            else {
+                symbolPath.setStyle({
+                    textRotation: 0
+                });
+            }
+        });
+
+        this._firstRender = false;
+    },
+
+    dispose: function () {
+        this._controller && this._controller.dispose();
+        this._controllerHost = {};
+    },
+
+    focusNodeAdjacency: function (seriesModel, ecModel, api, payload) {
+        var data = this._model.getData();
+        var graph = data.graph;
+        var dataIndex = payload.dataIndex;
+        var edgeDataIndex = payload.edgeDataIndex;
+
+        var node = graph.getNodeByIndex(dataIndex);
+        var edge = graph.getEdgeByIndex(edgeDataIndex);
+
+        if (!node && !edge) {
+            return;
+        }
+
+        graph.eachNode(function (node) {
+            fadeOutItem(node, nodeOpacityPath, 0.1);
+        });
+        graph.eachEdge(function (edge) {
+            fadeOutItem(edge, lineOpacityPath, 0.1);
+        });
+
+        if (node) {
+            fadeInItem(node, nodeOpacityPath);
+            each$1(node.edges, function (adjacentEdge) {
+                if (adjacentEdge.dataIndex < 0) {
+                    return;
+                }
+                fadeInItem(adjacentEdge, lineOpacityPath);
+                fadeInItem(adjacentEdge.node1, nodeOpacityPath);
+                fadeInItem(adjacentEdge.node2, nodeOpacityPath);
+            });
+        }
+        if (edge) {
+            fadeInItem(edge, lineOpacityPath);
+            fadeInItem(edge.node1, nodeOpacityPath);
+            fadeInItem(edge.node2, nodeOpacityPath);
+        }
+    },
+
+    unfocusNodeAdjacency: function (seriesModel, ecModel, api, payload) {
+        var graph = this._model.getData().graph;
+
+        graph.eachNode(function (node) {
+            fadeOutItem(node, nodeOpacityPath);
+        });
+        graph.eachEdge(function (edge) {
+            fadeOutItem(edge, lineOpacityPath);
+        });
+    },
+
+    _startForceLayoutIteration: function (forceLayout, layoutAnimation) {
+        var self = this;
+        (function step() {
+            forceLayout.step(function (stopped) {
+                self.updateLayout(self._model);
+                (self._layouting = !stopped) && (
+                    layoutAnimation
+                        ? (self._layoutTimeout = setTimeout(step, 16))
+                        : step()
+                );
+            });
+        })();
+    },
+
+    _updateController: function (seriesModel, ecModel, api) {
+        var controller = this._controller;
+        var controllerHost = this._controllerHost;
+        var group = this.group;
+
+        controller.setPointerChecker(function (e, x, y) {
+            var rect = group.getBoundingRect();
+            rect.applyTransform(group.transform);
+            return rect.contain(x, y)
+                && !onIrrelevantElement(e, api, seriesModel);
+        });
+
+        if (seriesModel.coordinateSystem.type !== 'view') {
+            controller.disable();
+            return;
+        }
+        controller.enable(seriesModel.get('roam'));
+        controllerHost.zoomLimit = seriesModel.get('scaleLimit');
+        controllerHost.zoom = seriesModel.coordinateSystem.getZoom();
+
+        controller
+            .off('pan')
+            .off('zoom')
+            .on('pan', function (e) {
+                updateViewOnPan(controllerHost, e.dx, e.dy);
+                api.dispatchAction({
+                    seriesId: seriesModel.id,
+                    type: 'graphRoam',
+                    dx: e.dx,
+                    dy: e.dy
+                });
+            })
+            .on('zoom', function (e) {
