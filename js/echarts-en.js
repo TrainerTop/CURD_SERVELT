@@ -54459,3 +54459,263 @@ function makeSeriesScope$1(lineData) {
     var hostModel = lineData.hostModel;
     return {
         lineStyle: hostModel.getModel('lineStyle').getLineStyle(),
+        hoverLineStyle: hostModel.getModel('emphasis.lineStyle').getLineStyle(),
+        labelModel: hostModel.getModel('label'),
+        hoverLabelModel: hostModel.getModel('emphasis.label')
+    };
+}
+
+lineDrawProto.remove = function () {
+    this._clearIncremental();
+    this._incremental = null;
+    this.group.removeAll();
+};
+
+lineDrawProto._clearIncremental = function () {
+    var incremental = this._incremental;
+    if (incremental) {
+        incremental.clearDisplaybles();
+    }
+};
+
+function isPointNaN(pt) {
+    return isNaN(pt[0]) || isNaN(pt[1]);
+}
+
+function lineNeedsDraw(pts) {
+    return !isPointNaN(pts[0]) && !isPointNaN(pts[1]);
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var v1 = [];
+var v2 = [];
+var v3 = [];
+var quadraticAt$1 = quadraticAt;
+var v2DistSquare = distSquare;
+var mathAbs$1 = Math.abs;
+function intersectCurveCircle(curvePoints, center, radius) {
+    var p0 = curvePoints[0];
+    var p1 = curvePoints[1];
+    var p2 = curvePoints[2];
+
+    var d = Infinity;
+    var t;
+    var radiusSquare = radius * radius;
+    var interval = 0.1;
+
+    for (var _t = 0.1; _t <= 0.9; _t += 0.1) {
+        v1[0] = quadraticAt$1(p0[0], p1[0], p2[0], _t);
+        v1[1] = quadraticAt$1(p0[1], p1[1], p2[1], _t);
+        var diff = mathAbs$1(v2DistSquare(v1, center) - radiusSquare);
+        if (diff < d) {
+            d = diff;
+            t = _t;
+        }
+    }
+
+    // Assume the segment is monotone，Find root through Bisection method
+    // At most 32 iteration
+    for (var i = 0; i < 32; i++) {
+        // var prev = t - interval;
+        var next = t + interval;
+        // v1[0] = quadraticAt(p0[0], p1[0], p2[0], prev);
+        // v1[1] = quadraticAt(p0[1], p1[1], p2[1], prev);
+        v2[0] = quadraticAt$1(p0[0], p1[0], p2[0], t);
+        v2[1] = quadraticAt$1(p0[1], p1[1], p2[1], t);
+        v3[0] = quadraticAt$1(p0[0], p1[0], p2[0], next);
+        v3[1] = quadraticAt$1(p0[1], p1[1], p2[1], next);
+
+        var diff = v2DistSquare(v2, center) - radiusSquare;
+        if (mathAbs$1(diff) < 1e-2) {
+            break;
+        }
+
+        // var prevDiff = v2DistSquare(v1, center) - radiusSquare;
+        var nextDiff = v2DistSquare(v3, center) - radiusSquare;
+
+        interval /= 2;
+        if (diff < 0) {
+            if (nextDiff >= 0) {
+                t = t + interval;
+            }
+            else {
+                t = t - interval;
+            }
+        }
+        else {
+            if (nextDiff >= 0) {
+                t = t - interval;
+            }
+            else {
+                t = t + interval;
+            }
+        }
+    }
+
+    return t;
+}
+
+// Adjust edge to avoid
+var adjustEdge = function (graph, scale$$1) {
+    var tmp0 = [];
+    var quadraticSubdivide$$1 = quadraticSubdivide;
+    var pts = [[], [], []];
+    var pts2 = [[], []];
+    var v = [];
+    scale$$1 /= 2;
+
+    function getSymbolSize(node) {
+        var symbolSize = node.getVisual('symbolSize');
+        if (symbolSize instanceof Array) {
+            symbolSize = (symbolSize[0] + symbolSize[1]) / 2;
+        }
+        return symbolSize;
+    }
+    graph.eachEdge(function (edge, idx) {
+        var linePoints = edge.getLayout();
+        var fromSymbol = edge.getVisual('fromSymbol');
+        var toSymbol = edge.getVisual('toSymbol');
+
+        if (!linePoints.__original) {
+            linePoints.__original = [
+                clone$1(linePoints[0]),
+                clone$1(linePoints[1])
+            ];
+            if (linePoints[2]) {
+                linePoints.__original.push(clone$1(linePoints[2]));
+            }
+        }
+        var originalPoints = linePoints.__original;
+        // Quadratic curve
+        if (linePoints[2] != null) {
+            copy(pts[0], originalPoints[0]);
+            copy(pts[1], originalPoints[2]);
+            copy(pts[2], originalPoints[1]);
+            if (fromSymbol && fromSymbol !== 'none') {
+                var symbolSize = getSymbolSize(edge.node1);
+
+                var t = intersectCurveCircle(pts, originalPoints[0], symbolSize * scale$$1);
+                // Subdivide and get the second
+                quadraticSubdivide$$1(pts[0][0], pts[1][0], pts[2][0], t, tmp0);
+                pts[0][0] = tmp0[3];
+                pts[1][0] = tmp0[4];
+                quadraticSubdivide$$1(pts[0][1], pts[1][1], pts[2][1], t, tmp0);
+                pts[0][1] = tmp0[3];
+                pts[1][1] = tmp0[4];
+            }
+            if (toSymbol && toSymbol !== 'none') {
+                var symbolSize = getSymbolSize(edge.node2);
+
+                var t = intersectCurveCircle(pts, originalPoints[1], symbolSize * scale$$1);
+                // Subdivide and get the first
+                quadraticSubdivide$$1(pts[0][0], pts[1][0], pts[2][0], t, tmp0);
+                pts[1][0] = tmp0[1];
+                pts[2][0] = tmp0[2];
+                quadraticSubdivide$$1(pts[0][1], pts[1][1], pts[2][1], t, tmp0);
+                pts[1][1] = tmp0[1];
+                pts[2][1] = tmp0[2];
+            }
+            // Copy back to layout
+            copy(linePoints[0], pts[0]);
+            copy(linePoints[1], pts[2]);
+            copy(linePoints[2], pts[1]);
+        }
+        // Line
+        else {
+            copy(pts2[0], originalPoints[0]);
+            copy(pts2[1], originalPoints[1]);
+
+            sub(v, pts2[1], pts2[0]);
+            normalize(v, v);
+            if (fromSymbol && fromSymbol !== 'none') {
+
+                var symbolSize = getSymbolSize(edge.node1);
+
+                scaleAndAdd(pts2[0], pts2[0], v, symbolSize * scale$$1);
+            }
+            if (toSymbol && toSymbol !== 'none') {
+                var symbolSize = getSymbolSize(edge.node2);
+
+                scaleAndAdd(pts2[1], pts2[1], v, -symbolSize * scale$$1);
+            }
+            copy(linePoints[0], pts2[0]);
+            copy(linePoints[1], pts2[1]);
+        }
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var FOCUS_ADJACENCY = '__focusNodeAdjacency';
+var UNFOCUS_ADJACENCY = '__unfocusNodeAdjacency';
+
+var nodeOpacityPath = ['itemStyle', 'opacity'];
+var lineOpacityPath = ['lineStyle', 'opacity'];
+
+function getItemOpacity(item, opacityPath) {
+    return item.getVisual('opacity') || item.getModel().get(opacityPath);
+}
+
+function fadeOutItem(item, opacityPath, opacityRatio) {
+    var el = item.getGraphicEl();
+
+    var opacity = getItemOpacity(item, opacityPath);
+    if (opacityRatio != null) {
+        opacity == null && (opacity = 1);
+        opacity *= opacityRatio;
+    }
+
+    el.downplay && el.downplay();
+    el.traverse(function (child) {
+        if (child.type !== 'group') {
+            var opct = child.lineLabelOriginalOpacity;
+            if (opct == null || opacityRatio != null) {
+                opct = opacity;
+            }
+            child.setStyle('opacity', opct);
+        }
+    });
+}
+
+function fadeInItem(item, opacityPath) {
+    var opacity = getItemOpacity(item, opacityPath);
+    var el = item.getGraphicEl();
+
+    el.highlight && el.highlight();
+    el.traverse(function (child) {
+        if (child.type !== 'group') {
