@@ -54990,3 +54990,277 @@ extendChartView({
                 });
             })
             .on('zoom', function (e) {
+                updateViewOnZoom(controllerHost, e.scale, e.originX, e.originY);
+                api.dispatchAction({
+                    seriesId: seriesModel.id,
+                    type: 'graphRoam',
+                    zoom: e.scale,
+                    originX: e.originX,
+                    originY: e.originY
+                });
+                this._updateNodeAndLinkScale();
+                adjustEdge(seriesModel.getGraph(), this._getNodeGlobalScale(seriesModel));
+                this._lineDraw.updateLayout();
+            }, this);
+    },
+
+    _updateNodeAndLinkScale: function () {
+        var seriesModel = this._model;
+        var data = seriesModel.getData();
+
+        var nodeScale = this._getNodeGlobalScale(seriesModel);
+        var invScale = [nodeScale, nodeScale];
+
+        data.eachItemGraphicEl(function (el, idx) {
+            el.attr('scale', invScale);
+        });
+    },
+
+    _getNodeGlobalScale: function (seriesModel) {
+        var coordSys = seriesModel.coordinateSystem;
+        if (coordSys.type !== 'view') {
+            return 1;
+        }
+
+        var nodeScaleRatio = this._nodeScaleRatio;
+
+        var groupScale = coordSys.scale;
+        var groupZoom = (groupScale && groupScale[0]) || 1;
+        // Scale node when zoom changes
+        var roamZoom = coordSys.getZoom();
+        var nodeScale = (roamZoom - 1) * nodeScaleRatio + 1;
+
+        return nodeScale / groupZoom;
+    },
+
+    updateLayout: function (seriesModel) {
+        adjustEdge(seriesModel.getGraph(), this._getNodeGlobalScale(seriesModel));
+
+        this._symbolDraw.updateLayout();
+        this._lineDraw.updateLayout();
+    },
+
+    remove: function (ecModel, api) {
+        this._symbolDraw && this._symbolDraw.remove();
+        this._lineDraw && this._lineDraw.remove();
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @payload
+ * @property {number} [seriesIndex]
+ * @property {string} [seriesId]
+ * @property {string} [seriesName]
+ * @property {number} [dataIndex]
+ */
+registerAction({
+    type: 'focusNodeAdjacency',
+    event: 'focusNodeAdjacency',
+    update: 'series:focusNodeAdjacency'
+}, function () {});
+
+/**
+ * @payload
+ * @property {number} [seriesIndex]
+ * @property {string} [seriesId]
+ * @property {string} [seriesName]
+ */
+registerAction({
+    type: 'unfocusNodeAdjacency',
+    event: 'unfocusNodeAdjacency',
+    update: 'series:unfocusNodeAdjacency'
+}, function () {});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var actionInfo = {
+    type: 'graphRoam',
+    event: 'graphRoam',
+    update: 'none'
+};
+
+/**
+ * @payload
+ * @property {string} name Series name
+ * @property {number} [dx]
+ * @property {number} [dy]
+ * @property {number} [zoom]
+ * @property {number} [originX]
+ * @property {number} [originY]
+ */
+registerAction(actionInfo, function (payload, ecModel) {
+    ecModel.eachComponent({mainType: 'series', query: payload}, function (seriesModel) {
+        var coordSys = seriesModel.coordinateSystem;
+
+        var res = updateCenterAndZoom(coordSys, payload);
+
+        seriesModel.setCenter
+            && seriesModel.setCenter(res.center);
+
+        seriesModel.setZoom
+            && seriesModel.setZoom(res.zoom);
+    });
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+var categoryFilter = function (ecModel) {
+    var legendModels = ecModel.findComponents({
+        mainType: 'legend'
+    });
+    if (!legendModels || !legendModels.length) {
+        return;
+    }
+    ecModel.eachSeriesByType('graph', function (graphSeries) {
+        var categoriesData = graphSeries.getCategoriesData();
+        var graph = graphSeries.getGraph();
+        var data = graph.data;
+
+        var categoryNames = categoriesData.mapArray(categoriesData.getName);
+
+        data.filterSelf(function (idx) {
+            var model = data.getItemModel(idx);
+            var category = model.getShallow('category');
+            if (category != null) {
+                if (typeof category === 'number') {
+                    category = categoryNames[category];
+                }
+                // If in any legend component the status is not selected.
+                for (var i = 0; i < legendModels.length; i++) {
+                    if (!legendModels[i].isSelected(category)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        });
+    }, this);
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+var categoryVisual = function (ecModel) {
+
+    var paletteScope = {};
+    ecModel.eachSeriesByType('graph', function (seriesModel) {
+        var categoriesData = seriesModel.getCategoriesData();
+        var data = seriesModel.getData();
+
+        var categoryNameIdxMap = {};
+
+        categoriesData.each(function (idx) {
+            var name = categoriesData.getName(idx);
+            // Add prefix to avoid conflict with Object.prototype.
+            categoryNameIdxMap['ec-' + name] = idx;
+
+            var itemModel = categoriesData.getItemModel(idx);
+            var color = itemModel.get('itemStyle.color')
+                || seriesModel.getColorFromPalette(name, paletteScope);
+            categoriesData.setItemVisual(idx, 'color', color);
+        });
+
+        // Assign category color to visual
+        if (categoriesData.count()) {
+            data.each(function (idx) {
+                var model = data.getItemModel(idx);
+                var category = model.getShallow('category');
+                if (category != null) {
+                    if (typeof category === 'string') {
+                        category = categoryNameIdxMap['ec-' + category];
+                    }
+                    if (!data.getItemVisual(idx, 'color', true)) {
+                        data.setItemVisual(
+                            idx, 'color',
+                            categoriesData.getItemVisual(category, 'color')
+                        );
+                    }
+                }
+            });
+        }
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
