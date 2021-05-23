@@ -55264,3 +55264,287 @@ var categoryVisual = function (ecModel) {
 *   http://www.apache.org/licenses/LICENSE-2.0
 *
 * Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+function normalize$1(a) {
+    if (!(a instanceof Array)) {
+        a = [a, a];
+    }
+    return a;
+}
+
+var edgeVisual = function (ecModel) {
+    ecModel.eachSeriesByType('graph', function (seriesModel) {
+        var graph = seriesModel.getGraph();
+        var edgeData = seriesModel.getEdgeData();
+        var symbolType = normalize$1(seriesModel.get('edgeSymbol'));
+        var symbolSize = normalize$1(seriesModel.get('edgeSymbolSize'));
+
+        var colorQuery = 'lineStyle.color'.split('.');
+        var opacityQuery = 'lineStyle.opacity'.split('.');
+
+        edgeData.setVisual('fromSymbol', symbolType && symbolType[0]);
+        edgeData.setVisual('toSymbol', symbolType && symbolType[1]);
+        edgeData.setVisual('fromSymbolSize', symbolSize && symbolSize[0]);
+        edgeData.setVisual('toSymbolSize', symbolSize && symbolSize[1]);
+        edgeData.setVisual('color', seriesModel.get(colorQuery));
+        edgeData.setVisual('opacity', seriesModel.get(opacityQuery));
+
+        edgeData.each(function (idx) {
+            var itemModel = edgeData.getItemModel(idx);
+            var edge = graph.getEdgeByIndex(idx);
+            var symbolType = normalize$1(itemModel.getShallow('symbol', true));
+            var symbolSize = normalize$1(itemModel.getShallow('symbolSize', true));
+            // Edge visual must after node visual
+            var color = itemModel.get(colorQuery);
+            var opacity = itemModel.get(opacityQuery);
+            switch (color) {
+                case 'source':
+                    color = edge.node1.getVisual('color');
+                    break;
+                case 'target':
+                    color = edge.node2.getVisual('color');
+                    break;
+            }
+
+            symbolType[0] && edge.setVisual('fromSymbol', symbolType[0]);
+            symbolType[1] && edge.setVisual('toSymbol', symbolType[1]);
+            symbolSize[0] && edge.setVisual('fromSymbolSize', symbolSize[0]);
+            symbolSize[1] && edge.setVisual('toSymbolSize', symbolSize[1]);
+
+            edge.setVisual('color', color);
+            edge.setVisual('opacity', opacity);
+        });
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+function simpleLayout$1(seriesModel) {
+    var coordSys = seriesModel.coordinateSystem;
+    if (coordSys && coordSys.type !== 'view') {
+        return;
+    }
+    var graph = seriesModel.getGraph();
+
+    graph.eachNode(function (node) {
+        var model = node.getModel();
+        node.setLayout([+model.get('x'), +model.get('y')]);
+    });
+
+    simpleLayoutEdge(graph);
+}
+
+function simpleLayoutEdge(graph) {
+    graph.eachEdge(function (edge) {
+        var curveness = edge.getModel().get('lineStyle.curveness') || 0;
+        var p1 = clone$1(edge.node1.getLayout());
+        var p2 = clone$1(edge.node2.getLayout());
+        var points = [p1, p2];
+        if (+curveness) {
+            points.push([
+                (p1[0] + p2[0]) / 2 - (p1[1] - p2[1]) * curveness,
+                (p1[1] + p2[1]) / 2 - (p2[0] - p1[0]) * curveness
+            ]);
+        }
+        edge.setLayout(points);
+    });
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var simpleLayout = function (ecModel, api) {
+    ecModel.eachSeriesByType('graph', function (seriesModel) {
+        var layout = seriesModel.get('layout');
+        var coordSys = seriesModel.coordinateSystem;
+        if (coordSys && coordSys.type !== 'view') {
+            var data = seriesModel.getData();
+
+            var dimensions = [];
+            each$1(coordSys.dimensions, function (coordDim) {
+                dimensions = dimensions.concat(data.mapDimension(coordDim, true));
+            });
+
+            for (var dataIndex = 0; dataIndex < data.count(); dataIndex++) {
+                var value = [];
+                var hasValue = false;
+                for (var i = 0; i < dimensions.length; i++) {
+                    var val = data.get(dimensions[i], dataIndex);
+                    if (!isNaN(val)) {
+                        hasValue = true;
+                    }
+                    value.push(val);
+                }
+                if (hasValue) {
+                    data.setItemLayout(dataIndex, coordSys.dataToPoint(value));
+                }
+                else {
+                    // Also {Array.<number>}, not undefined to avoid if...else... statement
+                    data.setItemLayout(dataIndex, [NaN, NaN]);
+                }
+            }
+
+            simpleLayoutEdge(data.graph);
+        }
+        else if (!layout || layout === 'none') {
+            simpleLayout$1(seriesModel);
+        }
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+function circularLayout$1(seriesModel) {
+    var coordSys = seriesModel.coordinateSystem;
+    if (coordSys && coordSys.type !== 'view') {
+        return;
+    }
+
+    var rect = coordSys.getBoundingRect();
+
+    var nodeData = seriesModel.getData();
+    var graph = nodeData.graph;
+
+    var angle = 0;
+    var sum = nodeData.getSum('value');
+    var unitAngle = Math.PI * 2 / (sum || nodeData.count());
+
+    var cx = rect.width / 2 + rect.x;
+    var cy = rect.height / 2 + rect.y;
+
+    var r = Math.min(rect.width, rect.height) / 2;
+
+    graph.eachNode(function (node) {
+        var value = node.getValue('value');
+
+        angle += unitAngle * (sum ? value : 1) / 2;
+
+        node.setLayout([
+            r * Math.cos(angle) + cx,
+            r * Math.sin(angle) + cy
+        ]);
+
+        angle += unitAngle * (sum ? value : 1) / 2;
+    });
+
+    nodeData.setLayout({
+        cx: cx,
+        cy: cy
+    });
+
+    graph.eachEdge(function (edge) {
+        var curveness = edge.getModel().get('lineStyle.curveness') || 0;
+        var p1 = clone$1(edge.node1.getLayout());
+        var p2 = clone$1(edge.node2.getLayout());
+        var cp1;
+        var x12 = (p1[0] + p2[0]) / 2;
+        var y12 = (p1[1] + p2[1]) / 2;
+        if (+curveness) {
+            curveness *= 3;
+            cp1 = [
+                cx * curveness + x12 * (1 - curveness),
+                cy * curveness + y12 * (1 - curveness)
+            ];
+        }
+        edge.setLayout([p1, p2, cp1]);
+    });
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var circularLayout = function (ecModel) {
+    ecModel.eachSeriesByType('graph', function (seriesModel) {
+        if (seriesModel.get('layout') === 'circular') {
+            circularLayout$1(seriesModel);
+        }
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
