@@ -55548,3 +55548,290 @@ var circularLayout = function (ecModel) {
 * Unless required by applicable law or agreed to in writing,
 * software distributed under the License is distributed on an
 * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/*
+* A third-party license is embeded for some of the code in this file:
+* Some formulas were originally copied from "d3.js" with some
+* modifications made for this project.
+* (See more details in the comment of the method "step" below.)
+* The use of the source code of this file is also subject to the terms
+* and consitions of the license of "d3.js" (BSD-3Clause, see
+* </licenses/LICENSE-d3>).
+*/
+
+var scaleAndAdd$2 = scaleAndAdd;
+
+// function adjacentNode(n, e) {
+//     return e.n1 === n ? e.n2 : e.n1;
+// }
+
+function forceLayout$1(nodes, edges, opts) {
+    var rect = opts.rect;
+    var width = rect.width;
+    var height = rect.height;
+    var center = [rect.x + width / 2, rect.y + height / 2];
+    // var scale = opts.scale || 1;
+    var gravity = opts.gravity == null ? 0.1 : opts.gravity;
+
+    // for (var i = 0; i < edges.length; i++) {
+    //     var e = edges[i];
+    //     var n1 = e.n1;
+    //     var n2 = e.n2;
+    //     n1.edges = n1.edges || [];
+    //     n2.edges = n2.edges || [];
+    //     n1.edges.push(e);
+    //     n2.edges.push(e);
+    // }
+    // Init position
+    for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (!n.p) {
+            n.p = create(
+                width * (Math.random() - 0.5) + center[0],
+                height * (Math.random() - 0.5) + center[1]
+            );
+        }
+        n.pp = clone$1(n.p);
+        n.edges = null;
+    }
+
+    // Formula in 'Graph Drawing by Force-directed Placement'
+    // var k = scale * Math.sqrt(width * height / nodes.length);
+    // var k2 = k * k;
+
+    var friction = 0.6;
+
+    return {
+        warmUp: function () {
+            friction = 0.5;
+        },
+
+        setFixed: function (idx) {
+            nodes[idx].fixed = true;
+        },
+
+        setUnfixed: function (idx) {
+            nodes[idx].fixed = false;
+        },
+
+        /**
+         * Some formulas were originally copied from "d3.js"
+         * https://github.com/d3/d3/blob/b516d77fb8566b576088e73410437494717ada26/src/layout/force.js
+         * with some modifications made for this project.
+         * See the license statement at the head of this file.
+         */
+        step: function (cb) {
+            var v12 = [];
+            var nLen = nodes.length;
+            for (var i = 0; i < edges.length; i++) {
+                var e = edges[i];
+                var n1 = e.n1;
+                var n2 = e.n2;
+
+                sub(v12, n2.p, n1.p);
+                var d = len(v12) - e.d;
+                var w = n2.w / (n1.w + n2.w);
+
+                if (isNaN(w)) {
+                    w = 0;
+                }
+
+                normalize(v12, v12);
+
+                !n1.fixed && scaleAndAdd$2(n1.p, n1.p, v12, w * d * friction);
+                !n2.fixed && scaleAndAdd$2(n2.p, n2.p, v12, -(1 - w) * d * friction);
+            }
+            // Gravity
+            for (var i = 0; i < nLen; i++) {
+                var n = nodes[i];
+                if (!n.fixed) {
+                    sub(v12, center, n.p);
+                    // var d = vec2.len(v12);
+                    // vec2.scale(v12, v12, 1 / d);
+                    // var gravityFactor = gravity;
+                    scaleAndAdd$2(n.p, n.p, v12, gravity * friction);
+                }
+            }
+
+            // Repulsive
+            // PENDING
+            for (var i = 0; i < nLen; i++) {
+                var n1 = nodes[i];
+                for (var j = i + 1; j < nLen; j++) {
+                    var n2 = nodes[j];
+                    sub(v12, n2.p, n1.p);
+                    var d = len(v12);
+                    if (d === 0) {
+                        // Random repulse
+                        set(v12, Math.random() - 0.5, Math.random() - 0.5);
+                        d = 1;
+                    }
+                    var repFact = (n1.rep + n2.rep) / d / d;
+                    !n1.fixed && scaleAndAdd$2(n1.pp, n1.pp, v12, repFact);
+                    !n2.fixed && scaleAndAdd$2(n2.pp, n2.pp, v12, -repFact);
+                }
+            }
+            var v = [];
+            for (var i = 0; i < nLen; i++) {
+                var n = nodes[i];
+                if (!n.fixed) {
+                    sub(v, n.p, n.pp);
+                    scaleAndAdd$2(n.p, n.p, v, friction);
+                    copy(n.pp, n.p);
+                }
+            }
+
+            friction = friction * 0.992;
+
+            cb && cb(nodes, edges, friction < 0.01);
+        }
+    };
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var forceLayout = function (ecModel) {
+    ecModel.eachSeriesByType('graph', function (graphSeries) {
+        var coordSys = graphSeries.coordinateSystem;
+        if (coordSys && coordSys.type !== 'view') {
+            return;
+        }
+        if (graphSeries.get('layout') === 'force') {
+            var preservedPoints = graphSeries.preservedPoints || {};
+            var graph = graphSeries.getGraph();
+            var nodeData = graph.data;
+            var edgeData = graph.edgeData;
+            var forceModel = graphSeries.getModel('force');
+            var initLayout = forceModel.get('initLayout');
+            if (graphSeries.preservedPoints) {
+                nodeData.each(function (idx) {
+                    var id = nodeData.getId(idx);
+                    nodeData.setItemLayout(idx, preservedPoints[id] || [NaN, NaN]);
+                });
+            }
+            else if (!initLayout || initLayout === 'none') {
+                simpleLayout$1(graphSeries);
+            }
+            else if (initLayout === 'circular') {
+                circularLayout$1(graphSeries);
+            }
+
+            var nodeDataExtent = nodeData.getDataExtent('value');
+            var edgeDataExtent = edgeData.getDataExtent('value');
+            // var edgeDataExtent = edgeData.getDataExtent('value');
+            var repulsion = forceModel.get('repulsion');
+            var edgeLength = forceModel.get('edgeLength');
+            if (!isArray(repulsion)) {
+                repulsion = [repulsion, repulsion];
+            }
+            if (!isArray(edgeLength)) {
+                edgeLength = [edgeLength, edgeLength];
+            }
+            // Larger value has smaller length
+            edgeLength = [edgeLength[1], edgeLength[0]];
+
+            var nodes = nodeData.mapArray('value', function (value, idx) {
+                var point = nodeData.getItemLayout(idx);
+                var rep = linearMap(value, nodeDataExtent, repulsion);
+                if (isNaN(rep)) {
+                    rep = (repulsion[0] + repulsion[1]) / 2;
+                }
+                return {
+                    w: rep,
+                    rep: rep,
+                    fixed: nodeData.getItemModel(idx).get('fixed'),
+                    p: (!point || isNaN(point[0]) || isNaN(point[1])) ? null : point
+                };
+            });
+            var edges = edgeData.mapArray('value', function (value, idx) {
+                var edge = graph.getEdgeByIndex(idx);
+                var d = linearMap(value, edgeDataExtent, edgeLength);
+                if (isNaN(d)) {
+                    d = (edgeLength[0] + edgeLength[1]) / 2;
+                }
+                return {
+                    n1: nodes[edge.node1.dataIndex],
+                    n2: nodes[edge.node2.dataIndex],
+                    d: d,
+                    curveness: edge.getModel().get('lineStyle.curveness') || 0
+                };
+            });
+
+            var coordSys = graphSeries.coordinateSystem;
+            var rect = coordSys.getBoundingRect();
+            var forceInstance = forceLayout$1(nodes, edges, {
+                rect: rect,
+                gravity: forceModel.get('gravity')
+            });
+            var oldStep = forceInstance.step;
+            forceInstance.step = function (cb) {
+                for (var i = 0, l = nodes.length; i < l; i++) {
+                    if (nodes[i].fixed) {
+                        // Write back to layout instance
+                        copy(nodes[i].p, graph.getNodeByIndex(i).getLayout());
+                    }
+                }
+                oldStep(function (nodes, edges, stopped) {
+                    for (var i = 0, l = nodes.length; i < l; i++) {
+                        if (!nodes[i].fixed) {
+                            graph.getNodeByIndex(i).setLayout(nodes[i].p);
+                        }
+                        preservedPoints[nodeData.getId(i)] = nodes[i].p;
+                    }
+                    for (var i = 0, l = edges.length; i < l; i++) {
+                        var e = edges[i];
+                        var edge = graph.getEdgeByIndex(i);
+                        var p1 = e.n1.p;
+                        var p2 = e.n2.p;
+                        var points = edge.getLayout();
+                        points = points ? points.slice() : [];
+                        points[0] = points[0] || [];
+                        points[1] = points[1] || [];
+                        copy(points[0], p1);
+                        copy(points[1], p2);
+                        if (+e.curveness) {
+                            points[2] = [
+                                (p1[0] + p2[0]) / 2 - (p1[1] - p2[1]) * e.curveness,
+                                (p1[1] + p2[1]) / 2 - (p2[0] - p1[0]) * e.curveness
+                            ];
+                        }
+                        edge.setLayout(points);
+                    }
+                    // Update layout
+
+                    cb && cb(stopped);
+                });
+            };
+            graphSeries.forceLayout = forceInstance;
+            graphSeries.preservedPoints = preservedPoints;
+
+            // Step to get the layout
+            forceInstance.step();
+        }
+        else {
+            // Remove prev injected forceLayout instance
+            graphSeries.forceLayout = null;
+        }
+    });
+};
