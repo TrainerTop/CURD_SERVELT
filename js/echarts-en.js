@@ -56382,3 +56382,273 @@ var GaugeView = Chart.extend({
                     silent: true
                 }));
             }
+
+            // Axis tick
+            if (tickModel.get('show') && i !== splitNumber) {
+                for (var j = 0; j <= subSplitNumber; j++) {
+                    var unitX = Math.cos(angle);
+                    var unitY = Math.sin(angle);
+                    var tickLine = new Line({
+                        shape: {
+                            x1: unitX * r + cx,
+                            y1: unitY * r + cy,
+                            x2: unitX * (r - tickLen) + cx,
+                            y2: unitY * (r - tickLen) + cy
+                        },
+                        silent: true,
+                        style: tickLineStyle
+                    });
+
+                    if (tickLineStyle.stroke === 'auto') {
+                        tickLine.setStyle({
+                            stroke: getColor((i + j / subSplitNumber) / splitNumber)
+                        });
+                    }
+
+                    group.add(tickLine);
+                    angle += subStep;
+                }
+                angle -= subStep;
+            }
+            else {
+                angle += step;
+            }
+        }
+    },
+
+    _renderPointer: function (
+        seriesModel, ecModel, api, getColor, posInfo,
+        startAngle, endAngle, clockwise
+    ) {
+
+        var group = this.group;
+        var oldData = this._data;
+
+        if (!seriesModel.get('pointer.show')) {
+            // Remove old element
+            oldData && oldData.eachItemGraphicEl(function (el) {
+                group.remove(el);
+            });
+            return;
+        }
+
+        var valueExtent = [+seriesModel.get('min'), +seriesModel.get('max')];
+        var angleExtent = [startAngle, endAngle];
+
+        var data = seriesModel.getData();
+        var valueDim = data.mapDimension('value');
+
+        data.diff(oldData)
+            .add(function (idx) {
+                var pointer = new PointerPath({
+                    shape: {
+                        angle: startAngle
+                    }
+                });
+
+                initProps(pointer, {
+                    shape: {
+                        angle: linearMap(data.get(valueDim, idx), valueExtent, angleExtent, true)
+                    }
+                }, seriesModel);
+
+                group.add(pointer);
+                data.setItemGraphicEl(idx, pointer);
+            })
+            .update(function (newIdx, oldIdx) {
+                var pointer = oldData.getItemGraphicEl(oldIdx);
+
+                updateProps(pointer, {
+                    shape: {
+                        angle: linearMap(data.get(valueDim, newIdx), valueExtent, angleExtent, true)
+                    }
+                }, seriesModel);
+
+                group.add(pointer);
+                data.setItemGraphicEl(newIdx, pointer);
+            })
+            .remove(function (idx) {
+                var pointer = oldData.getItemGraphicEl(idx);
+                group.remove(pointer);
+            })
+            .execute();
+
+        data.eachItemGraphicEl(function (pointer, idx) {
+            var itemModel = data.getItemModel(idx);
+            var pointerModel = itemModel.getModel('pointer');
+
+            pointer.setShape({
+                x: posInfo.cx,
+                y: posInfo.cy,
+                width: parsePercent$1(
+                    pointerModel.get('width'), posInfo.r
+                ),
+                r: parsePercent$1(pointerModel.get('length'), posInfo.r)
+            });
+
+            pointer.useStyle(itemModel.getModel('itemStyle').getItemStyle());
+
+            if (pointer.style.fill === 'auto') {
+                pointer.setStyle('fill', getColor(
+                    linearMap(data.get(valueDim, idx), valueExtent, [0, 1], true)
+                ));
+            }
+
+            setHoverStyle(
+                pointer, itemModel.getModel('emphasis.itemStyle').getItemStyle()
+            );
+        });
+
+        this._data = data;
+    },
+
+    _renderTitle: function (
+        seriesModel, ecModel, api, getColor, posInfo
+    ) {
+        var data = seriesModel.getData();
+        var valueDim = data.mapDimension('value');
+        var titleModel = seriesModel.getModel('title');
+        if (titleModel.get('show')) {
+            var offsetCenter = titleModel.get('offsetCenter');
+            var x = posInfo.cx + parsePercent$1(offsetCenter[0], posInfo.r);
+            var y = posInfo.cy + parsePercent$1(offsetCenter[1], posInfo.r);
+
+            var minVal = +seriesModel.get('min');
+            var maxVal = +seriesModel.get('max');
+            var value = seriesModel.getData().get(valueDim, 0);
+            var autoColor = getColor(
+                linearMap(value, [minVal, maxVal], [0, 1], true)
+            );
+
+            this.group.add(new Text({
+                silent: true,
+                style: setTextStyle({}, titleModel, {
+                    x: x,
+                    y: y,
+                    // FIXME First data name ?
+                    text: data.getName(0),
+                    textAlign: 'center',
+                    textVerticalAlign: 'middle'
+                }, {autoColor: autoColor, forceRich: true})
+            }));
+        }
+    },
+
+    _renderDetail: function (
+        seriesModel, ecModel, api, getColor, posInfo
+    ) {
+        var detailModel = seriesModel.getModel('detail');
+        var minVal = +seriesModel.get('min');
+        var maxVal = +seriesModel.get('max');
+        if (detailModel.get('show')) {
+            var offsetCenter = detailModel.get('offsetCenter');
+            var x = posInfo.cx + parsePercent$1(offsetCenter[0], posInfo.r);
+            var y = posInfo.cy + parsePercent$1(offsetCenter[1], posInfo.r);
+            var width = parsePercent$1(detailModel.get('width'), posInfo.r);
+            var height = parsePercent$1(detailModel.get('height'), posInfo.r);
+            var data = seriesModel.getData();
+            var value = data.get(data.mapDimension('value'), 0);
+            var autoColor = getColor(
+                linearMap(value, [minVal, maxVal], [0, 1], true)
+            );
+
+            this.group.add(new Text({
+                silent: true,
+                style: setTextStyle({}, detailModel, {
+                    x: x,
+                    y: y,
+                    text: formatLabel(
+                        // FIXME First data name ?
+                        value, detailModel.get('formatter')
+                    ),
+                    textWidth: isNaN(width) ? null : width,
+                    textHeight: isNaN(height) ? null : height,
+                    textAlign: 'center',
+                    textVerticalAlign: 'middle'
+                }, {autoColor: autoColor, forceRich: true})
+            }));
+        }
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var FunnelSeries = extendSeriesModel({
+
+    type: 'series.funnel',
+
+    init: function (option) {
+        FunnelSeries.superApply(this, 'init', arguments);
+
+        // Enable legend selection for each data item
+        // Use a function instead of direct access because data reference may changed
+        this.legendDataProvider = function () {
+            return this.getRawData();
+        };
+        // Extend labelLine emphasis
+        this._defaultLabelLine(option);
+    },
+
+    getInitialData: function (option, ecModel) {
+        return createListSimply(this, ['value']);
+    },
+
+    _defaultLabelLine: function (option) {
+        // Extend labelLine emphasis
+        defaultEmphasis(option, 'labelLine', ['show']);
+
+        var labelLineNormalOpt = option.labelLine;
+        var labelLineEmphasisOpt = option.emphasis.labelLine;
+        // Not show label line if `label.normal.show = false`
+        labelLineNormalOpt.show = labelLineNormalOpt.show
+            && option.label.show;
+        labelLineEmphasisOpt.show = labelLineEmphasisOpt.show
+            && option.emphasis.label.show;
+    },
+
+    // Overwrite
+    getDataParams: function (dataIndex) {
+        var data = this.getData();
+        var params = FunnelSeries.superCall(this, 'getDataParams', dataIndex);
+        var valueDim = data.mapDimension('value');
+        var sum = data.getSum(valueDim);
+        // Percent is 0 if sum is 0
+        params.percent = !sum ? 0 : +(data.get(valueDim, dataIndex) / sum * 100).toFixed(2);
+
+        params.$vars.push('percent');
