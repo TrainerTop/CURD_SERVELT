@@ -57429,3 +57429,264 @@ function Parallel(parallelModel, ecModel, api) {
 
     /**
      * key: dimension
+     * value: {position: [], rotation, }
+     * @type {Object.<string, Object>}
+     * @private
+     */
+    this._axesLayout = {};
+
+    /**
+     * Always follow axis order.
+     * @type {Array.<string>}
+     * @readOnly
+     */
+    this.dimensions = parallelModel.dimensions;
+
+    /**
+     * @type {module:zrender/core/BoundingRect}
+     */
+    this._rect;
+
+    /**
+     * @type {module:echarts/coord/parallel/ParallelModel}
+     */
+    this._model = parallelModel;
+
+    this._init(parallelModel, ecModel, api);
+}
+
+Parallel.prototype = {
+
+    type: 'parallel',
+
+    constructor: Parallel,
+
+    /**
+     * Initialize cartesian coordinate systems
+     * @private
+     */
+    _init: function (parallelModel, ecModel, api) {
+
+        var dimensions = parallelModel.dimensions;
+        var parallelAxisIndex = parallelModel.parallelAxisIndex;
+
+        each$11(dimensions, function (dim, idx) {
+
+            var axisIndex = parallelAxisIndex[idx];
+            var axisModel = ecModel.getComponent('parallelAxis', axisIndex);
+
+            var axis = this._axesMap.set(dim, new ParallelAxis(
+                dim,
+                createScaleByModel(axisModel),
+                [0, 0],
+                axisModel.get('type'),
+                axisIndex
+            ));
+
+            var isCategory = axis.type === 'category';
+            axis.onBand = isCategory && axisModel.get('boundaryGap');
+            axis.inverse = axisModel.get('inverse');
+
+            // Injection
+            axisModel.axis = axis;
+            axis.model = axisModel;
+            axis.coordinateSystem = axisModel.coordinateSystem = this;
+
+        }, this);
+    },
+
+    /**
+     * Update axis scale after data processed
+     * @param  {module:echarts/model/Global} ecModel
+     * @param  {module:echarts/ExtensionAPI} api
+     */
+    update: function (ecModel, api) {
+        this._updateAxesFromSeries(this._model, ecModel);
+    },
+
+    /**
+     * @override
+     */
+    containPoint: function (point) {
+        var layoutInfo = this._makeLayoutInfo();
+        var axisBase = layoutInfo.axisBase;
+        var layoutBase = layoutInfo.layoutBase;
+        var pixelDimIndex = layoutInfo.pixelDimIndex;
+        var pAxis = point[1 - pixelDimIndex];
+        var pLayout = point[pixelDimIndex];
+
+        return pAxis >= axisBase
+            && pAxis <= axisBase + layoutInfo.axisLength
+            && pLayout >= layoutBase
+            && pLayout <= layoutBase + layoutInfo.layoutLength;
+    },
+
+    getModel: function () {
+        return this._model;
+    },
+
+    /**
+     * Update properties from series
+     * @private
+     */
+    _updateAxesFromSeries: function (parallelModel, ecModel) {
+        ecModel.eachSeries(function (seriesModel) {
+
+            if (!parallelModel.contains(seriesModel, ecModel)) {
+                return;
+            }
+
+            var data = seriesModel.getData();
+
+            each$11(this.dimensions, function (dim) {
+                var axis = this._axesMap.get(dim);
+                axis.scale.unionExtentFromData(data, data.mapDimension(dim));
+                niceScaleExtent(axis.scale, axis.model);
+            }, this);
+        }, this);
+    },
+
+    /**
+     * Resize the parallel coordinate system.
+     * @param {module:echarts/coord/parallel/ParallelModel} parallelModel
+     * @param {module:echarts/ExtensionAPI} api
+     */
+    resize: function (parallelModel, api) {
+        this._rect = getLayoutRect(
+            parallelModel.getBoxLayoutParams(),
+            {
+                width: api.getWidth(),
+                height: api.getHeight()
+            }
+        );
+
+        this._layoutAxes();
+    },
+
+    /**
+     * @return {module:zrender/core/BoundingRect}
+     */
+    getRect: function () {
+        return this._rect;
+    },
+
+    /**
+     * @private
+     */
+    _makeLayoutInfo: function () {
+        var parallelModel = this._model;
+        var rect = this._rect;
+        var xy = ['x', 'y'];
+        var wh = ['width', 'height'];
+        var layout = parallelModel.get('layout');
+        var pixelDimIndex = layout === 'horizontal' ? 0 : 1;
+        var layoutLength = rect[wh[pixelDimIndex]];
+        var layoutExtent = [0, layoutLength];
+        var axisCount = this.dimensions.length;
+
+        var axisExpandWidth = restrict(parallelModel.get('axisExpandWidth'), layoutExtent);
+        var axisExpandCount = restrict(parallelModel.get('axisExpandCount') || 0, [0, axisCount]);
+        var axisExpandable = parallelModel.get('axisExpandable')
+            && axisCount > 3
+            && axisCount > axisExpandCount
+            && axisExpandCount > 1
+            && axisExpandWidth > 0
+            && layoutLength > 0;
+
+        // `axisExpandWindow` is According to the coordinates of [0, axisExpandLength],
+        // for sake of consider the case that axisCollapseWidth is 0 (when screen is narrow),
+        // where collapsed axes should be overlapped.
+        var axisExpandWindow = parallelModel.get('axisExpandWindow');
+        var winSize;
+        if (!axisExpandWindow) {
+            winSize = restrict(axisExpandWidth * (axisExpandCount - 1), layoutExtent);
+            var axisExpandCenter = parallelModel.get('axisExpandCenter') || mathFloor$2(axisCount / 2);
+            axisExpandWindow = [axisExpandWidth * axisExpandCenter - winSize / 2];
+            axisExpandWindow[1] = axisExpandWindow[0] + winSize;
+        }
+        else {
+                winSize = restrict(axisExpandWindow[1] - axisExpandWindow[0], layoutExtent);
+                axisExpandWindow[1] = axisExpandWindow[0] + winSize;
+        }
+
+        var axisCollapseWidth = (layoutLength - winSize) / (axisCount - axisExpandCount);
+        // Avoid axisCollapseWidth is too small.
+        axisCollapseWidth < 3 && (axisCollapseWidth = 0);
+
+        // Find the first and last indices > ewin[0] and < ewin[1].
+        var winInnerIndices = [
+            mathFloor$2(round$3(axisExpandWindow[0] / axisExpandWidth, 1)) + 1,
+            mathCeil$2(round$3(axisExpandWindow[1] / axisExpandWidth, 1)) - 1
+        ];
+
+        // Pos in ec coordinates.
+        var axisExpandWindow0Pos = axisCollapseWidth / axisExpandWidth * axisExpandWindow[0];
+
+        return {
+            layout: layout,
+            pixelDimIndex: pixelDimIndex,
+            layoutBase: rect[xy[pixelDimIndex]],
+            layoutLength: layoutLength,
+            axisBase: rect[xy[1 - pixelDimIndex]],
+            axisLength: rect[wh[1 - pixelDimIndex]],
+            axisExpandable: axisExpandable,
+            axisExpandWidth: axisExpandWidth,
+            axisCollapseWidth: axisCollapseWidth,
+            axisExpandWindow: axisExpandWindow,
+            axisCount: axisCount,
+            winInnerIndices: winInnerIndices,
+            axisExpandWindow0Pos: axisExpandWindow0Pos
+        };
+    },
+
+    /**
+     * @private
+     */
+    _layoutAxes: function () {
+        var rect = this._rect;
+        var axes = this._axesMap;
+        var dimensions = this.dimensions;
+        var layoutInfo = this._makeLayoutInfo();
+        var layout = layoutInfo.layout;
+
+        axes.each(function (axis) {
+            var axisExtent = [0, layoutInfo.axisLength];
+            var idx = axis.inverse ? 1 : 0;
+            axis.setExtent(axisExtent[idx], axisExtent[1 - idx]);
+        });
+
+        each$11(dimensions, function (dim, idx) {
+            var posInfo = (layoutInfo.axisExpandable
+                ? layoutAxisWithExpand : layoutAxisWithoutExpand
+            )(idx, layoutInfo);
+
+            var positionTable = {
+                horizontal: {
+                    x: posInfo.position,
+                    y: layoutInfo.axisLength
+                },
+                vertical: {
+                    x: 0,
+                    y: posInfo.position
+                }
+            };
+            var rotationTable = {
+                horizontal: PI$3 / 2,
+                vertical: 0
+            };
+
+            var position = [
+                positionTable[layout].x + rect.x,
+                positionTable[layout].y + rect.y
+            ];
+
+            var rotation = rotationTable[layout];
+            var transform = create$1();
+            rotate(transform, transform, rotation);
+            translate(transform, transform, position);
+
+            // TODO
+            // tick等排布信息。
+
+            // TODO
+            // 根据axis order 更新 dimensions顺序。
