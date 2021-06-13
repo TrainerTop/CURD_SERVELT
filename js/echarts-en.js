@@ -57969,3 +57969,250 @@ function create$2(ecModel, api) {
                 id: seriesModel.get('parallelId')
             })[0];
             seriesModel.coordinateSystem = parallelModel.coordinateSystem;
+        }
+    });
+
+    return coordSysList;
+}
+
+CoordinateSystemManager.register('parallel', {create: create$2});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var AxisModel$2 = ComponentModel.extend({
+
+    type: 'baseParallelAxis',
+
+    /**
+     * @type {module:echarts/coord/parallel/Axis}
+     */
+    axis: null,
+
+    /**
+     * @type {Array.<Array.<number>}
+     * @readOnly
+     */
+    activeIntervals: [],
+
+    /**
+     * @return {Object}
+     */
+    getAreaSelectStyle: function () {
+        return makeStyleMapper(
+            [
+                ['fill', 'color'],
+                ['lineWidth', 'borderWidth'],
+                ['stroke', 'borderColor'],
+                ['width', 'width'],
+                ['opacity', 'opacity']
+            ]
+        )(this.getModel('areaSelectStyle'));
+    },
+
+    /**
+     * The code of this feature is put on AxisModel but not ParallelAxis,
+     * because axisModel can be alive after echarts updating but instance of
+     * ParallelAxis having been disposed. this._activeInterval should be kept
+     * when action dispatched (i.e. legend click).
+     *
+     * @param {Array.<Array<number>>} intervals interval.length === 0
+     *                                          means set all active.
+     * @public
+     */
+    setActiveIntervals: function (intervals) {
+        var activeIntervals = this.activeIntervals = clone(intervals);
+
+        // Normalize
+        if (activeIntervals) {
+            for (var i = activeIntervals.length - 1; i >= 0; i--) {
+                asc(activeIntervals[i]);
+            }
+        }
+    },
+
+    /**
+     * @param {number|string} [value] When attempting to detect 'no activeIntervals set',
+     *                         value can not be input.
+     * @return {string} 'normal': no activeIntervals set,
+     *                  'active',
+     *                  'inactive'.
+     * @public
+     */
+    getActiveState: function (value) {
+        var activeIntervals = this.activeIntervals;
+
+        if (!activeIntervals.length) {
+            return 'normal';
+        }
+
+        if (value == null || isNaN(value)) {
+            return 'inactive';
+        }
+
+        // Simple optimization
+        if (activeIntervals.length === 1) {
+            var interval = activeIntervals[0];
+            if (interval[0] <= value && value <= interval[1]) {
+                return 'active';
+            }
+        }
+        else {
+            for (var i = 0, len = activeIntervals.length; i < len; i++) {
+                if (activeIntervals[i][0] <= value && value <= activeIntervals[i][1]) {
+                    return 'active';
+                }
+            }
+        }
+
+        return 'inactive';
+    }
+
+});
+
+var defaultOption$1 = {
+
+    type: 'value',
+
+    /**
+     * @type {Array.<number>}
+     */
+    dim: null, // 0, 1, 2, ...
+
+    // parallelIndex: null,
+
+    areaSelectStyle: {
+        width: 20,
+        borderWidth: 1,
+        borderColor: 'rgba(160,197,232)',
+        color: 'rgba(160,197,232)',
+        opacity: 0.3
+    },
+
+    realtime: true, // Whether realtime update view when select.
+
+    z: 10
+};
+
+merge(AxisModel$2.prototype, axisModelCommonMixin);
+
+function getAxisType$1(axisName, option) {
+    return option.type || (option.data ? 'category' : 'value');
+}
+
+axisModelCreator('parallel', AxisModel$2, getAxisType$1, defaultOption$1);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+ComponentModel.extend({
+
+    type: 'parallel',
+
+    dependencies: ['parallelAxis'],
+
+    /**
+     * @type {module:echarts/coord/parallel/Parallel}
+     */
+    coordinateSystem: null,
+
+    /**
+     * Each item like: 'dim0', 'dim1', 'dim2', ...
+     * @type {Array.<string>}
+     * @readOnly
+     */
+    dimensions: null,
+
+    /**
+     * Coresponding to dimensions.
+     * @type {Array.<number>}
+     * @readOnly
+     */
+    parallelAxisIndex: null,
+
+    layoutMode: 'box',
+
+    defaultOption: {
+        zlevel: 0,
+        z: 0,
+        left: 80,
+        top: 60,
+        right: 80,
+        bottom: 60,
+        // width: {totalWidth} - left - right,
+        // height: {totalHeight} - top - bottom,
+
+        layout: 'horizontal',      // 'horizontal' or 'vertical'
+
+        // FIXME
+        // naming?
+        axisExpandable: false,
+        axisExpandCenter: null,
+        axisExpandCount: 0,
+        axisExpandWidth: 50,      // FIXME '10%' ?
+        axisExpandRate: 17,
+        axisExpandDebounce: 50,
+        // [out, in, jumpTarget]. In percentage. If use [null, 0.05], null means full.
+        // Do not doc to user until necessary.
+        axisExpandSlideTriggerArea: [-0.15, 0.05, 0.4],
+        axisExpandTriggerOn: 'click', // 'mousemove' or 'click'
+
+        parallelAxisDefault: null
+    },
+
+    /**
+     * @override
+     */
+    init: function () {
+        ComponentModel.prototype.init.apply(this, arguments);
+
+        this.mergeOption({});
+    },
+
+    /**
+     * @override
+     */
+    mergeOption: function (newOption) {
+        var thisOption = this.option;
+
+        newOption && merge(thisOption, newOption, true);
+
+        this._initDimensions();
+    },
+
+    /**
+     * Whether series or axis is in this coordinate system.
+     * @param {module:echarts/model/Series|module:echarts/coord/parallel/AxisModel} model
+     * @param {module:echarts/model/Global} ecModel
