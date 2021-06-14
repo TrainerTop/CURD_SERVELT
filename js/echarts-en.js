@@ -58491,3 +58491,280 @@ function BrushController(zr) {
 BrushController.prototype = {
 
     constructor: BrushController,
+
+    /**
+     * If set to null/undefined/false, select disabled.
+     * @param {Object} brushOption
+     * @param {string|boolean} brushOption.brushType 'line', 'rect', 'polygon' or false
+     *                          If passing false/null/undefined, disable brush.
+     *                          If passing 'auto', determined by panel.defaultBrushType.
+     *                              ('auto' can not be used in global panel)
+     * @param {number} [brushOption.brushMode='single'] 'single' or 'multiple'
+     * @param {boolean} [brushOption.transformable=true]
+     * @param {boolean} [brushOption.removeOnClick=false]
+     * @param {Object} [brushOption.brushStyle]
+     * @param {number} [brushOption.brushStyle.width]
+     * @param {number} [brushOption.brushStyle.lineWidth]
+     * @param {string} [brushOption.brushStyle.stroke]
+     * @param {string} [brushOption.brushStyle.fill]
+     * @param {number} [brushOption.z]
+     */
+    enableBrush: function (brushOption) {
+        if (__DEV__) {
+            assert$1(this._mounted);
+        }
+
+        this._brushType && doDisableBrush(this);
+        brushOption.brushType && doEnableBrush(this, brushOption);
+
+        return this;
+    },
+
+    /**
+     * @param {Array.<Object>} panelOpts If not pass, it is global brush.
+     *        Each items: {
+     *            panelId, // mandatory.
+     *            clipPath, // mandatory. function.
+     *            isTargetByCursor, // mandatory. function.
+     *            defaultBrushType, // optional, only used when brushType is 'auto'.
+     *            getLinearBrushOtherExtent, // optional. function.
+     *        }
+     */
+    setPanels: function (panelOpts) {
+        if (panelOpts && panelOpts.length) {
+            var panels = this._panels = {};
+            each$1(panelOpts, function (panelOpts) {
+                panels[panelOpts.panelId] = clone(panelOpts);
+            });
+        }
+        else {
+            this._panels = null;
+        }
+        return this;
+    },
+
+    /**
+     * @param {Object} [opt]
+     * @return {boolean} [opt.enableGlobalPan=false]
+     */
+    mount: function (opt) {
+        opt = opt || {};
+
+        if (__DEV__) {
+            this._mounted = true; // should be at first.
+        }
+
+        this._enableGlobalPan = opt.enableGlobalPan;
+
+        var thisGroup = this.group;
+        this._zr.add(thisGroup);
+
+        thisGroup.attr({
+            position: opt.position || [0, 0],
+            rotation: opt.rotation || 0,
+            scale: opt.scale || [1, 1]
+        });
+        this._transform = thisGroup.getLocalTransform();
+
+        return this;
+    },
+
+    eachCover: function (cb, context) {
+        each$12(this._covers, cb, context);
+    },
+
+    /**
+     * Update covers.
+     * @param {Array.<Object>} brushOptionList Like:
+     *        [
+     *            {id: 'xx', brushType: 'line', range: [23, 44], brushStyle, transformable},
+     *            {id: 'yy', brushType: 'rect', range: [[23, 44], [23, 54]]},
+     *            ...
+     *        ]
+     *        `brushType` is required in each cover info. (can not be 'auto')
+     *        `id` is not mandatory.
+     *        `brushStyle`, `transformable` is not mandatory, use DEFAULT_BRUSH_OPT by default.
+     *        If brushOptionList is null/undefined, all covers removed.
+     */
+    updateCovers: function (brushOptionList) {
+        if (__DEV__) {
+            assert$1(this._mounted);
+        }
+
+        brushOptionList = map(brushOptionList, function (brushOption) {
+            return merge(clone(DEFAULT_BRUSH_OPT), brushOption, true);
+        });
+
+        var tmpIdPrefix = '\0-brush-index-';
+        var oldCovers = this._covers;
+        var newCovers = this._covers = [];
+        var controller = this;
+        var creatingCover = this._creatingCover;
+
+        (new DataDiffer(oldCovers, brushOptionList, oldGetKey, getKey))
+            .add(addOrUpdate)
+            .update(addOrUpdate)
+            .remove(remove)
+            .execute();
+
+        return this;
+
+        function getKey(brushOption, index) {
+            return (brushOption.id != null ? brushOption.id : tmpIdPrefix + index)
+                + '-' + brushOption.brushType;
+        }
+
+        function oldGetKey(cover, index) {
+            return getKey(cover.__brushOption, index);
+        }
+
+        function addOrUpdate(newIndex, oldIndex) {
+            var newBrushOption = brushOptionList[newIndex];
+            // Consider setOption in event listener of brushSelect,
+            // where updating cover when creating should be forbiden.
+            if (oldIndex != null && oldCovers[oldIndex] === creatingCover) {
+                newCovers[newIndex] = oldCovers[oldIndex];
+            }
+            else {
+                var cover = newCovers[newIndex] = oldIndex != null
+                    ? (
+                        oldCovers[oldIndex].__brushOption = newBrushOption,
+                        oldCovers[oldIndex]
+                    )
+                    : endCreating(controller, createCover(controller, newBrushOption));
+                updateCoverAfterCreation(controller, cover);
+            }
+        }
+
+        function remove(oldIndex) {
+            if (oldCovers[oldIndex] !== creatingCover) {
+                controller.group.remove(oldCovers[oldIndex]);
+            }
+        }
+    },
+
+    unmount: function () {
+        if (__DEV__) {
+            if (!this._mounted) {
+                return;
+            }
+        }
+
+        this.enableBrush(false);
+
+        // container may 'removeAll' outside.
+        clearCovers(this);
+        this._zr.remove(this.group);
+
+        if (__DEV__) {
+            this._mounted = false; // should be at last.
+        }
+
+        return this;
+    },
+
+    dispose: function () {
+        this.unmount();
+        this.off();
+    }
+};
+
+mixin(BrushController, Eventful);
+
+function doEnableBrush(controller, brushOption) {
+    var zr = controller._zr;
+
+    // Consider roam, which takes globalPan too.
+    if (!controller._enableGlobalPan) {
+        take(zr, MUTEX_RESOURCE_KEY, controller._uid);
+    }
+
+    each$12(controller._handlers, function (handler, eventName) {
+        zr.on(eventName, handler);
+    });
+
+    controller._brushType = brushOption.brushType;
+    controller._brushOption = merge(clone(DEFAULT_BRUSH_OPT), brushOption, true);
+}
+
+function doDisableBrush(controller) {
+    var zr = controller._zr;
+
+    release(zr, MUTEX_RESOURCE_KEY, controller._uid);
+
+    each$12(controller._handlers, function (handler, eventName) {
+        zr.off(eventName, handler);
+    });
+
+    controller._brushType = controller._brushOption = null;
+}
+
+function createCover(controller, brushOption) {
+    var cover = coverRenderers[brushOption.brushType].createCover(controller, brushOption);
+    cover.__brushOption = brushOption;
+    updateZ$1(cover, brushOption);
+    controller.group.add(cover);
+    return cover;
+}
+
+function endCreating(controller, creatingCover) {
+    var coverRenderer = getCoverRenderer(creatingCover);
+    if (coverRenderer.endCreating) {
+        coverRenderer.endCreating(controller, creatingCover);
+        updateZ$1(creatingCover, creatingCover.__brushOption);
+    }
+    return creatingCover;
+}
+
+function updateCoverShape(controller, cover) {
+    var brushOption = cover.__brushOption;
+    getCoverRenderer(cover).updateCoverShape(
+        controller, cover, brushOption.range, brushOption
+    );
+}
+
+function updateZ$1(cover, brushOption) {
+    var z = brushOption.z;
+    z == null && (z = COVER_Z);
+    cover.traverse(function (el) {
+        el.z = z;
+        el.z2 = z; // Consider in given container.
+    });
+}
+
+function updateCoverAfterCreation(controller, cover) {
+    getCoverRenderer(cover).updateCommon(controller, cover);
+    updateCoverShape(controller, cover);
+}
+
+function getCoverRenderer(cover) {
+    return coverRenderers[cover.__brushOption.brushType];
+}
+
+// return target panel or `true` (means global panel)
+function getPanelByPoint(controller, e, localCursorPoint) {
+    var panels = controller._panels;
+    if (!panels) {
+        return true; // Global panel
+    }
+    var panel;
+    var transform = controller._transform;
+    each$12(panels, function (pn) {
+        pn.isTargetByCursor(e, localCursorPoint, transform) && (panel = pn);
+    });
+    return panel;
+}
+
+// Return a panel or true
+function getPanelByCover(controller, cover) {
+    var panels = controller._panels;
+    if (!panels) {
+        return true; // Global panel
+    }
+    var panelId = cover.__brushOption.panelId;
+    // User may give cover without coord sys info,
+    // which is then treated as global panel.
+    return panelId != null ? panels[panelId] : true;
+}
+
+function clearCovers(controller) {
