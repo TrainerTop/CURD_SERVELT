@@ -58216,3 +58216,278 @@ ComponentModel.extend({
      * Whether series or axis is in this coordinate system.
      * @param {module:echarts/model/Series|module:echarts/coord/parallel/AxisModel} model
      * @param {module:echarts/model/Global} ecModel
+     */
+    contains: function (model, ecModel) {
+        var parallelIndex = model.get('parallelIndex');
+        return parallelIndex != null
+            && ecModel.getComponent('parallel', parallelIndex) === this;
+    },
+
+    setAxisExpand: function (opt) {
+        each$1(
+            ['axisExpandable', 'axisExpandCenter', 'axisExpandCount', 'axisExpandWidth', 'axisExpandWindow'],
+            function (name) {
+                if (opt.hasOwnProperty(name)) {
+                    this.option[name] = opt[name];
+                }
+            },
+            this
+        );
+    },
+
+    /**
+     * @private
+     */
+    _initDimensions: function () {
+        var dimensions = this.dimensions = [];
+        var parallelAxisIndex = this.parallelAxisIndex = [];
+
+        var axisModels = filter(this.dependentModels.parallelAxis, function (axisModel) {
+            // Can not use this.contains here, because
+            // initialization has not been completed yet.
+            return (axisModel.get('parallelIndex') || 0) === this.componentIndex;
+        }, this);
+
+        each$1(axisModels, function (axisModel) {
+            dimensions.push('dim' + axisModel.get('dim'));
+            parallelAxisIndex.push(axisModel.componentIndex);
+        });
+    }
+
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @payload
+ * @property {string} parallelAxisId
+ * @property {Array.<Array.<number>>} intervals
+ */
+var actionInfo$1 = {
+    type: 'axisAreaSelect',
+    event: 'axisAreaSelected'
+    // update: 'updateVisual'
+};
+
+registerAction(actionInfo$1, function (payload, ecModel) {
+    ecModel.eachComponent(
+        {mainType: 'parallelAxis', query: payload},
+        function (parallelAxisModel) {
+            parallelAxisModel.axis.model.setActiveIntervals(payload.intervals);
+        }
+    );
+});
+
+/**
+ * @payload
+ */
+registerAction('parallelAxisExpand', function (payload, ecModel) {
+    ecModel.eachComponent(
+        {mainType: 'parallel', query: payload},
+        function (parallelModel) {
+            parallelModel.setAxisExpand(payload);
+        }
+    );
+
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var curry$2 = curry;
+var each$12 = each$1;
+var map$2 = map;
+var mathMin$6 = Math.min;
+var mathMax$6 = Math.max;
+var mathPow$2 = Math.pow;
+
+var COVER_Z = 10000;
+var UNSELECT_THRESHOLD = 6;
+var MIN_RESIZE_LINE_WIDTH = 6;
+var MUTEX_RESOURCE_KEY = 'globalPan';
+
+var DIRECTION_MAP = {
+    w: [0, 0],
+    e: [0, 1],
+    n: [1, 0],
+    s: [1, 1]
+};
+var CURSOR_MAP = {
+    w: 'ew',
+    e: 'ew',
+    n: 'ns',
+    s: 'ns',
+    ne: 'nesw',
+    sw: 'nesw',
+    nw: 'nwse',
+    se: 'nwse'
+};
+var DEFAULT_BRUSH_OPT = {
+    brushStyle: {
+        lineWidth: 2,
+        stroke: 'rgba(0,0,0,0.3)',
+        fill: 'rgba(0,0,0,0.1)'
+    },
+    transformable: true,
+    brushMode: 'single',
+    removeOnClick: false
+};
+
+var baseUID = 0;
+
+/**
+ * @alias module:echarts/component/helper/BrushController
+ * @constructor
+ * @mixin {module:zrender/mixin/Eventful}
+ * @event module:echarts/component/helper/BrushController#brush
+ *        params:
+ *            areas: Array.<Array>, coord relates to container group,
+ *                                    If no container specified, to global.
+ *            opt {
+ *                isEnd: boolean,
+ *                removeOnClick: boolean
+ *            }
+ *
+ * @param {module:zrender/zrender~ZRender} zr
+ */
+function BrushController(zr) {
+
+    if (__DEV__) {
+        assert$1(zr);
+    }
+
+    Eventful.call(this);
+
+    /**
+     * @type {module:zrender/zrender~ZRender}
+     * @private
+     */
+    this._zr = zr;
+
+    /**
+     * @type {module:zrender/container/Group}
+     * @readOnly
+     */
+    this.group = new Group();
+
+    /**
+     * Only for drawing (after enabledBrush).
+     *     'line', 'rect', 'polygon' or false
+     *     If passing false/null/undefined, disable brush.
+     *     If passing 'auto', determined by panel.defaultBrushType
+     * @private
+     * @type {string}
+     */
+    this._brushType;
+
+    /**
+     * Only for drawing (after enabledBrush).
+     *
+     * @private
+     * @type {Object}
+     */
+    this._brushOption;
+
+    /**
+     * @private
+     * @type {Object}
+     */
+    this._panels;
+
+    /**
+     * @private
+     * @type {Array.<nubmer>}
+     */
+    this._track = [];
+
+    /**
+     * @private
+     * @type {boolean}
+     */
+    this._dragging;
+
+    /**
+     * @private
+     * @type {Array}
+     */
+    this._covers = [];
+
+    /**
+     * @private
+     * @type {moudule:zrender/container/Group}
+     */
+    this._creatingCover;
+
+    /**
+     * `true` means global panel
+     * @private
+     * @type {module:zrender/container/Group|boolean}
+     */
+    this._creatingPanel;
+
+    /**
+     * @private
+     * @type {boolean}
+     */
+    this._enableGlobalPan;
+
+    /**
+     * @private
+     * @type {boolean}
+     */
+    if (__DEV__) {
+        this._mounted;
+    }
+
+    /**
+     * @private
+     * @type {string}
+     */
+    this._uid = 'brushController_' + baseUID++;
+
+    /**
+     * @private
+     * @type {Object}
+     */
+    this._handlers = {};
+    each$12(mouseHandlers, function (handler, eventName) {
+        this._handlers[eventName] = bind(handler, this);
+    }, this);
+}
+
+BrushController.prototype = {
+
+    constructor: BrushController,
