@@ -58768,3 +58768,260 @@ function getPanelByCover(controller, cover) {
 }
 
 function clearCovers(controller) {
+    var covers = controller._covers;
+    var originalLength = covers.length;
+    each$12(covers, function (cover) {
+        controller.group.remove(cover);
+    }, controller);
+    covers.length = 0;
+
+    return !!originalLength;
+}
+
+function trigger$1(controller, opt) {
+    var areas = map$2(controller._covers, function (cover) {
+        var brushOption = cover.__brushOption;
+        var range = clone(brushOption.range);
+        return {
+            brushType: brushOption.brushType,
+            panelId: brushOption.panelId,
+            range: range
+        };
+    });
+
+    controller.trigger('brush', areas, {
+        isEnd: !!opt.isEnd,
+        removeOnClick: !!opt.removeOnClick
+    });
+}
+
+function shouldShowCover(controller) {
+    var track = controller._track;
+
+    if (!track.length) {
+        return false;
+    }
+
+    var p2 = track[track.length - 1];
+    var p1 = track[0];
+    var dx = p2[0] - p1[0];
+    var dy = p2[1] - p1[1];
+    var dist = mathPow$2(dx * dx + dy * dy, 0.5);
+
+    return dist > UNSELECT_THRESHOLD;
+}
+
+function getTrackEnds(track) {
+    var tail = track.length - 1;
+    tail < 0 && (tail = 0);
+    return [track[0], track[tail]];
+}
+
+function createBaseRectCover(doDrift, controller, brushOption, edgeNames) {
+    var cover = new Group();
+
+    cover.add(new Rect({
+        name: 'main',
+        style: makeStyle(brushOption),
+        silent: true,
+        draggable: true,
+        cursor: 'move',
+        drift: curry$2(doDrift, controller, cover, 'nswe'),
+        ondragend: curry$2(trigger$1, controller, {isEnd: true})
+    }));
+
+    each$12(
+        edgeNames,
+        function (name) {
+            cover.add(new Rect({
+                name: name,
+                style: {opacity: 0},
+                draggable: true,
+                silent: true,
+                invisible: true,
+                drift: curry$2(doDrift, controller, cover, name),
+                ondragend: curry$2(trigger$1, controller, {isEnd: true})
+            }));
+        }
+    );
+
+    return cover;
+}
+
+function updateBaseRect(controller, cover, localRange, brushOption) {
+    var lineWidth = brushOption.brushStyle.lineWidth || 0;
+    var handleSize = mathMax$6(lineWidth, MIN_RESIZE_LINE_WIDTH);
+    var x = localRange[0][0];
+    var y = localRange[1][0];
+    var xa = x - lineWidth / 2;
+    var ya = y - lineWidth / 2;
+    var x2 = localRange[0][1];
+    var y2 = localRange[1][1];
+    var x2a = x2 - handleSize + lineWidth / 2;
+    var y2a = y2 - handleSize + lineWidth / 2;
+    var width = x2 - x;
+    var height = y2 - y;
+    var widtha = width + lineWidth;
+    var heighta = height + lineWidth;
+
+    updateRectShape(controller, cover, 'main', x, y, width, height);
+
+    if (brushOption.transformable) {
+        updateRectShape(controller, cover, 'w', xa, ya, handleSize, heighta);
+        updateRectShape(controller, cover, 'e', x2a, ya, handleSize, heighta);
+        updateRectShape(controller, cover, 'n', xa, ya, widtha, handleSize);
+        updateRectShape(controller, cover, 's', xa, y2a, widtha, handleSize);
+
+        updateRectShape(controller, cover, 'nw', xa, ya, handleSize, handleSize);
+        updateRectShape(controller, cover, 'ne', x2a, ya, handleSize, handleSize);
+        updateRectShape(controller, cover, 'sw', xa, y2a, handleSize, handleSize);
+        updateRectShape(controller, cover, 'se', x2a, y2a, handleSize, handleSize);
+    }
+}
+
+function updateCommon(controller, cover) {
+    var brushOption = cover.__brushOption;
+    var transformable = brushOption.transformable;
+
+    var mainEl = cover.childAt(0);
+    mainEl.useStyle(makeStyle(brushOption));
+    mainEl.attr({
+        silent: !transformable,
+        cursor: transformable ? 'move' : 'default'
+    });
+
+    each$12(
+        ['w', 'e', 'n', 's', 'se', 'sw', 'ne', 'nw'],
+        function (name) {
+            var el = cover.childOfName(name);
+            var globalDir = getGlobalDirection(controller, name);
+
+            el && el.attr({
+                silent: !transformable,
+                invisible: !transformable,
+                cursor: transformable ? CURSOR_MAP[globalDir] + '-resize' : null
+            });
+        }
+    );
+}
+
+function updateRectShape(controller, cover, name, x, y, w, h) {
+    var el = cover.childOfName(name);
+    el && el.setShape(pointsToRect(
+        clipByPanel(controller, cover, [[x, y], [x + w, y + h]])
+    ));
+}
+
+function makeStyle(brushOption) {
+    return defaults({strokeNoScale: true}, brushOption.brushStyle);
+}
+
+function formatRectRange(x, y, x2, y2) {
+    var min = [mathMin$6(x, x2), mathMin$6(y, y2)];
+    var max = [mathMax$6(x, x2), mathMax$6(y, y2)];
+
+    return [
+        [min[0], max[0]], // x range
+        [min[1], max[1]] // y range
+    ];
+}
+
+function getTransform$1(controller) {
+    return getTransform(controller.group);
+}
+
+function getGlobalDirection(controller, localDirection) {
+    if (localDirection.length > 1) {
+        localDirection = localDirection.split('');
+        var globalDir = [
+            getGlobalDirection(controller, localDirection[0]),
+            getGlobalDirection(controller, localDirection[1])
+        ];
+        (globalDir[0] === 'e' || globalDir[0] === 'w') && globalDir.reverse();
+        return globalDir.join('');
+    }
+    else {
+        var map$$1 = {w: 'left', e: 'right', n: 'top', s: 'bottom'};
+        var inverseMap = {left: 'w', right: 'e', top: 'n', bottom: 's'};
+        var globalDir = transformDirection(
+            map$$1[localDirection], getTransform$1(controller)
+        );
+        return inverseMap[globalDir];
+    }
+}
+
+function driftRect(toRectRange, fromRectRange, controller, cover, name, dx, dy, e) {
+    var brushOption = cover.__brushOption;
+    var rectRange = toRectRange(brushOption.range);
+    var localDelta = toLocalDelta(controller, dx, dy);
+
+    each$12(name.split(''), function (namePart) {
+        var ind = DIRECTION_MAP[namePart];
+        rectRange[ind[0]][ind[1]] += localDelta[ind[0]];
+    });
+
+    brushOption.range = fromRectRange(formatRectRange(
+        rectRange[0][0], rectRange[1][0], rectRange[0][1], rectRange[1][1]
+    ));
+
+    updateCoverAfterCreation(controller, cover);
+    trigger$1(controller, {isEnd: false});
+}
+
+function driftPolygon(controller, cover, dx, dy, e) {
+    var range = cover.__brushOption.range;
+    var localDelta = toLocalDelta(controller, dx, dy);
+
+    each$12(range, function (point) {
+        point[0] += localDelta[0];
+        point[1] += localDelta[1];
+    });
+
+    updateCoverAfterCreation(controller, cover);
+    trigger$1(controller, {isEnd: false});
+}
+
+function toLocalDelta(controller, dx, dy) {
+    var thisGroup = controller.group;
+    var localD = thisGroup.transformCoordToLocal(dx, dy);
+    var localZero = thisGroup.transformCoordToLocal(0, 0);
+
+    return [localD[0] - localZero[0], localD[1] - localZero[1]];
+}
+
+function clipByPanel(controller, cover, data) {
+    var panel = getPanelByCover(controller, cover);
+
+    return (panel && panel !== true)
+        ? panel.clipPath(data, controller._transform)
+        : clone(data);
+}
+
+function pointsToRect(points) {
+    var xmin = mathMin$6(points[0][0], points[1][0]);
+    var ymin = mathMin$6(points[0][1], points[1][1]);
+    var xmax = mathMax$6(points[0][0], points[1][0]);
+    var ymax = mathMax$6(points[0][1], points[1][1]);
+
+    return {
+        x: xmin,
+        y: ymin,
+        width: xmax - xmin,
+        height: ymax - ymin
+    };
+}
+
+function resetCursor(controller, e, localCursorPoint) {
+    // Check active
+    if (!controller._brushType) {
+        return;
+    }
+
+    var zr = controller._zr;
+    var covers = controller._covers;
+    var currPanel = getPanelByPoint(controller, e, localCursorPoint);
+
+    // Check whether in covers.
+    if (!controller._dragging) {
+        for (var i = 0; i < covers.length; i++) {
+            var brushOption = covers[i].__brushOption;
