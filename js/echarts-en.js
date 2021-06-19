@@ -59025,3 +59025,251 @@ function resetCursor(controller, e, localCursorPoint) {
     if (!controller._dragging) {
         for (var i = 0; i < covers.length; i++) {
             var brushOption = covers[i].__brushOption;
+            if (currPanel
+                && (currPanel === true || brushOption.panelId === currPanel.panelId)
+                && coverRenderers[brushOption.brushType].contain(
+                    covers[i], localCursorPoint[0], localCursorPoint[1]
+                )
+            ) {
+                // Use cursor style set on cover.
+                return;
+            }
+        }
+    }
+
+    currPanel && zr.setCursorStyle('crosshair');
+}
+
+function preventDefault(e) {
+    var rawE = e.event;
+    rawE.preventDefault && rawE.preventDefault();
+}
+
+function mainShapeContain(cover, x, y) {
+    return cover.childOfName('main').contain(x, y);
+}
+
+function updateCoverByMouse(controller, e, localCursorPoint, isEnd) {
+    var creatingCover = controller._creatingCover;
+    var panel = controller._creatingPanel;
+    var thisBrushOption = controller._brushOption;
+    var eventParams;
+
+    controller._track.push(localCursorPoint.slice());
+
+    if (shouldShowCover(controller) || creatingCover) {
+
+        if (panel && !creatingCover) {
+            thisBrushOption.brushMode === 'single' && clearCovers(controller);
+            var brushOption = clone(thisBrushOption);
+            brushOption.brushType = determineBrushType(brushOption.brushType, panel);
+            brushOption.panelId = panel === true ? null : panel.panelId;
+            creatingCover = controller._creatingCover = createCover(controller, brushOption);
+            controller._covers.push(creatingCover);
+        }
+
+        if (creatingCover) {
+            var coverRenderer = coverRenderers[determineBrushType(controller._brushType, panel)];
+            var coverBrushOption = creatingCover.__brushOption;
+
+            coverBrushOption.range = coverRenderer.getCreatingRange(
+                clipByPanel(controller, creatingCover, controller._track)
+            );
+
+            if (isEnd) {
+                endCreating(controller, creatingCover);
+                coverRenderer.updateCommon(controller, creatingCover);
+            }
+
+            updateCoverShape(controller, creatingCover);
+
+            eventParams = {isEnd: isEnd};
+        }
+    }
+    else if (
+        isEnd
+        && thisBrushOption.brushMode === 'single'
+        && thisBrushOption.removeOnClick
+    ) {
+        // Help user to remove covers easily, only by a tiny drag, in 'single' mode.
+        // But a single click do not clear covers, because user may have casual
+        // clicks (for example, click on other component and do not expect covers
+        // disappear).
+        // Only some cover removed, trigger action, but not every click trigger action.
+        if (getPanelByPoint(controller, e, localCursorPoint) && clearCovers(controller)) {
+            eventParams = {isEnd: isEnd, removeOnClick: true};
+        }
+    }
+
+    return eventParams;
+}
+
+function determineBrushType(brushType, panel) {
+    if (brushType === 'auto') {
+        if (__DEV__) {
+            assert$1(
+                panel && panel.defaultBrushType,
+                'MUST have defaultBrushType when brushType is "atuo"'
+            );
+        }
+        return panel.defaultBrushType;
+    }
+    return brushType;
+}
+
+var mouseHandlers = {
+
+    mousedown: function (e) {
+        if (this._dragging) {
+            // In case some browser do not support globalOut,
+            // and release mose out side the browser.
+            handleDragEnd.call(this, e);
+        }
+        else if (!e.target || !e.target.draggable) {
+
+            preventDefault(e);
+
+            var localCursorPoint = this.group.transformCoordToLocal(e.offsetX, e.offsetY);
+
+            this._creatingCover = null;
+            var panel = this._creatingPanel = getPanelByPoint(this, e, localCursorPoint);
+
+            if (panel) {
+                this._dragging = true;
+                this._track = [localCursorPoint.slice()];
+            }
+        }
+    },
+
+    mousemove: function (e) {
+        var localCursorPoint = this.group.transformCoordToLocal(e.offsetX, e.offsetY);
+
+        resetCursor(this, e, localCursorPoint);
+
+        if (this._dragging) {
+
+            preventDefault(e);
+
+            var eventParams = updateCoverByMouse(this, e, localCursorPoint, false);
+
+            eventParams && trigger$1(this, eventParams);
+        }
+    },
+
+    mouseup: handleDragEnd //,
+
+    // FIXME
+    // in tooltip, globalout should not be triggered.
+    // globalout: handleDragEnd
+};
+
+function handleDragEnd(e) {
+    if (this._dragging) {
+
+        preventDefault(e);
+
+        var localCursorPoint = this.group.transformCoordToLocal(e.offsetX, e.offsetY);
+        var eventParams = updateCoverByMouse(this, e, localCursorPoint, true);
+
+        this._dragging = false;
+        this._track = [];
+        this._creatingCover = null;
+
+        // trigger event shoule be at final, after procedure will be nested.
+        eventParams && trigger$1(this, eventParams);
+    }
+}
+
+/**
+ * key: brushType
+ * @type {Object}
+ */
+var coverRenderers = {
+
+    lineX: getLineRenderer(0),
+
+    lineY: getLineRenderer(1),
+
+    rect: {
+        createCover: function (controller, brushOption) {
+            return createBaseRectCover(
+                curry$2(
+                    driftRect,
+                    function (range) {
+                        return range;
+                    },
+                    function (range) {
+                        return range;
+                    }
+                ),
+                controller,
+                brushOption,
+                ['w', 'e', 'n', 's', 'se', 'sw', 'ne', 'nw']
+            );
+        },
+        getCreatingRange: function (localTrack) {
+            var ends = getTrackEnds(localTrack);
+            return formatRectRange(ends[1][0], ends[1][1], ends[0][0], ends[0][1]);
+        },
+        updateCoverShape: function (controller, cover, localRange, brushOption) {
+            updateBaseRect(controller, cover, localRange, brushOption);
+        },
+        updateCommon: updateCommon,
+        contain: mainShapeContain
+    },
+
+    polygon: {
+        createCover: function (controller, brushOption) {
+            var cover = new Group();
+
+            // Do not use graphic.Polygon because graphic.Polyline do not close the
+            // border of the shape when drawing, which is a better experience for user.
+            cover.add(new Polyline({
+                name: 'main',
+                style: makeStyle(brushOption),
+                silent: true
+            }));
+
+            return cover;
+        },
+        getCreatingRange: function (localTrack) {
+            return localTrack;
+        },
+        endCreating: function (controller, cover) {
+            cover.remove(cover.childAt(0));
+            // Use graphic.Polygon close the shape.
+            cover.add(new Polygon({
+                name: 'main',
+                draggable: true,
+                drift: curry$2(driftPolygon, controller, cover),
+                ondragend: curry$2(trigger$1, controller, {isEnd: true})
+            }));
+        },
+        updateCoverShape: function (controller, cover, localRange, brushOption) {
+            cover.childAt(0).setShape({
+                points: clipByPanel(controller, cover, localRange)
+            });
+        },
+        updateCommon: updateCommon,
+        contain: mainShapeContain
+    }
+};
+
+function getLineRenderer(xyIndex) {
+    return {
+        createCover: function (controller, brushOption) {
+            return createBaseRectCover(
+                curry$2(
+                    driftRect,
+                    function (range) {
+                        var rectRange = [range, [0, 100]];
+                        xyIndex && rectRange.reverse();
+                        return rectRange;
+                    },
+                    function (rectRange) {
+                        return rectRange[xyIndex];
+                    }
+                ),
+                controller,
+                brushOption,
+                [['w', 'e'], ['n', 's']][xyIndex]
