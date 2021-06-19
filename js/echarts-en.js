@@ -59513,3 +59513,284 @@ var AxisView$2 = extendComponentView({
 
     /**
      * @override
+     */
+    dispose: function () {
+        this._brushController.dispose();
+    }
+});
+
+function fromAxisAreaSelect(axisModel, ecModel, payload) {
+    return payload
+        && payload.type === 'axisAreaSelect'
+        && ecModel.findComponents(
+            {mainType: 'parallelAxis', query: payload}
+        )[0] === axisModel;
+}
+
+function getCoverInfoList(axisModel) {
+    var axis = axisModel.axis;
+    return map(axisModel.activeIntervals, function (interval) {
+        return {
+            brushType: 'lineX',
+            panelId: 'pl',
+            range: [
+                axis.dataToCoord(interval[0], true),
+                axis.dataToCoord(interval[1], true)
+            ]
+        };
+    });
+}
+
+function getCoordSysModel(axisModel, ecModel) {
+    return ecModel.getComponent(
+        'parallel', axisModel.get('parallelIndex')
+    );
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var CLICK_THRESHOLD = 5; // > 4
+
+// Parallel view
+extendComponentView({
+    type: 'parallel',
+
+    render: function (parallelModel, ecModel, api) {
+        this._model = parallelModel;
+        this._api = api;
+
+        if (!this._handlers) {
+            this._handlers = {};
+            each$1(handlers, function (handler, eventName) {
+                api.getZr().on(eventName, this._handlers[eventName] = bind(handler, this));
+            }, this);
+        }
+
+        createOrUpdate(
+            this,
+            '_throttledDispatchExpand',
+            parallelModel.get('axisExpandRate'),
+            'fixRate'
+        );
+    },
+
+    dispose: function (ecModel, api) {
+        each$1(this._handlers, function (handler, eventName) {
+            api.getZr().off(eventName, handler);
+        });
+        this._handlers = null;
+    },
+
+    /**
+     * @param {Object} [opt] If null, cancle the last action triggering for debounce.
+     */
+    _throttledDispatchExpand: function (opt) {
+        this._dispatchExpand(opt);
+    },
+
+    _dispatchExpand: function (opt) {
+        opt && this._api.dispatchAction(
+            extend({type: 'parallelAxisExpand'}, opt)
+        );
+    }
+
+});
+
+var handlers = {
+
+    mousedown: function (e) {
+        if (checkTrigger(this, 'click')) {
+            this._mouseDownPoint = [e.offsetX, e.offsetY];
+        }
+    },
+
+    mouseup: function (e) {
+        var mouseDownPoint = this._mouseDownPoint;
+
+        if (checkTrigger(this, 'click') && mouseDownPoint) {
+            var point = [e.offsetX, e.offsetY];
+            var dist = Math.pow(mouseDownPoint[0] - point[0], 2)
+                + Math.pow(mouseDownPoint[1] - point[1], 2);
+
+            if (dist > CLICK_THRESHOLD) {
+                return;
+            }
+
+            var result = this._model.coordinateSystem.getSlidedAxisExpandWindow(
+                [e.offsetX, e.offsetY]
+            );
+
+            result.behavior !== 'none' && this._dispatchExpand({
+                axisExpandWindow: result.axisExpandWindow
+            });
+        }
+
+        this._mouseDownPoint = null;
+    },
+
+    mousemove: function (e) {
+        // Should do nothing when brushing.
+        if (this._mouseDownPoint || !checkTrigger(this, 'mousemove')) {
+            return;
+        }
+        var model = this._model;
+        var result = model.coordinateSystem.getSlidedAxisExpandWindow(
+            [e.offsetX, e.offsetY]
+        );
+
+        var behavior = result.behavior;
+        behavior === 'jump' && this._throttledDispatchExpand.debounceNextCall(model.get('axisExpandDebounce'));
+        this._throttledDispatchExpand(
+            behavior === 'none'
+                ? null // Cancle the last trigger, in case that mouse slide out of the area quickly.
+                : {
+                    axisExpandWindow: result.axisExpandWindow,
+                    // Jumping uses animation, and sliding suppresses animation.
+                    animation: behavior === 'jump' ? null : false
+                }
+        );
+    }
+};
+
+function checkTrigger(view, triggerOn) {
+    var model = view._model;
+    return model.get('axisExpandable') && model.get('axisExpandTriggerOn') === triggerOn;
+}
+
+registerPreprocessor(parallelPreprocessor);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+SeriesModel.extend({
+
+    type: 'series.parallel',
+
+    dependencies: ['parallel'],
+
+    visualColorAccessPath: 'lineStyle.color',
+
+    getInitialData: function (option, ecModel) {
+        var source = this.getSource();
+
+        setEncodeAndDimensions(source, this);
+
+        return createListFromArray(source, this);
+    },
+
+    /**
+     * User can get data raw indices on 'axisAreaSelected' event received.
+     *
+     * @public
+     * @param {string} activeState 'active' or 'inactive' or 'normal'
+     * @return {Array.<number>} Raw indices
+     */
+    getRawIndicesByActiveState: function (activeState) {
+        var coordSys = this.coordinateSystem;
+        var data = this.getData();
+        var indices = [];
+
+        coordSys.eachActiveState(data, function (theActiveState, dataIndex) {
+            if (activeState === theActiveState) {
+                indices.push(data.getRawIndex(dataIndex));
+            }
+        });
+
+        return indices;
+    },
+
+    defaultOption: {
+        zlevel: 0,                  // 一级层叠
+        z: 2,                       // 二级层叠
+
+        coordinateSystem: 'parallel',
+        parallelIndex: 0,
+
+        label: {
+            show: false
+        },
+
+        inactiveOpacity: 0.05,
+        activeOpacity: 1,
+
+        lineStyle: {
+            width: 1,
+            opacity: 0.45,
+            type: 'solid'
+        },
+        emphasis: {
+            label: {
+                show: false
+            }
+        },
+
+        progressive: 500,
+        smooth: false, // true | false | number
+
+        animationEasing: 'linear'
+    }
+});
+
+function setEncodeAndDimensions(source, seriesModel) {
+    // The mapping of parallelAxis dimension to data dimension can
+    // be specified in parallelAxis.option.dim. For example, if
+    // parallelAxis.option.dim is 'dim3', it mapping to the third
+    // dimension of data. But `data.encode` has higher priority.
+    // Moreover, parallelModel.dimension should not be regarded as data
+    // dimensions. Consider dimensions = ['dim4', 'dim2', 'dim6'];
+
+    if (source.encodeDefine) {
+        return;
+    }
