@@ -60881,3 +60881,282 @@ function computeNodeValues(nodes) {
         node.setLayout({value: value}, true);
     });
 }
+
+/**
+ * Compute the x-position for each node.
+ *
+ * Here we use Kahn algorithm to detect cycle when we traverse
+ * the node to computer the initial x position.
+ *
+ * @param {module:echarts/data/Graph~Node} nodes  node of sankey view
+ * @param  {number} nodeWidth  the dx of the node
+ * @param  {number} width  the whole width of the area to draw the view
+ */
+function computeNodeBreadths(nodes, edges, nodeWidth, width, height, orient) {
+    // Used to mark whether the edge is deleted. if it is deleted,
+    // the value is 0, otherwise it is 1.
+    var remainEdges = [];
+
+    // Storage each node's indegree.
+    var indegreeArr = [];
+
+    //Used to storage the node with indegree is equal to 0.
+    var zeroIndegrees = [];
+
+    var nextNode = [];
+    var x = 0;
+    var kx = 0;
+
+    for (var i = 0; i < edges.length; i++) {
+        remainEdges[i] = 1;
+    }
+
+    for (i = 0; i < nodes.length; i++) {
+        indegreeArr[i] = nodes[i].inEdges.length;
+        if (indegreeArr[i] === 0) {
+            zeroIndegrees.push(nodes[i]);
+        }
+    }
+
+    while (zeroIndegrees.length) {
+        for (var idx = 0; idx < zeroIndegrees.length; idx++) {
+            var node = zeroIndegrees[idx];
+            if (orient === 'vertical') {
+                node.setLayout({y: x}, true);
+                node.setLayout({dy: nodeWidth}, true);
+            }
+            else {
+                node.setLayout({x: x}, true);
+                node.setLayout({dx: nodeWidth}, true);
+            }
+            for (var oidx = 0; oidx < node.outEdges.length; oidx++) {
+                var edge = node.outEdges[oidx];
+                var indexEdge = edges.indexOf(edge);
+                remainEdges[indexEdge] = 0;
+                var targetNode = edge.node2;
+                var nodeIndex = nodes.indexOf(targetNode);
+                if (--indegreeArr[nodeIndex] === 0) {
+                    nextNode.push(targetNode);
+                }
+            }
+        }
+        ++x;
+        zeroIndegrees = nextNode;
+        nextNode = [];
+    }
+
+    for (i = 0; i < remainEdges.length; i++) {
+        if (__DEV__) {
+            if (remainEdges[i] === 1) {
+                throw new Error('Sankey is a DAG, the original data has cycle!');
+            }
+        }
+    }
+
+    moveSinksRight(nodes, x, orient);
+
+    if (orient === 'vertical') {
+        kx = (height - nodeWidth) / (x - 1);
+    }
+    else {
+        kx = (width - nodeWidth) / (x - 1);
+    }
+    scaleNodeBreadths(nodes, kx, orient);
+}
+
+/**
+ * All the node without outEgdes are assigned maximum x-position and
+ *     be aligned in the last column.
+ *
+ * @param {module:echarts/data/Graph~Node} nodes  node of sankey view
+ * @param {number} x  value (x-1) use to assign to node without outEdges
+ *     as x-position
+ */
+function moveSinksRight(nodes, x, orient) {
+    each$1(nodes, function (node) {
+        if (!node.outEdges.length) {
+            if (orient === 'vertical') {
+                node.setLayout({y: x - 1}, true);
+            }
+            else {
+                node.setLayout({x: x - 1}, true);
+            }
+        }
+    });
+}
+
+/**
+ * Scale node x-position to the width
+ *
+ * @param {module:echarts/data/Graph~Node} nodes  node of sankey view
+ * @param {number} kx   multiple used to scale nodes
+ */
+function scaleNodeBreadths(nodes, kx, orient) {
+    each$1(nodes, function (node) {
+        if (orient === 'vertical') {
+            var nodeY = node.getLayout().y * kx;
+            node.setLayout({y: nodeY}, true);
+        }
+        else {
+            var nodeX = node.getLayout().x * kx;
+            node.setLayout({x: nodeX}, true);
+        }
+    });
+}
+
+/**
+ * Using Gauss-Seidel iterations method to compute the node depth(y-position)
+ *
+ * @param {module:echarts/data/Graph~Node} nodes  node of sankey view
+ * @param {module:echarts/data/Graph~Edge} edges  edge of sankey view
+ * @param {number} height  the whole height of the area to draw the view
+ * @param {number} nodeGap  the vertical distance between two nodes
+ *     in the same column.
+ * @param {number} iterations  the number of iterations for the algorithm
+ */
+function computeNodeDepths(nodes, edges, height, width, nodeGap, iterations, orient) {
+    var nodesByBreadth = prepareNodesByBreadth(nodes, orient);
+
+    initializeNodeDepth(nodes, nodesByBreadth, edges, height, width, nodeGap, orient);
+    resolveCollisions(nodesByBreadth, nodeGap, height, width, orient);
+
+    for (var alpha = 1; iterations > 0; iterations--) {
+        // 0.99 is a experience parameter, ensure that each iterations of
+        // changes as small as possible.
+        alpha *= 0.99;
+        relaxRightToLeft(nodesByBreadth, alpha, orient);
+        resolveCollisions(nodesByBreadth, nodeGap, height, width, orient);
+        relaxLeftToRight(nodesByBreadth, alpha, orient);
+        resolveCollisions(nodesByBreadth, nodeGap, height, width, orient);
+    }
+}
+
+function prepareNodesByBreadth(nodes, orient) {
+    var nodesByBreadth = [];
+    var keyAttr = orient === 'vertical' ? 'y' : 'x';
+
+    var groupResult = groupData(nodes, function (node) {
+        return node.getLayout()[keyAttr];
+    });
+    groupResult.keys.sort(function (a, b) {
+        return a - b;
+    });
+    each$1(groupResult.keys, function (key) {
+        nodesByBreadth.push(groupResult.buckets.get(key));
+    });
+
+    return nodesByBreadth;
+}
+
+/**
+ * Compute the original y-position for each node
+ *
+ * @param {module:echarts/data/Graph~Node} nodes  node of sankey view
+ * @param {Array.<Array.<module:echarts/data/Graph~Node>>} nodesByBreadth
+ *     group by the array of all sankey nodes based on the nodes x-position.
+ * @param {module:echarts/data/Graph~Edge} edges  edge of sankey view
+ * @param {number} height  the whole height of the area to draw the view
+ * @param {number} nodeGap  the vertical distance between two nodes
+ */
+function initializeNodeDepth(nodes, nodesByBreadth, edges, height, width, nodeGap, orient) {
+    var kyArray = [];
+    each$1(nodesByBreadth, function (nodes) {
+        var n = nodes.length;
+        var sum = 0;
+        var ky = 0;
+        each$1(nodes, function (node) {
+            sum += node.getLayout().value;
+        });
+        if (orient === 'vertical') {
+            ky = (width - (n - 1) * nodeGap) / sum;
+        }
+        else {
+            ky = (height - (n - 1) * nodeGap) / sum;
+        }
+        kyArray.push(ky);
+    });
+
+    kyArray.sort(function (a, b) {
+        return a - b;
+    });
+    var ky0 = kyArray[0];
+
+    each$1(nodesByBreadth, function (nodes) {
+        each$1(nodes, function (node, i) {
+            var nodeDy = node.getLayout().value * ky0;
+            if (orient === 'vertical') {
+                node.setLayout({x: i}, true);
+                node.setLayout({dx: nodeDy}, true);
+            }
+            else {
+                node.setLayout({y: i}, true);
+                node.setLayout({dy: nodeDy}, true);
+            }
+
+        });
+    });
+
+    each$1(edges, function (edge) {
+        var edgeDy = +edge.getValue() * ky0;
+        edge.setLayout({dy: edgeDy}, true);
+    });
+}
+
+/**
+ * Resolve the collision of initialized depth (y-position)
+ *
+ * @param {Array.<Array.<module:echarts/data/Graph~Node>>} nodesByBreadth
+ *     group by the array of all sankey nodes based on the nodes x-position.
+ * @param {number} nodeGap  the vertical distance between two nodes
+ * @param {number} height  the whole height of the area to draw the view
+ */
+function resolveCollisions(nodesByBreadth, nodeGap, height, width, orient) {
+    each$1(nodesByBreadth, function (nodes) {
+        var node;
+        var dy;
+        var y0 = 0;
+        var n = nodes.length;
+        var i;
+
+        if (orient === 'vertical') {
+            var nodeX;
+            nodes.sort(function (a, b) {
+                return a.getLayout().x - b.getLayout().x;
+            });
+            for (i = 0; i < n; i++) {
+                node = nodes[i];
+                dy = y0 - node.getLayout().x;
+                if (dy > 0) {
+                    nodeX = node.getLayout().x + dy;
+                    node.setLayout({x: nodeX}, true);
+                }
+                y0 = node.getLayout().x + node.getLayout().dx + nodeGap;
+            }
+            // If the bottommost node goes outside the bounds, push it back up
+            dy = y0 - nodeGap - width;
+            if (dy > 0) {
+                nodeX = node.getLayout().x - dy;
+                node.setLayout({x: nodeX}, true);
+                y0 = nodeX;
+                for (i = n - 2; i >= 0; --i) {
+                    node = nodes[i];
+                    dy = node.getLayout().x + node.getLayout().dx + nodeGap - y0;
+                    if (dy > 0) {
+                        nodeX = node.getLayout().x - dy;
+                        node.setLayout({x: nodeX}, true);
+                    }
+                    y0 = node.getLayout().x;
+                }
+            }
+        }
+        else {
+            var nodeY;
+            nodes.sort(function (a, b) {
+                return a.getLayout().y - b.getLayout().y;
+            });
+            for (i = 0; i < n; i++) {
+                node = nodes[i];
+                dy = y0 - node.getLayout().y;
+                if (dy > 0) {
+                    nodeY = node.getLayout().y + dy;
+                    node.setLayout({y: nodeY}, true);
