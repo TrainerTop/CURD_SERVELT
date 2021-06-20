@@ -60644,3 +60644,240 @@ extendChartView({
                     if (!sankeyView._focusAdjacencyDisabled) {
                         api.dispatchAction({
                             type: 'unfocusNodeAdjacency',
+                            seriesId: seriesModel.id
+                        });
+                    }
+                });
+            }
+        });
+
+        if (!this._data && seriesModel.get('animation')) {
+            group.setClipPath(createGridClipShape$2(group.getBoundingRect(), seriesModel, function () {
+                group.removeClipPath();
+            }));
+        }
+
+        this._data = seriesModel.getData();
+    },
+
+    dispose: function () {},
+
+    focusNodeAdjacency: function (seriesModel, ecModel, api, payload) {
+        var data = this._model.getData();
+        var graph = data.graph;
+        var dataIndex = payload.dataIndex;
+        var itemModel = data.getItemModel(dataIndex);
+        var edgeDataIndex = payload.edgeDataIndex;
+
+        if (dataIndex == null && edgeDataIndex == null) {
+            return;
+        }
+        var node = graph.getNodeByIndex(dataIndex);
+        var edge = graph.getEdgeByIndex(edgeDataIndex);
+
+        graph.eachNode(function (node) {
+            fadeOutItem$1(node, nodeOpacityPath$1, 0.1);
+        });
+        graph.eachEdge(function (edge) {
+            fadeOutItem$1(edge, lineOpacityPath$1, 0.1);
+        });
+
+        if (node) {
+            fadeInItem$1(node, nodeOpacityPath$1);
+            var focusNodeAdj = itemModel.get('focusNodeAdjacency');
+            if (focusNodeAdj === 'outEdges') {
+                each$1(node.outEdges, function (edge) {
+                    if (edge.dataIndex < 0) {
+                        return;
+                    }
+                    fadeInItem$1(edge, lineOpacityPath$1);
+                    fadeInItem$1(edge.node2, nodeOpacityPath$1);
+                });
+            }
+            else if (focusNodeAdj === 'inEdges') {
+                each$1(node.inEdges, function (edge) {
+                    if (edge.dataIndex < 0) {
+                        return;
+                    }
+                    fadeInItem$1(edge, lineOpacityPath$1);
+                    fadeInItem$1(edge.node1, nodeOpacityPath$1);
+                });
+            }
+            else if (focusNodeAdj === 'allEdges') {
+                each$1(node.edges, function (edge) {
+                    if (edge.dataIndex < 0) {
+                        return;
+                    }
+                    fadeInItem$1(edge, lineOpacityPath$1);
+                    fadeInItem$1(edge.node1, nodeOpacityPath$1);
+                    fadeInItem$1(edge.node2, nodeOpacityPath$1);
+                });
+            }
+        }
+        if (edge) {
+            fadeInItem$1(edge, lineOpacityPath$1);
+            fadeInItem$1(edge.node1, nodeOpacityPath$1);
+            fadeInItem$1(edge.node2, nodeOpacityPath$1);
+        }
+    },
+
+    unfocusNodeAdjacency: function (seriesModel, ecModel, api, payload) {
+        var graph = this._model.getGraph();
+
+        graph.eachNode(function (node) {
+            fadeOutItem$1(node, nodeOpacityPath$1);
+        });
+        graph.eachEdge(function (edge) {
+            fadeOutItem$1(edge, lineOpacityPath$1);
+        });
+    }
+});
+
+// Add animation to the view
+function createGridClipShape$2(rect, seriesModel, cb) {
+    var rectEl = new Rect({
+        shape: {
+            x: rect.x - 10,
+            y: rect.y - 10,
+            width: 0,
+            height: rect.height + 20
+        }
+    });
+    initProps(rectEl, {
+        shape: {
+            width: rect.width + 20,
+            height: rect.height + 20
+        }
+    }, seriesModel, cb);
+
+    return rectEl;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file The interactive action of sankey view
+ * @author Deqing Li(annong035@gmail.com)
+ */
+
+registerAction({
+    type: 'dragNode',
+    event: 'dragNode',
+    // here can only use 'update' now, other value is not support in echarts.
+    update: 'update'
+}, function (payload, ecModel) {
+    ecModel.eachComponent({mainType: 'series', subType: 'sankey', query: payload}, function (seriesModel) {
+        seriesModel.setNodePosition(payload.dataIndex, [payload.localX, payload.localY]);
+    });
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file The layout algorithm of sankey view
+ * @author Deqing Li(annong035@gmail.com)
+ */
+
+var sankeyLayout = function (ecModel, api, payload) {
+
+    ecModel.eachSeriesByType('sankey', function (seriesModel) {
+
+        var nodeWidth = seriesModel.get('nodeWidth');
+        var nodeGap = seriesModel.get('nodeGap');
+
+        var layoutInfo = getViewRect$3(seriesModel, api);
+
+        seriesModel.layoutInfo = layoutInfo;
+
+        var width = layoutInfo.width;
+        var height = layoutInfo.height;
+
+        var graph = seriesModel.getGraph();
+
+        var nodes = graph.nodes;
+        var edges = graph.edges;
+
+        computeNodeValues(nodes);
+
+        var filteredNodes = filter(nodes, function (node) {
+            return node.getLayout().value === 0;
+        });
+
+        var iterations = filteredNodes.length !== 0
+            ? 0 : seriesModel.get('layoutIterations');
+
+        var orient = seriesModel.get('orient');
+
+        layoutSankey(nodes, edges, nodeWidth, nodeGap, width, height, iterations, orient);
+    });
+};
+
+/**
+ * Get the layout position of the whole view
+ *
+ * @param {module:echarts/model/Series} seriesModel  the model object of sankey series
+ * @param {module:echarts/ExtensionAPI} api  provide the API list that the developer can call
+ * @return {module:zrender/core/BoundingRect}  size of rect to draw the sankey view
+ */
+function getViewRect$3(seriesModel, api) {
+    return getLayoutRect(
+        seriesModel.getBoxLayoutParams(), {
+            width: api.getWidth(),
+            height: api.getHeight()
+        }
+    );
+}
+
+function layoutSankey(nodes, edges, nodeWidth, nodeGap, width, height, iterations, orient) {
+    computeNodeBreadths(nodes, edges, nodeWidth, width, height, orient);
+    computeNodeDepths(nodes, edges, height, width, nodeGap, iterations, orient);
+    computeEdgeDepths(nodes, orient);
+}
+
+/**
+ * Compute the value of each node by summing the associated edge's value
+ *
+ * @param {module:echarts/data/Graph~Node} nodes  node of sankey view
+ */
+function computeNodeValues(nodes) {
+    each$1(nodes, function (node) {
+        var value1 = sum(node.outEdges, getEdgeValue);
+        var value2 = sum(node.inEdges, getEdgeValue);
+        var value = Math.max(value1, value2);
+        node.setLayout({value: value}, true);
+    });
+}
