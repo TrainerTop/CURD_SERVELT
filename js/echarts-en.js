@@ -61160,3 +61160,321 @@ function resolveCollisions(nodesByBreadth, nodeGap, height, width, orient) {
                 if (dy > 0) {
                     nodeY = node.getLayout().y + dy;
                     node.setLayout({y: nodeY}, true);
+                }
+                y0 = node.getLayout().y + node.getLayout().dy + nodeGap;
+            }
+            // If the bottommost node goes outside the bounds, push it back up
+            dy = y0 - nodeGap - height;
+            if (dy > 0) {
+                nodeY = node.getLayout().y - dy;
+                node.setLayout({y: nodeY}, true);
+                y0 = nodeY;
+                for (i = n - 2; i >= 0; --i) {
+                    node = nodes[i];
+                    dy = node.getLayout().y + node.getLayout().dy + nodeGap - y0;
+                    if (dy > 0) {
+                        nodeY = node.getLayout().y - dy;
+                        node.setLayout({y: nodeY}, true);
+                    }
+                    y0 = node.getLayout().y;
+                }
+            }
+        }
+    });
+}
+
+/**
+ * Change the y-position of the nodes, except most the right side nodes
+ *
+ * @param {Array.<Array.<module:echarts/data/Graph~Node>>} nodesByBreadth
+ *     group by the array of all sankey nodes based on the node x-position.
+ * @param {number} alpha  parameter used to adjust the nodes y-position
+ */
+function relaxRightToLeft(nodesByBreadth, alpha, orient) {
+    each$1(nodesByBreadth.slice().reverse(), function (nodes) {
+        each$1(nodes, function (node) {
+            if (node.outEdges.length) {
+                var y = sum(node.outEdges, weightedTarget, orient) / sum(node.outEdges, getEdgeValue, orient);
+                if (orient === 'vertical') {
+                    var nodeX = node.getLayout().x + (y - center$1(node, orient)) * alpha;
+                    node.setLayout({x: nodeX}, true);
+                }
+                else {
+                    var nodeY = node.getLayout().y + (y - center$1(node, orient)) * alpha;
+                    node.setLayout({y: nodeY}, true);
+                }
+            }
+        });
+    });
+}
+
+function weightedTarget(edge, orient) {
+    return center$1(edge.node2, orient) * edge.getValue();
+}
+
+function weightedSource(edge, orient) {
+    return center$1(edge.node1, orient) * edge.getValue();
+}
+
+function center$1(node, orient) {
+    if (orient === 'vertical') {
+        return node.getLayout().x + node.getLayout().dx / 2;
+    }
+    return node.getLayout().y + node.getLayout().dy / 2;
+}
+
+function getEdgeValue(edge) {
+    return edge.getValue();
+}
+
+function sum(array, f, orient) {
+    var sum = 0;
+    var len = array.length;
+    var i = -1;
+    while (++i < len) {
+        var value = +f.call(array, array[i], orient);
+        if (!isNaN(value)) {
+            sum += value;
+        }
+    }
+    return sum;
+}
+
+/**
+ * Change the y-position of the nodes, except most the left side nodes
+ *
+ * @param {Array.<Array.<module:echarts/data/Graph~Node>>} nodesByBreadth
+ *     group by the array of all sankey nodes based on the node x-position.
+ * @param {number} alpha  parameter used to adjust the nodes y-position
+ */
+function relaxLeftToRight(nodesByBreadth, alpha, orient) {
+    each$1(nodesByBreadth, function (nodes) {
+        each$1(nodes, function (node) {
+            if (node.inEdges.length) {
+                var y = sum(node.inEdges, weightedSource, orient) / sum(node.inEdges, getEdgeValue, orient);
+                if (orient === 'vertical') {
+                    var nodeX = node.getLayout().x + (y - center$1(node, orient)) * alpha;
+                    node.setLayout({x: nodeX}, true);
+                }
+                else {
+                    var nodeY = node.getLayout().y + (y - center$1(node, orient)) * alpha;
+                    node.setLayout({y: nodeY}, true);
+                }
+            }
+        });
+    });
+}
+
+/**
+ * Compute the depth(y-position) of each edge
+ *
+ * @param {module:echarts/data/Graph~Node} nodes  node of sankey view
+ */
+function computeEdgeDepths(nodes, orient) {
+    each$1(nodes, function (node) {
+        if (orient === 'vertical') {
+            node.outEdges.sort(function (a, b) {
+                return a.node2.getLayout().x - b.node2.getLayout().x;
+            });
+            node.inEdges.sort(function (a, b) {
+                return a.node1.getLayout().x - b.node1.getLayout().x;
+            });
+        }
+        else {
+            node.outEdges.sort(function (a, b) {
+                return a.node2.getLayout().y - b.node2.getLayout().y;
+            });
+            node.inEdges.sort(function (a, b) {
+                return a.node1.getLayout().y - b.node1.getLayout().y;
+            });
+        }
+    });
+    each$1(nodes, function (node) {
+        var sy = 0;
+        var ty = 0;
+        each$1(node.outEdges, function (edge) {
+            edge.setLayout({sy: sy}, true);
+            sy += edge.getLayout().dy;
+        });
+        each$1(node.inEdges, function (edge) {
+            edge.setLayout({ty: ty}, true);
+            ty += edge.getLayout().dy;
+        });
+    });
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file Visual encoding for sankey view
+ * @author  Deqing Li(annong035@gmail.com)
+ */
+
+var sankeyVisual = function (ecModel, payload) {
+    ecModel.eachSeriesByType('sankey', function (seriesModel) {
+        var graph = seriesModel.getGraph();
+        var nodes = graph.nodes;
+        if (nodes.length) {
+            var minValue = Infinity;
+            var maxValue = -Infinity;
+            each$1(nodes, function (node) {
+                var nodeValue = node.getLayout().value;
+                if (nodeValue < minValue) {
+                    minValue = nodeValue;
+                }
+                if (nodeValue > maxValue) {
+                    maxValue = nodeValue;
+                }
+            });
+
+            each$1(nodes, function (node) {
+                var mapping = new VisualMapping({
+                    type: 'color',
+                    mappingMethod: 'linear',
+                    dataExtent: [minValue, maxValue],
+                    visual: seriesModel.get('color')
+                });
+
+                var mapValueToColor = mapping.mapValueToVisual(node.getLayout().value);
+                node.setVisual('color', mapValueToColor);
+                // If set itemStyle.normal.color
+                var itemModel = node.getModel();
+                var customColor = itemModel.get('itemStyle.color');
+                if (customColor != null) {
+                    node.setVisual('color', customColor);
+                }
+            });
+        }
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+registerLayout(sankeyLayout);
+registerVisual(sankeyVisual);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+var seriesModelMixin = {
+
+    /**
+     * @private
+     * @type {string}
+     */
+    _baseAxisDim: null,
+
+    /**
+     * @override
+     */
+    getInitialData: function (option, ecModel) {
+        // When both types of xAxis and yAxis are 'value', layout is
+        // needed to be specified by user. Otherwise, layout can be
+        // judged by which axis is category.
+
+        var ordinalMeta;
+
+        var xAxisModel = ecModel.getComponent('xAxis', this.get('xAxisIndex'));
+        var yAxisModel = ecModel.getComponent('yAxis', this.get('yAxisIndex'));
+        var xAxisType = xAxisModel.get('type');
+        var yAxisType = yAxisModel.get('type');
+        var addOrdinal;
+
+        // FIXME
+        // 考虑时间轴
+
+        if (xAxisType === 'category') {
+            option.layout = 'horizontal';
+            ordinalMeta = xAxisModel.getOrdinalMeta();
+            addOrdinal = true;
+        }
+        else if (yAxisType === 'category') {
+            option.layout = 'vertical';
+            ordinalMeta = yAxisModel.getOrdinalMeta();
+            addOrdinal = true;
+        }
+        else {
+            option.layout = option.layout || 'horizontal';
+        }
+
+        var coordDims = ['x', 'y'];
+        var baseAxisDimIndex = option.layout === 'horizontal' ? 0 : 1;
+        var baseAxisDim = this._baseAxisDim = coordDims[baseAxisDimIndex];
+        var otherAxisDim = coordDims[1 - baseAxisDimIndex];
+        var axisModels = [xAxisModel, yAxisModel];
+        var baseAxisType = axisModels[baseAxisDimIndex].get('type');
+        var otherAxisType = axisModels[1 - baseAxisDimIndex].get('type');
+        var data = option.data;
+
+        // ??? FIXME make a stage to perform data transfrom.
+        // MUST create a new data, consider setOption({}) again.
+        if (data && addOrdinal) {
+            var newOptionData = [];
+            each$1(data, function (item, index) {
+                var newItem;
+                if (item.value && isArray(item.value)) {
+                    newItem = item.value.slice();
+                    item.value.unshift(index);
+                }
+                else if (isArray(item)) {
+                    newItem = item.slice();
+                    item.unshift(index);
+                }
+                else {
+                    newItem = item;
+                }
+                newOptionData.push(newItem);
+            });
+            option.data = newOptionData;
+        }
