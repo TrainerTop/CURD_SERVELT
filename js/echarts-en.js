@@ -61478,3 +61478,254 @@ var seriesModelMixin = {
             });
             option.data = newOptionData;
         }
+
+        var defaultValueDimensions = this.defaultValueDimensions;
+
+        return createListSimply(
+            this,
+            {
+                coordDimensions: [{
+                    name: baseAxisDim,
+                    type: getDimensionTypeByAxis(baseAxisType),
+                    ordinalMeta: ordinalMeta,
+                    otherDims: {
+                        tooltip: false,
+                        itemName: 0
+                    },
+                    dimsDef: ['base']
+                }, {
+                    name: otherAxisDim,
+                    type: getDimensionTypeByAxis(otherAxisType),
+                    dimsDef: defaultValueDimensions.slice()
+                }],
+                dimensionsCount: defaultValueDimensions.length + 1
+            }
+        );
+    },
+
+    /**
+     * If horizontal, base axis is x, otherwise y.
+     * @override
+     */
+    getBaseAxis: function () {
+        var dim = this._baseAxisDim;
+        return this.ecModel.getComponent(dim + 'Axis', this.get(dim + 'AxisIndex')).axis;
+    }
+
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var BoxplotSeries = SeriesModel.extend({
+
+    type: 'series.boxplot',
+
+    dependencies: ['xAxis', 'yAxis', 'grid'],
+
+    // TODO
+    // box width represents group size, so dimension should have 'size'.
+
+    /**
+     * @see <https://en.wikipedia.org/wiki/Box_plot>
+     * The meanings of 'min' and 'max' depend on user,
+     * and echarts do not need to know it.
+     * @readOnly
+     */
+    defaultValueDimensions: [
+        {name: 'min', defaultTooltip: true},
+        {name: 'Q1', defaultTooltip: true},
+        {name: 'median', defaultTooltip: true},
+        {name: 'Q3', defaultTooltip: true},
+        {name: 'max', defaultTooltip: true}
+    ],
+
+    /**
+     * @type {Array.<string>}
+     * @readOnly
+     */
+    dimensions: null,
+
+    /**
+     * @override
+     */
+    defaultOption: {
+        zlevel: 0,                  // 一级层叠
+        z: 2,                       // 二级层叠
+        coordinateSystem: 'cartesian2d',
+        legendHoverLink: true,
+
+        hoverAnimation: true,
+
+        // xAxisIndex: 0,
+        // yAxisIndex: 0,
+
+        layout: null,               // 'horizontal' or 'vertical'
+        boxWidth: [7, 50],       // [min, max] can be percent of band width.
+
+        itemStyle: {
+            color: '#fff',
+            borderWidth: 1
+        },
+
+        emphasis: {
+            itemStyle: {
+                borderWidth: 2,
+                shadowBlur: 5,
+                shadowOffsetX: 2,
+                shadowOffsetY: 2,
+                shadowColor: 'rgba(0,0,0,0.4)'
+            }
+        },
+
+        animationEasing: 'elasticOut',
+        animationDuration: 800
+    }
+});
+
+mixin(BoxplotSeries, seriesModelMixin, true);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Update common properties
+var NORMAL_ITEM_STYLE_PATH = ['itemStyle'];
+var EMPHASIS_ITEM_STYLE_PATH = ['emphasis', 'itemStyle'];
+
+var BoxplotView = Chart.extend({
+
+    type: 'boxplot',
+
+    render: function (seriesModel, ecModel, api) {
+        var data = seriesModel.getData();
+        var group = this.group;
+        var oldData = this._data;
+
+        // There is no old data only when first rendering or switching from
+        // stream mode to normal mode, where previous elements should be removed.
+        if (!this._data) {
+            group.removeAll();
+        }
+
+        var constDim = seriesModel.get('layout') === 'horizontal' ? 1 : 0;
+
+        data.diff(oldData)
+            .add(function (newIdx) {
+                if (data.hasValue(newIdx)) {
+                    var itemLayout = data.getItemLayout(newIdx);
+                    var symbolEl = createNormalBox(itemLayout, data, newIdx, constDim, true);
+                    data.setItemGraphicEl(newIdx, symbolEl);
+                    group.add(symbolEl);
+                }
+            })
+            .update(function (newIdx, oldIdx) {
+                var symbolEl = oldData.getItemGraphicEl(oldIdx);
+
+                // Empty data
+                if (!data.hasValue(newIdx)) {
+                    group.remove(symbolEl);
+                    return;
+                }
+
+                var itemLayout = data.getItemLayout(newIdx);
+                if (!symbolEl) {
+                    symbolEl = createNormalBox(itemLayout, data, newIdx, constDim);
+                }
+                else {
+                    updateNormalBoxData(itemLayout, symbolEl, data, newIdx);
+                }
+
+                group.add(symbolEl);
+
+                data.setItemGraphicEl(newIdx, symbolEl);
+            })
+            .remove(function (oldIdx) {
+                var el = oldData.getItemGraphicEl(oldIdx);
+                el && group.remove(el);
+            })
+            .execute();
+
+        this._data = data;
+    },
+
+    remove: function (ecModel) {
+        var group = this.group;
+        var data = this._data;
+        this._data = null;
+        data && data.eachItemGraphicEl(function (el) {
+            el && group.remove(el);
+        });
+    },
+
+    dispose: noop
+
+});
+
+
+var BoxPath = Path.extend({
+
+    type: 'boxplotBoxPath',
+
+    shape: {},
+
+    buildPath: function (ctx, shape) {
+        var ends = shape.points;
+
+        var i = 0;
+        ctx.moveTo(ends[i][0], ends[i][1]);
+        i++;
+        for (; i < 4; i++) {
+            ctx.lineTo(ends[i][0], ends[i][1]);
+        }
+        ctx.closePath();
+
+        for (; i < ends.length; i++) {
+            ctx.moveTo(ends[i][0], ends[i][1]);
+            i++;
+            ctx.lineTo(ends[i][0], ends[i][1]);
+        }
+    }
+});
+
+
+function createNormalBox(itemLayout, data, dataIndex, constDim, isInit) {
+    var ends = itemLayout.ends;
+
+    var el = new BoxPath({
+        shape: {
+            points: isInit
+                ? transInit(ends, constDim, itemLayout)
+                : ends
+        }
