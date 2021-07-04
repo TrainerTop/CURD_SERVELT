@@ -62278,3 +62278,261 @@ var CandlestickView = Chart.extend({
 
             el.incremental = true;
             this.group.add(el);
+        }
+    },
+
+    _incrementalRenderLarge: function (params, seriesModel) {
+        createLarge$1(seriesModel, this.group, true);
+    },
+
+    remove: function (ecModel) {
+        this._clear();
+    },
+
+    _clear: function () {
+        this.group.removeAll();
+        this._data = null;
+    },
+
+    dispose: noop
+
+});
+
+
+var NormalBoxPath = Path.extend({
+
+    type: 'normalCandlestickBox',
+
+    shape: {},
+
+    buildPath: function (ctx, shape) {
+        var ends = shape.points;
+
+        if (this.__simpleBox) {
+            ctx.moveTo(ends[4][0], ends[4][1]);
+            ctx.lineTo(ends[6][0], ends[6][1]);
+        }
+        else {
+            ctx.moveTo(ends[0][0], ends[0][1]);
+            ctx.lineTo(ends[1][0], ends[1][1]);
+            ctx.lineTo(ends[2][0], ends[2][1]);
+            ctx.lineTo(ends[3][0], ends[3][1]);
+            ctx.closePath();
+
+            ctx.moveTo(ends[4][0], ends[4][1]);
+            ctx.lineTo(ends[5][0], ends[5][1]);
+            ctx.moveTo(ends[6][0], ends[6][1]);
+            ctx.lineTo(ends[7][0], ends[7][1]);
+        }
+    }
+});
+
+function createNormalBox$1(itemLayout, dataIndex, isInit) {
+    var ends = itemLayout.ends;
+    return new NormalBoxPath({
+        shape: {
+            points: isInit
+                ? transInit$1(ends, itemLayout)
+                : ends
+        },
+        z2: 100
+    });
+}
+
+function setBoxCommon(el, data, dataIndex, isSimpleBox) {
+    var itemModel = data.getItemModel(dataIndex);
+    var normalItemStyleModel = itemModel.getModel(NORMAL_ITEM_STYLE_PATH$1);
+    var color = data.getItemVisual(dataIndex, 'color');
+    var borderColor = data.getItemVisual(dataIndex, 'borderColor') || color;
+
+    // Color must be excluded.
+    // Because symbol provide setColor individually to set fill and stroke
+    var itemStyle = normalItemStyleModel.getItemStyle(SKIP_PROPS);
+
+    el.useStyle(itemStyle);
+    el.style.strokeNoScale = true;
+    el.style.fill = color;
+    el.style.stroke = borderColor;
+
+    el.__simpleBox = isSimpleBox;
+
+    var hoverStyle = itemModel.getModel(EMPHASIS_ITEM_STYLE_PATH$1).getItemStyle();
+    setHoverStyle(el, hoverStyle);
+}
+
+function transInit$1(points, itemLayout) {
+    return map(points, function (point) {
+        point = point.slice();
+        point[1] = itemLayout.initBaseline;
+        return point;
+    });
+}
+
+
+
+var LargeBoxPath = Path.extend({
+
+    type: 'largeCandlestickBox',
+
+    shape: {},
+
+    buildPath: function (ctx, shape) {
+        // Drawing lines is more efficient than drawing
+        // a whole line or drawing rects.
+        var points = shape.points;
+        for (var i = 0; i < points.length;) {
+            if (this.__sign === points[i++]) {
+                var x = points[i++];
+                ctx.moveTo(x, points[i++]);
+                ctx.lineTo(x, points[i++]);
+            }
+            else {
+                i += 3;
+            }
+        }
+    }
+});
+
+function createLarge$1(seriesModel, group, incremental) {
+    var data = seriesModel.getData();
+    var largePoints = data.getLayout('largePoints');
+
+    var elP = new LargeBoxPath({
+        shape: {points: largePoints},
+        __sign: 1
+    });
+    group.add(elP);
+    var elN = new LargeBoxPath({
+        shape: {points: largePoints},
+        __sign: -1
+    });
+    group.add(elN);
+
+    setLargeStyle$1(1, elP, seriesModel, data);
+    setLargeStyle$1(-1, elN, seriesModel, data);
+
+    if (incremental) {
+        elP.incremental = true;
+        elN.incremental = true;
+    }
+}
+
+function setLargeStyle$1(sign, el, seriesModel, data) {
+    var suffix = sign > 0 ? 'P' : 'N';
+    var borderColor = data.getVisual('borderColor' + suffix)
+        || data.getVisual('color' + suffix);
+
+    // Color must be excluded.
+    // Because symbol provide setColor individually to set fill and stroke
+    var itemStyle = seriesModel.getModel(NORMAL_ITEM_STYLE_PATH$1).getItemStyle(SKIP_PROPS);
+
+    el.useStyle(itemStyle);
+    el.style.fill = null;
+    el.style.stroke = borderColor;
+    // No different
+    // el.style.lineWidth = .5;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var preprocessor = function (option) {
+    if (!option || !isArray(option.series)) {
+        return;
+    }
+
+    // Translate 'k' to 'candlestick'.
+    each$1(option.series, function (seriesItem) {
+        if (isObject$1(seriesItem) && seriesItem.type === 'k') {
+            seriesItem.type = 'candlestick';
+        }
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var positiveBorderColorQuery = ['itemStyle', 'borderColor'];
+var negativeBorderColorQuery = ['itemStyle', 'borderColor0'];
+var positiveColorQuery = ['itemStyle', 'color'];
+var negativeColorQuery = ['itemStyle', 'color0'];
+
+var candlestickVisual = {
+
+    seriesType: 'candlestick',
+
+    plan: createRenderPlanner(),
+
+    // For legend.
+    performRawSeries: true,
+
+    reset: function (seriesModel, ecModel) {
+
+        var data = seriesModel.getData();
+        var isLargeRender = seriesModel.pipelineContext.large;
+
+        data.setVisual({
+            legendSymbol: 'roundRect',
+            colorP: getColor(1, seriesModel),
+            colorN: getColor(-1, seriesModel),
+            borderColorP: getBorderColor(1, seriesModel),
+            borderColorN: getBorderColor(-1, seriesModel)
+        });
+
+        // Only visible series has each data be visual encoded
+        if (ecModel.isSeriesFiltered(seriesModel)) {
+            return;
+        }
+
+        return !isLargeRender && {progress: progress};
+
+
+        function progress(params, data) {
+            var dataIndex;
+            while ((dataIndex = params.next()) != null) {
+                var itemModel = data.getItemModel(dataIndex);
+                var sign = data.getItemLayout(dataIndex).sign;
+
+                data.setItemVisual(
+                    dataIndex,
+                    {
+                        color: getColor(sign, itemModel),
+                        borderColor: getBorderColor(sign, itemModel)
+                    }
+                );
+            }
+        }
+
+        function getColor(sign, model) {
