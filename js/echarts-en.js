@@ -62010,3 +62010,271 @@ function layoutSingleSeries(seriesModel, offset, boxWidth) {
     }
 
     function layEndLine(ends, endCenter) {
+        var from = endCenter.slice();
+        var to = endCenter.slice();
+        from[cDimIdx] -= halfWidth;
+        to[cDimIdx] += halfWidth;
+        ends.push(from, to);
+    }
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+registerVisual(boxplotVisual);
+registerLayout(boxplotLayout);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var CandlestickSeries = SeriesModel.extend({
+
+    type: 'series.candlestick',
+
+    dependencies: ['xAxis', 'yAxis', 'grid'],
+
+    /**
+     * @readOnly
+     */
+    defaultValueDimensions: [
+        {name: 'open', defaultTooltip: true},
+        {name: 'close', defaultTooltip: true},
+        {name: 'lowest', defaultTooltip: true},
+        {name: 'highest', defaultTooltip: true}
+    ],
+
+    /**
+     * @type {Array.<string>}
+     * @readOnly
+     */
+    dimensions: null,
+
+    /**
+     * @override
+     */
+    defaultOption: {
+        zlevel: 0,
+        z: 2,
+        coordinateSystem: 'cartesian2d',
+        legendHoverLink: true,
+
+        hoverAnimation: true,
+
+        // xAxisIndex: 0,
+        // yAxisIndex: 0,
+
+        layout: null, // 'horizontal' or 'vertical'
+
+        itemStyle: {
+            color: '#c23531', // 阳线 positive
+            color0: '#314656', // 阴线 negative     '#c23531', '#314656'
+            borderWidth: 1,
+            // FIXME
+            // ec2中使用的是lineStyle.color 和 lineStyle.color0
+            borderColor: '#c23531',
+            borderColor0: '#314656'
+        },
+
+        emphasis: {
+            itemStyle: {
+                borderWidth: 2
+            }
+        },
+
+        barMaxWidth: null,
+        barMinWidth: null,
+        barWidth: null,
+
+        large: true,
+        largeThreshold: 600,
+
+        progressive: 3e3,
+        progressiveThreshold: 1e4,
+        progressiveChunkMode: 'mod',
+
+        animationUpdate: false,
+        animationEasing: 'linear',
+        animationDuration: 300
+    },
+
+    /**
+     * Get dimension for shadow in dataZoom
+     * @return {string} dimension name
+     */
+    getShadowDim: function () {
+        return 'open';
+    },
+
+    brushSelector: function (dataIndex, data, selectors) {
+        var itemLayout = data.getItemLayout(dataIndex);
+        return itemLayout && selectors.rect(itemLayout.brushRect);
+    }
+
+});
+
+mixin(CandlestickSeries, seriesModelMixin, true);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var NORMAL_ITEM_STYLE_PATH$1 = ['itemStyle'];
+var EMPHASIS_ITEM_STYLE_PATH$1 = ['emphasis', 'itemStyle'];
+var SKIP_PROPS = ['color', 'color0', 'borderColor', 'borderColor0'];
+
+
+var CandlestickView = Chart.extend({
+
+    type: 'candlestick',
+
+    render: function (seriesModel, ecModel, api) {
+        this._updateDrawMode(seriesModel);
+
+        this._isLargeDraw
+            ? this._renderLarge(seriesModel)
+            : this._renderNormal(seriesModel);
+    },
+
+    incrementalPrepareRender: function (seriesModel, ecModel, api) {
+        this._clear();
+        this._updateDrawMode(seriesModel);
+    },
+
+    incrementalRender: function (params, seriesModel, ecModel, api) {
+        this._isLargeDraw
+             ? this._incrementalRenderLarge(params, seriesModel)
+             : this._incrementalRenderNormal(params, seriesModel);
+    },
+
+    _updateDrawMode: function (seriesModel) {
+        var isLargeDraw = seriesModel.pipelineContext.large;
+        if (this._isLargeDraw == null || isLargeDraw ^ this._isLargeDraw) {
+            this._isLargeDraw = isLargeDraw;
+            this._clear();
+        }
+    },
+
+    _renderNormal: function (seriesModel) {
+        var data = seriesModel.getData();
+        var oldData = this._data;
+        var group = this.group;
+        var isSimpleBox = data.getLayout('isSimpleBox');
+
+        // There is no old data only when first rendering or switching from
+        // stream mode to normal mode, where previous elements should be removed.
+        if (!this._data) {
+            group.removeAll();
+        }
+
+        data.diff(oldData)
+            .add(function (newIdx) {
+                if (data.hasValue(newIdx)) {
+                    var el;
+
+                    var itemLayout = data.getItemLayout(newIdx);
+                    el = createNormalBox$1(itemLayout, newIdx, true);
+                    initProps(el, {shape: {points: itemLayout.ends}}, seriesModel, newIdx);
+
+                    setBoxCommon(el, data, newIdx, isSimpleBox);
+
+                    group.add(el);
+                    data.setItemGraphicEl(newIdx, el);
+                }
+            })
+            .update(function (newIdx, oldIdx) {
+                var el = oldData.getItemGraphicEl(oldIdx);
+
+                // Empty data
+                if (!data.hasValue(newIdx)) {
+                    group.remove(el);
+                    return;
+                }
+
+                var itemLayout = data.getItemLayout(newIdx);
+                if (!el) {
+                    el = createNormalBox$1(itemLayout, newIdx);
+                }
+                else {
+                    updateProps(el, {shape: {points: itemLayout.ends}}, seriesModel, newIdx);
+                }
+
+                setBoxCommon(el, data, newIdx, isSimpleBox);
+
+                group.add(el);
+                data.setItemGraphicEl(newIdx, el);
+            })
+            .remove(function (oldIdx) {
+                var el = oldData.getItemGraphicEl(oldIdx);
+                el && group.remove(el);
+            })
+            .execute();
+
+        this._data = data;
+    },
+
+    _renderLarge: function (seriesModel) {
+        this._clear();
+        createLarge$1(seriesModel, this.group);
+    },
+
+    _incrementalRenderNormal: function (params, seriesModel) {
+        var data = seriesModel.getData();
+        var isSimpleBox = data.getLayout('isSimpleBox');
+
+        var dataIndex;
+        while ((dataIndex = params.next()) != null) {
+            var el;
+
+            var itemLayout = data.getItemLayout(dataIndex);
+            el = createNormalBox$1(itemLayout, dataIndex);
+            setBoxCommon(el, data, dataIndex, isSimpleBox);
+
+            el.incremental = true;
+            this.group.add(el);
