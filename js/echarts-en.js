@@ -63085,3 +63085,262 @@ effectSymbolProto.updateData = function (data, idx) {
 
         this._effectCfg = effectCfg;
     }
+    else {
+        // Not keep old effect config
+        this._effectCfg = null;
+
+        this.stopEffectAnimation();
+        var symbol = this.childAt(0);
+        var onEmphasis = function () {
+            symbol.highlight();
+            if (effectCfg.showEffectOn !== 'render') {
+                this.startEffectAnimation(effectCfg);
+            }
+        };
+        var onNormal = function () {
+            symbol.downplay();
+            if (effectCfg.showEffectOn !== 'render') {
+                this.stopEffectAnimation();
+            }
+        };
+        this.on('mouseover', onEmphasis, this)
+            .on('mouseout', onNormal, this)
+            .on('emphasis', onEmphasis, this)
+            .on('normal', onNormal, this);
+    }
+
+    this._effectCfg = effectCfg;
+};
+
+effectSymbolProto.fadeOut = function (cb) {
+    this.off('mouseover').off('mouseout').off('emphasis').off('normal');
+    cb && cb();
+};
+
+inherits(EffectSymbol, Group);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+extendChartView({
+
+    type: 'effectScatter',
+
+    init: function () {
+        this._symbolDraw = new SymbolDraw(EffectSymbol);
+    },
+
+    render: function (seriesModel, ecModel, api) {
+        var data = seriesModel.getData();
+        var effectSymbolDraw = this._symbolDraw;
+        effectSymbolDraw.updateData(data);
+        this.group.add(effectSymbolDraw.group);
+    },
+
+    updateTransform: function (seriesModel, ecModel, api) {
+        var data = seriesModel.getData();
+
+        this.group.dirty();
+
+        var res = pointsLayout().reset(seriesModel);
+        if (res.progress) {
+            res.progress({ start: 0, end: data.count() }, data);
+        }
+
+        this._symbolDraw.updateLayout(data);
+    },
+
+    _updateGroupTransform: function (seriesModel) {
+        var coordSys = seriesModel.coordinateSystem;
+        if (coordSys && coordSys.getRoamTransform) {
+            this.group.transform = clone$2(coordSys.getRoamTransform());
+            this.group.decomposeTransform();
+        }
+    },
+
+    remove: function (ecModel, api) {
+        this._symbolDraw && this._symbolDraw.remove(api);
+    },
+
+    dispose: function () {}
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+registerVisual(visualSymbol('effectScatter', 'circle'));
+registerLayout(pointsLayout('effectScatter'));
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/* global Uint32Array, Float64Array, Float32Array */
+
+var Uint32Arr = typeof Uint32Array === 'undefined' ? Array : Uint32Array;
+var Float64Arr = typeof Float64Array === 'undefined' ? Array : Float64Array;
+
+function compatEc2(seriesOpt) {
+    var data = seriesOpt.data;
+    if (data && data[0] && data[0][0] && data[0][0].coord) {
+        if (__DEV__) {
+            console.warn('Lines data configuration has been changed to'
+                + ' { coords:[[1,2],[2,3]] }');
+        }
+        seriesOpt.data = map(data, function (itemOpt) {
+            var coords = [
+                itemOpt[0].coord, itemOpt[1].coord
+            ];
+            var target = {
+                coords: coords
+            };
+            if (itemOpt[0].name) {
+                target.fromName = itemOpt[0].name;
+            }
+            if (itemOpt[1].name) {
+                target.toName = itemOpt[1].name;
+            }
+            return mergeAll([target, itemOpt[0], itemOpt[1]]);
+        });
+    }
+}
+
+var LinesSeries = SeriesModel.extend({
+
+    type: 'series.lines',
+
+    dependencies: ['grid', 'polar'],
+
+    visualColorAccessPath: 'lineStyle.color',
+
+    init: function (option) {
+        // The input data may be null/undefined.
+        option.data = option.data || [];
+
+        // Not using preprocessor because mergeOption may not have series.type
+        compatEc2(option);
+
+        var result = this._processFlatCoordsArray(option.data);
+        this._flatCoords = result.flatCoords;
+        this._flatCoordsOffset = result.flatCoordsOffset;
+        if (result.flatCoords) {
+            option.data = new Float32Array(result.count);
+        }
+
+        LinesSeries.superApply(this, 'init', arguments);
+    },
+
+    mergeOption: function (option) {
+        // The input data may be null/undefined.
+        option.data = option.data || [];
+
+        compatEc2(option);
+
+        if (option.data) {
+            // Only update when have option data to merge.
+            var result = this._processFlatCoordsArray(option.data);
+            this._flatCoords = result.flatCoords;
+            this._flatCoordsOffset = result.flatCoordsOffset;
+            if (result.flatCoords) {
+                option.data = new Float32Array(result.count);
+            }
+        }
+
+        LinesSeries.superApply(this, 'mergeOption', arguments);
+    },
+
+    appendData: function (params) {
+        var result = this._processFlatCoordsArray(params.data);
+        if (result.flatCoords) {
+            if (!this._flatCoords) {
+                this._flatCoords = result.flatCoords;
+                this._flatCoordsOffset = result.flatCoordsOffset;
+            }
+            else {
+                this._flatCoords = concatArray(this._flatCoords, result.flatCoords);
+                this._flatCoordsOffset = concatArray(this._flatCoordsOffset, result.flatCoordsOffset);
+            }
+            params.data = new Float32Array(result.count);
+        }
+
+        this.getRawData().appendData(params.data);
+    },
+
+    _getCoordsFromItemModel: function (idx) {
+        var itemModel = this.getData().getItemModel(idx);
+        var coords = (itemModel.option instanceof Array)
+            ? itemModel.option : itemModel.getShallow('coords');
+
+        if (__DEV__) {
+            if (!(coords instanceof Array && coords.length > 0 && coords[0] instanceof Array)) {
+                throw new Error(
+                    'Invalid coords ' + JSON.stringify(coords) + '. Lines must have 2d coords array in data item.'
+                );
+            }
+        }
+        return coords;
+    },
+
+    getLineCoordsCount: function (idx) {
+        if (this._flatCoordsOffset) {
+            return this._flatCoordsOffset[idx * 2 + 1];
+        }
+        else {
+            return this._getCoordsFromItemModel(idx).length;
+        }
+    },
+
+    getLineCoords: function (idx, out) {
+        if (this._flatCoordsOffset) {
+            var offset = this._flatCoordsOffset[idx * 2];
+            var len = this._flatCoordsOffset[idx * 2 + 1];
+            for (var i = 0; i < len; i++) {
+                out[i] = out[i] || [];
+                out[i][0] = this._flatCoords[offset + i * 2];
