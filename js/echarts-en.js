@@ -63344,3 +63344,265 @@ var LinesSeries = SeriesModel.extend({
             for (var i = 0; i < len; i++) {
                 out[i] = out[i] || [];
                 out[i][0] = this._flatCoords[offset + i * 2];
+                out[i][1] = this._flatCoords[offset + i * 2 + 1];
+            }
+            return len;
+        }
+        else {
+            var coords = this._getCoordsFromItemModel(idx);
+            for (var i = 0; i < coords.length; i++) {
+                out[i] = out[i] || [];
+                out[i][0] = coords[i][0];
+                out[i][1] = coords[i][1];
+            }
+            return coords.length;
+        }
+    },
+
+    _processFlatCoordsArray: function (data) {
+        var startOffset = 0;
+        if (this._flatCoords) {
+            startOffset = this._flatCoords.length;
+        }
+        // Stored as a typed array. In format
+        // Points Count(2) | x | y | x | y | Points Count(3) | x |  y | x | y | x | y |
+        if (typeof data[0] === 'number') {
+            var len = data.length;
+            // Store offset and len of each segment
+            var coordsOffsetAndLenStorage = new Uint32Arr(len);
+            var coordsStorage = new Float64Arr(len);
+            var coordsCursor = 0;
+            var offsetCursor = 0;
+            var dataCount = 0;
+            for (var i = 0; i < len;) {
+                dataCount++;
+                var count = data[i++];
+                // Offset
+                coordsOffsetAndLenStorage[offsetCursor++] = coordsCursor + startOffset;
+                // Len
+                coordsOffsetAndLenStorage[offsetCursor++] = count;
+                for (var k = 0; k < count; k++) {
+                    var x = data[i++];
+                    var y = data[i++];
+                    coordsStorage[coordsCursor++] = x;
+                    coordsStorage[coordsCursor++] = y;
+
+                    if (i > len) {
+                        if (__DEV__) {
+                            throw new Error('Invalid data format.');
+                        }
+                    }
+                }
+            }
+
+            return {
+                flatCoordsOffset: new Uint32Array(coordsOffsetAndLenStorage.buffer, 0, offsetCursor),
+                flatCoords: coordsStorage,
+                count: dataCount
+            };
+        }
+
+        return {
+            flatCoordsOffset: null,
+            flatCoords: null,
+            count: data.length
+        };
+    },
+
+    getInitialData: function (option, ecModel) {
+        if (__DEV__) {
+            var CoordSys = CoordinateSystemManager.get(option.coordinateSystem);
+            if (!CoordSys) {
+                throw new Error('Unkown coordinate system ' + option.coordinateSystem);
+            }
+        }
+
+        var lineData = new List(['value'], this);
+        lineData.hasItemOption = false;
+
+        lineData.initData(option.data, [], function (dataItem, dimName, dataIndex, dimIndex) {
+            // dataItem is simply coords
+            if (dataItem instanceof Array) {
+                return NaN;
+            }
+            else {
+                lineData.hasItemOption = true;
+                var value = dataItem.value;
+                if (value != null) {
+                    return value instanceof Array ? value[dimIndex] : value;
+                }
+            }
+        });
+
+        return lineData;
+    },
+
+    formatTooltip: function (dataIndex) {
+        var data = this.getData();
+        var itemModel = data.getItemModel(dataIndex);
+        var name = itemModel.get('name');
+        if (name) {
+            return name;
+        }
+        var fromName = itemModel.get('fromName');
+        var toName = itemModel.get('toName');
+        var html = [];
+        fromName != null && html.push(fromName);
+        toName != null && html.push(toName);
+
+        return encodeHTML(html.join(' > '));
+    },
+
+    preventIncremental: function () {
+        return !!this.get('effect.show');
+    },
+
+    getProgressive: function () {
+        var progressive = this.option.progressive;
+        if (progressive == null) {
+            return this.option.large ? 1e4 : this.get('progressive');
+        }
+        return progressive;
+    },
+
+    getProgressiveThreshold: function () {
+        var progressiveThreshold = this.option.progressiveThreshold;
+        if (progressiveThreshold == null) {
+            return this.option.large ? 2e4 : this.get('progressiveThreshold');
+        }
+        return progressiveThreshold;
+    },
+
+    defaultOption: {
+        coordinateSystem: 'geo',
+        zlevel: 0,
+        z: 2,
+        legendHoverLink: true,
+
+        hoverAnimation: true,
+        // Cartesian coordinate system
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+
+        symbol: ['none', 'none'],
+        symbolSize: [10, 10],
+        // Geo coordinate system
+        geoIndex: 0,
+
+        effect: {
+            show: false,
+            period: 4,
+            // Animation delay. support callback
+            // delay: 0,
+            // If move with constant speed px/sec
+            // period will be ignored if this property is > 0,
+            constantSpeed: 0,
+            symbol: 'circle',
+            symbolSize: 3,
+            loop: true,
+            // Length of trail, 0 - 1
+            trailLength: 0.2
+            // Same with lineStyle.color
+            // color
+        },
+
+        large: false,
+        // Available when large is true
+        largeThreshold: 2000,
+
+        // If lines are polyline
+        // polyline not support curveness, label, animation
+        polyline: false,
+
+        label: {
+            show: false,
+            position: 'end'
+            // distance: 5,
+            // formatter: 标签文本格式器，同Tooltip.formatter，不支持异步回调
+        },
+
+        lineStyle: {
+            opacity: 0.5
+        }
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Provide effect for line
+ * @module echarts/chart/helper/EffectLine
+ */
+
+/**
+ * @constructor
+ * @extends {module:zrender/graphic/Group}
+ * @alias {module:echarts/chart/helper/Line}
+ */
+function EffectLine(lineData, idx, seriesScope) {
+    Group.call(this);
+
+    this.add(this.createLine(lineData, idx, seriesScope));
+
+    this._updateEffectSymbol(lineData, idx);
+}
+
+var effectLineProto = EffectLine.prototype;
+
+effectLineProto.createLine = function (lineData, idx, seriesScope) {
+    return new Line$1(lineData, idx, seriesScope);
+};
+
+effectLineProto._updateEffectSymbol = function (lineData, idx) {
+    var itemModel = lineData.getItemModel(idx);
+    var effectModel = itemModel.getModel('effect');
+    var size = effectModel.get('symbolSize');
+    var symbolType = effectModel.get('symbol');
+    if (!isArray(size)) {
+        size = [size, size];
+    }
+    var color = effectModel.get('color') || lineData.getItemVisual(idx, 'color');
+    var symbol = this.childAt(1);
+
+    if (this._symbolType !== symbolType) {
+        // Remove previous
+        this.remove(symbol);
+
+        symbol = createSymbol(
+            symbolType, -0.5, -0.5, 1, 1, color
+        );
+        symbol.z2 = 100;
+        symbol.culling = true;
+
+        this.add(symbol);
+    }
+
+    // Symbol may be removed if loop is false
+    if (!symbol) {
+        return;
+    }
+
+    // Shadow color is same with color in default
+    symbol.setStyle('shadowColor', color);
+    symbol.setStyle(effectModel.getItemStyle(['color']));
+
+    symbol.attr('scale', size);
+
+    symbol.setColor(color);
