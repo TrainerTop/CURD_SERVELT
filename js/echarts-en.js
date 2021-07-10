@@ -63606,3 +63606,234 @@ effectLineProto._updateEffectSymbol = function (lineData, idx) {
     symbol.attr('scale', size);
 
     symbol.setColor(color);
+    symbol.attr('scale', size);
+
+    this._symbolType = symbolType;
+
+    this._updateEffectAnimation(lineData, effectModel, idx);
+};
+
+effectLineProto._updateEffectAnimation = function (lineData, effectModel, idx) {
+
+    var symbol = this.childAt(1);
+    if (!symbol) {
+        return;
+    }
+
+    var self = this;
+
+    var points = lineData.getItemLayout(idx);
+
+    var period = effectModel.get('period') * 1000;
+    var loop = effectModel.get('loop');
+    var constantSpeed = effectModel.get('constantSpeed');
+    var delayExpr = retrieve(effectModel.get('delay'), function (idx) {
+        return idx / lineData.count() * period / 3;
+    });
+    var isDelayFunc = typeof delayExpr === 'function';
+
+    // Ignore when updating
+    symbol.ignore = true;
+
+    this.updateAnimationPoints(symbol, points);
+
+    if (constantSpeed > 0) {
+        period = this.getLineLength(symbol) / constantSpeed * 1000;
+    }
+
+    if (period !== this._period || loop !== this._loop) {
+
+        symbol.stopAnimation();
+
+        var delay = delayExpr;
+        if (isDelayFunc) {
+            delay = delayExpr(idx);
+        }
+        if (symbol.__t > 0) {
+            delay = -period * symbol.__t;
+        }
+        symbol.__t = 0;
+        var animator = symbol.animate('', loop)
+            .when(period, {
+                __t: 1
+            })
+            .delay(delay)
+            .during(function () {
+                self.updateSymbolPosition(symbol);
+            });
+        if (!loop) {
+            animator.done(function () {
+                self.remove(symbol);
+            });
+        }
+        animator.start();
+    }
+
+    this._period = period;
+    this._loop = loop;
+};
+
+effectLineProto.getLineLength = function (symbol) {
+    // Not so accurate
+    return (dist(symbol.__p1, symbol.__cp1)
+        + dist(symbol.__cp1, symbol.__p2));
+};
+
+effectLineProto.updateAnimationPoints = function (symbol, points) {
+    symbol.__p1 = points[0];
+    symbol.__p2 = points[1];
+    symbol.__cp1 = points[2] || [
+        (points[0][0] + points[1][0]) / 2,
+        (points[0][1] + points[1][1]) / 2
+    ];
+};
+
+effectLineProto.updateData = function (lineData, idx, seriesScope) {
+    this.childAt(0).updateData(lineData, idx, seriesScope);
+    this._updateEffectSymbol(lineData, idx);
+};
+
+effectLineProto.updateSymbolPosition = function (symbol) {
+    var p1 = symbol.__p1;
+    var p2 = symbol.__p2;
+    var cp1 = symbol.__cp1;
+    var t = symbol.__t;
+    var pos = symbol.position;
+    var quadraticAt$$1 = quadraticAt;
+    var quadraticDerivativeAt$$1 = quadraticDerivativeAt;
+    pos[0] = quadraticAt$$1(p1[0], cp1[0], p2[0], t);
+    pos[1] = quadraticAt$$1(p1[1], cp1[1], p2[1], t);
+
+    // Tangent
+    var tx = quadraticDerivativeAt$$1(p1[0], cp1[0], p2[0], t);
+    var ty = quadraticDerivativeAt$$1(p1[1], cp1[1], p2[1], t);
+
+    symbol.rotation = -Math.atan2(ty, tx) - Math.PI / 2;
+
+    symbol.ignore = false;
+};
+
+
+effectLineProto.updateLayout = function (lineData, idx) {
+    this.childAt(0).updateLayout(lineData, idx);
+
+    var effectModel = lineData.getItemModel(idx).getModel('effect');
+    this._updateEffectAnimation(lineData, effectModel, idx);
+};
+
+inherits(EffectLine, Group);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @module echarts/chart/helper/Line
+ */
+
+/**
+ * @constructor
+ * @extends {module:zrender/graphic/Group}
+ * @alias {module:echarts/chart/helper/Polyline}
+ */
+function Polyline$2(lineData, idx, seriesScope) {
+    Group.call(this);
+
+    this._createPolyline(lineData, idx, seriesScope);
+}
+
+var polylineProto = Polyline$2.prototype;
+
+polylineProto._createPolyline = function (lineData, idx, seriesScope) {
+    // var seriesModel = lineData.hostModel;
+    var points = lineData.getItemLayout(idx);
+
+    var line = new Polyline({
+        shape: {
+            points: points
+        }
+    });
+
+    this.add(line);
+
+    this._updateCommonStl(lineData, idx, seriesScope);
+};
+
+polylineProto.updateData = function (lineData, idx, seriesScope) {
+    var seriesModel = lineData.hostModel;
+
+    var line = this.childAt(0);
+    var target = {
+        shape: {
+            points: lineData.getItemLayout(idx)
+        }
+    };
+    updateProps(line, target, seriesModel, idx);
+
+    this._updateCommonStl(lineData, idx, seriesScope);
+};
+
+polylineProto._updateCommonStl = function (lineData, idx, seriesScope) {
+    var line = this.childAt(0);
+    var itemModel = lineData.getItemModel(idx);
+
+    var visualColor = lineData.getItemVisual(idx, 'color');
+
+    var lineStyle = seriesScope && seriesScope.lineStyle;
+    var hoverLineStyle = seriesScope && seriesScope.hoverLineStyle;
+
+    if (!seriesScope || lineData.hasItemOption) {
+        lineStyle = itemModel.getModel('lineStyle').getLineStyle();
+        hoverLineStyle = itemModel.getModel('emphasis.lineStyle').getLineStyle();
+    }
+    line.useStyle(defaults(
+        {
+            strokeNoScale: true,
+            fill: 'none',
+            stroke: visualColor
+        },
+        lineStyle
+    ));
+    line.hoverStyle = hoverLineStyle;
+
+    setHoverStyle(this);
+};
+
+polylineProto.updateLayout = function (lineData, idx) {
+    var polyline = this.childAt(0);
+    polyline.setShape('points', lineData.getItemLayout(idx));
+};
+
+inherits(Polyline$2, Group);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
