@@ -64094,3 +64094,254 @@ largeLineProto.updateData = function (data) {
 };
 
 /**
+ * @override
+ */
+largeLineProto.incrementalPrepareUpdate = function (data) {
+    this.group.removeAll();
+
+    this._clearIncremental();
+
+    if (data.count() > 5e5) {
+        if (!this._incremental) {
+            this._incremental = new IncrementalDisplayble({
+                silent: true
+            });
+        }
+        this.group.add(this._incremental);
+    }
+    else {
+        this._incremental = null;
+    }
+};
+
+/**
+ * @override
+ */
+largeLineProto.incrementalUpdate = function (taskParams, data) {
+    var lineEl = new LargeLineShape();
+    lineEl.setShape({
+        segs: data.getLayout('linesPoints')
+    });
+
+    this._setCommon(lineEl, data, !!this._incremental);
+
+    if (!this._incremental) {
+        lineEl.rectHover = true;
+        lineEl.cursor = 'default';
+        lineEl.__startIndex = taskParams.start;
+        this.group.add(lineEl);
+    }
+    else {
+        this._incremental.addDisplayable(lineEl, true);
+    }
+};
+
+/**
+ * @override
+ */
+largeLineProto.remove = function () {
+    this._clearIncremental();
+    this._incremental = null;
+    this.group.removeAll();
+};
+
+largeLineProto._setCommon = function (lineEl, data, isIncremental) {
+    var hostModel = data.hostModel;
+
+    lineEl.setShape({
+        polyline: hostModel.get('polyline'),
+        curveness: hostModel.get('lineStyle.curveness')
+    });
+
+    lineEl.useStyle(
+        hostModel.getModel('lineStyle').getLineStyle()
+    );
+    lineEl.style.strokeNoScale = true;
+
+    var visualColor = data.getVisual('color');
+    if (visualColor) {
+        lineEl.setStyle('stroke', visualColor);
+    }
+    lineEl.setStyle('fill');
+
+    if (!isIncremental) {
+        // Enable tooltip
+        // PENDING May have performance issue when path is extremely large
+        lineEl.seriesIndex = hostModel.seriesIndex;
+        lineEl.on('mousemove', function (e) {
+            lineEl.dataIndex = null;
+            var dataIndex = lineEl.findDataIndex(e.offsetX, e.offsetY);
+            if (dataIndex > 0) {
+                // Provide dataIndex for tooltip
+                lineEl.dataIndex = dataIndex + lineEl.__startIndex;
+            }
+        });
+    }
+};
+
+largeLineProto._clearIncremental = function () {
+    var incremental = this._incremental;
+    if (incremental) {
+        incremental.clearDisplaybles();
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/* global Float32Array */
+
+var linesLayout = {
+    seriesType: 'lines',
+
+    plan: createRenderPlanner(),
+
+    reset: function (seriesModel) {
+        var coordSys = seriesModel.coordinateSystem;
+        var isPolyline = seriesModel.get('polyline');
+        var isLarge = seriesModel.pipelineContext.large;
+
+        function progress(params, lineData) {
+            var lineCoords = [];
+            if (isLarge) {
+                var points;
+                var segCount = params.end - params.start;
+                if (isPolyline) {
+                    var totalCoordsCount = 0;
+                    for (var i = params.start; i < params.end; i++) {
+                        totalCoordsCount += seriesModel.getLineCoordsCount(i);
+                    }
+                    points = new Float32Array(segCount + totalCoordsCount * 2);
+                }
+                else {
+                    points = new Float32Array(segCount * 4);
+                }
+
+                var offset = 0;
+                var pt = [];
+                for (var i = params.start; i < params.end; i++) {
+                    var len = seriesModel.getLineCoords(i, lineCoords);
+                    if (isPolyline) {
+                        points[offset++] = len;
+                    }
+                    for (var k = 0; k < len; k++) {
+                        pt = coordSys.dataToPoint(lineCoords[k], false, pt);
+                        points[offset++] = pt[0];
+                        points[offset++] = pt[1];
+                    }
+                }
+
+                lineData.setLayout('linesPoints', points);
+            }
+            else {
+                for (var i = params.start; i < params.end; i++) {
+                    var itemModel = lineData.getItemModel(i);
+                    var len = seriesModel.getLineCoords(i, lineCoords);
+
+                    var pts = [];
+                    if (isPolyline) {
+                        for (var j = 0; j < len; j++) {
+                            pts.push(coordSys.dataToPoint(lineCoords[j]));
+                        }
+                    }
+                    else {
+                        pts[0] = coordSys.dataToPoint(lineCoords[0]);
+                        pts[1] = coordSys.dataToPoint(lineCoords[1]);
+
+                        var curveness = itemModel.get('lineStyle.curveness');
+                        if (+curveness) {
+                            pts[2] = [
+                                (pts[0][0] + pts[1][0]) / 2 - (pts[0][1] - pts[1][1]) * curveness,
+                                (pts[0][1] + pts[1][1]) / 2 - (pts[1][0] - pts[0][0]) * curveness
+                            ];
+                        }
+                    }
+                    lineData.setItemLayout(i, pts);
+                }
+            }
+        }
+
+        return { progress: progress };
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+extendChartView({
+
+    type: 'lines',
+
+    init: function () {},
+
+    render: function (seriesModel, ecModel, api) {
+        var data = seriesModel.getData();
+
+        var lineDraw = this._updateLineDraw(data, seriesModel);
+
+        var zlevel = seriesModel.get('zlevel');
+        var trailLength = seriesModel.get('effect.trailLength');
+
+        var zr = api.getZr();
+        // Avoid the drag cause ghost shadow
+        // FIXME Better way ?
+        // SVG doesn't support
+        var isSvg = zr.painter.getType() === 'svg';
+        if (!isSvg) {
+            zr.painter.getLayer(zlevel).clear(true);
+        }
+        // Config layer with motion blur
+        if (this._lastZlevel != null && !isSvg) {
+            zr.configLayer(this._lastZlevel, {
+                motionBlur: false
+            });
+        }
+        if (this._showEffect(seriesModel) && trailLength) {
+            if (__DEV__) {
+                var notInIndividual = false;
+                ecModel.eachSeries(function (otherSeriesModel) {
+                    if (otherSeriesModel !== seriesModel && otherSeriesModel.get('zlevel') === zlevel) {
+                        notInIndividual = true;
+                    }
+                });
+                notInIndividual && console.warn('Lines with trail effect should have an individual zlevel');
+            }
+
+            if (!isSvg) {
+                zr.configLayer(zlevel, {
+                    motionBlur: true,
+                    lastFrameAlpha: Math.max(Math.min(trailLength / 10 + 0.9, 1), 0)
+                });
+            }
