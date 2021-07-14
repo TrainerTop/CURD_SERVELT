@@ -64345,3 +64345,278 @@ extendChartView({
                     lastFrameAlpha: Math.max(Math.min(trailLength / 10 + 0.9, 1), 0)
                 });
             }
+        }
+
+        lineDraw.updateData(data);
+
+        this._lastZlevel = zlevel;
+
+        this._finished = true;
+    },
+
+    incrementalPrepareRender: function (seriesModel, ecModel, api) {
+        var data = seriesModel.getData();
+
+        var lineDraw = this._updateLineDraw(data, seriesModel);
+
+        lineDraw.incrementalPrepareUpdate(data);
+
+        this._clearLayer(api);
+
+        this._finished = false;
+    },
+
+    incrementalRender: function (taskParams, seriesModel, ecModel) {
+        this._lineDraw.incrementalUpdate(taskParams, seriesModel.getData());
+
+        this._finished = taskParams.end === seriesModel.getData().count();
+    },
+
+    updateTransform: function (seriesModel, ecModel, api) {
+        var data = seriesModel.getData();
+        var pipelineContext = seriesModel.pipelineContext;
+
+        if (!this._finished || pipelineContext.large || pipelineContext.progressiveRender) {
+            // TODO Don't have to do update in large mode. Only do it when there are millions of data.
+            return {
+                update: true
+            };
+        }
+        else {
+            // TODO Use same logic with ScatterView.
+            // Manually update layout
+            var res = linesLayout.reset(seriesModel);
+            if (res.progress) {
+                res.progress({ start: 0, end: data.count() }, data);
+            }
+            this._lineDraw.updateLayout();
+            this._clearLayer(api);
+        }
+    },
+
+    _updateLineDraw: function (data, seriesModel) {
+        var lineDraw = this._lineDraw;
+        var hasEffect = this._showEffect(seriesModel);
+        var isPolyline = !!seriesModel.get('polyline');
+        var pipelineContext = seriesModel.pipelineContext;
+        var isLargeDraw = pipelineContext.large;
+
+        if (__DEV__) {
+            if (hasEffect && isLargeDraw) {
+                console.warn('Large lines not support effect');
+            }
+        }
+        if (!lineDraw
+            || hasEffect !== this._hasEffet
+            || isPolyline !== this._isPolyline
+            || isLargeDraw !== this._isLargeDraw
+        ) {
+            if (lineDraw) {
+                lineDraw.remove();
+            }
+            lineDraw = this._lineDraw = isLargeDraw
+                ? new LargeLineDraw()
+                : new LineDraw(
+                    isPolyline
+                        ? (hasEffect ? EffectPolyline : Polyline$2)
+                        : (hasEffect ? EffectLine : Line$1)
+                );
+            this._hasEffet = hasEffect;
+            this._isPolyline = isPolyline;
+            this._isLargeDraw = isLargeDraw;
+            this.group.removeAll();
+        }
+
+        this.group.add(lineDraw.group);
+
+        return lineDraw;
+    },
+
+    _showEffect: function (seriesModel) {
+        return !!seriesModel.get('effect.show');
+    },
+
+    _clearLayer: function (api) {
+        // Not use motion when dragging or zooming
+        var zr = api.getZr();
+        var isSvg = zr.painter.getType() === 'svg';
+        if (!isSvg && this._lastZlevel != null) {
+            zr.painter.getLayer(this._lastZlevel).clear(true);
+        }
+    },
+
+    remove: function (ecModel, api) {
+        this._lineDraw && this._lineDraw.remove();
+        this._lineDraw = null;
+        // Clear motion when lineDraw is removed
+        this._clearLayer(api);
+    },
+
+    dispose: function () {}
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+function normalize$2(a) {
+    if (!(a instanceof Array)) {
+        a = [a, a];
+    }
+    return a;
+}
+
+var opacityQuery = 'lineStyle.opacity'.split('.');
+
+var linesVisual = {
+    seriesType: 'lines',
+    reset: function (seriesModel, ecModel, api) {
+        var symbolType = normalize$2(seriesModel.get('symbol'));
+        var symbolSize = normalize$2(seriesModel.get('symbolSize'));
+        var data = seriesModel.getData();
+
+        data.setVisual('fromSymbol', symbolType && symbolType[0]);
+        data.setVisual('toSymbol', symbolType && symbolType[1]);
+        data.setVisual('fromSymbolSize', symbolSize && symbolSize[0]);
+        data.setVisual('toSymbolSize', symbolSize && symbolSize[1]);
+        data.setVisual('opacity', seriesModel.get(opacityQuery));
+
+        function dataEach(data, idx) {
+            var itemModel = data.getItemModel(idx);
+            var symbolType = normalize$2(itemModel.getShallow('symbol', true));
+            var symbolSize = normalize$2(itemModel.getShallow('symbolSize', true));
+            var opacity = itemModel.get(opacityQuery);
+
+            symbolType[0] && data.setItemVisual(idx, 'fromSymbol', symbolType[0]);
+            symbolType[1] && data.setItemVisual(idx, 'toSymbol', symbolType[1]);
+            symbolSize[0] && data.setItemVisual(idx, 'fromSymbolSize', symbolSize[0]);
+            symbolSize[1] && data.setItemVisual(idx, 'toSymbolSize', symbolSize[1]);
+
+            data.setItemVisual(idx, 'opacity', opacity);
+        }
+
+        return {dataEach: data.hasItemOption ? dataEach : null};
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+registerLayout(linesLayout);
+registerVisual(linesVisual);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+SeriesModel.extend({
+    type: 'series.heatmap',
+
+    getInitialData: function (option, ecModel) {
+        return createListFromArray(this.getSource(), this, {
+            generateCoord: 'value'
+        });
+    },
+
+    preventIncremental: function () {
+        var coordSysCreator = CoordinateSystemManager.get(this.get('coordinateSystem'));
+        if (coordSysCreator && coordSysCreator.dimensions) {
+            return coordSysCreator.dimensions[0] === 'lng' && coordSysCreator.dimensions[1] === 'lat';
+        }
+    },
+
+    defaultOption: {
+
+        // Cartesian2D or geo
+        coordinateSystem: 'cartesian2d',
+
+        zlevel: 0,
+
+        z: 2,
+
+        // Cartesian coordinate system
+        // xAxisIndex: 0,
+        // yAxisIndex: 0,
+
+        // Geo coordinate system
+        geoIndex: 0,
+
+        blurSize: 30,
+
+        pointSize: 20,
+
+        maxOpacity: 1,
+
+        minOpacity: 0
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/* global Uint8ClampedArray */
+
+/**
