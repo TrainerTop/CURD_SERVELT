@@ -64879,3 +64879,314 @@ extendChartView({
     incrementalPrepareRender: function (seriesModel, ecModel, api) {
         this.group.removeAll();
     },
+
+    incrementalRender: function (params, seriesModel, ecModel, api) {
+        var coordSys = seriesModel.coordinateSystem;
+        if (coordSys) {
+            this._renderOnCartesianAndCalendar(seriesModel, api, params.start, params.end, true);
+        }
+    },
+
+    _renderOnCartesianAndCalendar: function (seriesModel, api, start, end, incremental) {
+
+        var coordSys = seriesModel.coordinateSystem;
+        var width;
+        var height;
+
+        if (coordSys.type === 'cartesian2d') {
+            var xAxis = coordSys.getAxis('x');
+            var yAxis = coordSys.getAxis('y');
+
+            if (__DEV__) {
+                if (!(xAxis.type === 'category' && yAxis.type === 'category')) {
+                    throw new Error('Heatmap on cartesian must have two category axes');
+                }
+                if (!(xAxis.onBand && yAxis.onBand)) {
+                    throw new Error('Heatmap on cartesian must have two axes with boundaryGap true');
+                }
+            }
+
+            width = xAxis.getBandWidth();
+            height = yAxis.getBandWidth();
+        }
+
+        var group = this.group;
+        var data = seriesModel.getData();
+
+        var itemStyleQuery = 'itemStyle';
+        var hoverItemStyleQuery = 'emphasis.itemStyle';
+        var labelQuery = 'label';
+        var hoverLabelQuery = 'emphasis.label';
+        var style = seriesModel.getModel(itemStyleQuery).getItemStyle(['color']);
+        var hoverStl = seriesModel.getModel(hoverItemStyleQuery).getItemStyle();
+        var labelModel = seriesModel.getModel(labelQuery);
+        var hoverLabelModel = seriesModel.getModel(hoverLabelQuery);
+        var coordSysType = coordSys.type;
+
+
+        var dataDims = coordSysType === 'cartesian2d'
+            ? [
+                data.mapDimension('x'),
+                data.mapDimension('y'),
+                data.mapDimension('value')
+            ]
+            : [
+                data.mapDimension('time'),
+                data.mapDimension('value')
+            ];
+
+        for (var idx = start; idx < end; idx++) {
+            var rect;
+
+            if (coordSysType === 'cartesian2d') {
+                // Ignore empty data
+                if (isNaN(data.get(dataDims[2], idx))) {
+                    continue;
+                }
+
+                var point = coordSys.dataToPoint([
+                    data.get(dataDims[0], idx),
+                    data.get(dataDims[1], idx)
+                ]);
+
+                rect = new Rect({
+                    shape: {
+                        x: point[0] - width / 2,
+                        y: point[1] - height / 2,
+                        width: width,
+                        height: height
+                    },
+                    style: {
+                        fill: data.getItemVisual(idx, 'color'),
+                        opacity: data.getItemVisual(idx, 'opacity')
+                    }
+                });
+            }
+            else {
+                // Ignore empty data
+                if (isNaN(data.get(dataDims[1], idx))) {
+                    continue;
+                }
+
+                rect = new Rect({
+                    z2: 1,
+                    shape: coordSys.dataToRect([data.get(dataDims[0], idx)]).contentShape,
+                    style: {
+                        fill: data.getItemVisual(idx, 'color'),
+                        opacity: data.getItemVisual(idx, 'opacity')
+                    }
+                });
+            }
+
+            var itemModel = data.getItemModel(idx);
+
+            // Optimization for large datset
+            if (data.hasItemOption) {
+                style = itemModel.getModel(itemStyleQuery).getItemStyle(['color']);
+                hoverStl = itemModel.getModel(hoverItemStyleQuery).getItemStyle();
+                labelModel = itemModel.getModel(labelQuery);
+                hoverLabelModel = itemModel.getModel(hoverLabelQuery);
+            }
+
+            var rawValue = seriesModel.getRawValue(idx);
+            var defaultText = '-';
+            if (rawValue && rawValue[2] != null) {
+                defaultText = rawValue[2];
+            }
+
+            setLabelStyle(
+                style, hoverStl, labelModel, hoverLabelModel,
+                {
+                    labelFetcher: seriesModel,
+                    labelDataIndex: idx,
+                    defaultText: defaultText,
+                    isRectText: true
+                }
+            );
+
+            rect.setStyle(style);
+            setHoverStyle(rect, data.hasItemOption ? hoverStl : extend({}, hoverStl));
+
+            rect.incremental = incremental;
+            // PENDING
+            if (incremental) {
+                // Rect must use hover layer if it's incremental.
+                rect.useHoverLayer = true;
+            }
+
+            group.add(rect);
+            data.setItemGraphicEl(idx, rect);
+        }
+    },
+
+    _renderOnGeo: function (geo, seriesModel, visualMapModel, api) {
+        var inRangeVisuals = visualMapModel.targetVisuals.inRange;
+        var outOfRangeVisuals = visualMapModel.targetVisuals.outOfRange;
+        // if (!visualMapping) {
+        //     throw new Error('Data range must have color visuals');
+        // }
+
+        var data = seriesModel.getData();
+        var hmLayer = this._hmLayer || (this._hmLayer || new Heatmap());
+        hmLayer.blurSize = seriesModel.get('blurSize');
+        hmLayer.pointSize = seriesModel.get('pointSize');
+        hmLayer.minOpacity = seriesModel.get('minOpacity');
+        hmLayer.maxOpacity = seriesModel.get('maxOpacity');
+
+        var rect = geo.getViewRect().clone();
+        var roamTransform = geo.getRoamTransform();
+        rect.applyTransform(roamTransform);
+
+        // Clamp on viewport
+        var x = Math.max(rect.x, 0);
+        var y = Math.max(rect.y, 0);
+        var x2 = Math.min(rect.width + rect.x, api.getWidth());
+        var y2 = Math.min(rect.height + rect.y, api.getHeight());
+        var width = x2 - x;
+        var height = y2 - y;
+
+        var dims = [
+            data.mapDimension('lng'),
+            data.mapDimension('lat'),
+            data.mapDimension('value')
+        ];
+
+        var points = data.mapArray(dims, function (lng, lat, value) {
+            var pt = geo.dataToPoint([lng, lat]);
+            pt[0] -= x;
+            pt[1] -= y;
+            pt.push(value);
+            return pt;
+        });
+
+        var dataExtent = visualMapModel.getExtent();
+        var isInRange = visualMapModel.type === 'visualMap.continuous'
+            ? getIsInContinuousRange(dataExtent, visualMapModel.option.range)
+            : getIsInPiecewiseRange(
+                dataExtent, visualMapModel.getPieceList(), visualMapModel.option.selected
+            );
+
+        hmLayer.update(
+            points, width, height,
+            inRangeVisuals.color.getNormalizer(),
+            {
+                inRange: inRangeVisuals.color.getColorMapper(),
+                outOfRange: outOfRangeVisuals.color.getColorMapper()
+            },
+            isInRange
+        );
+        var img = new ZImage({
+            style: {
+                width: width,
+                height: height,
+                x: x,
+                y: y,
+                image: hmLayer.canvas
+            },
+            silent: true
+        });
+        this.group.add(img);
+    },
+
+    dispose: function () {}
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var PictorialBarSeries = BaseBarSeries.extend({
+
+    type: 'series.pictorialBar',
+
+    dependencies: ['grid'],
+
+    defaultOption: {
+        symbol: 'circle',     // Customized bar shape
+        symbolSize: null,     // Can be ['100%', '100%'], null means auto.
+        symbolRotate: null,
+
+        symbolPosition: null, // 'start' or 'end' or 'center', null means auto.
+        symbolOffset: null,
+        symbolMargin: null,   // start margin and end margin. Can be a number or a percent string.
+                                // Auto margin by defualt.
+        symbolRepeat: false,  // false/null/undefined, means no repeat.
+                                // Can be true, means auto calculate repeat times and cut by data.
+                                // Can be a number, specifies repeat times, and do not cut by data.
+                                // Can be 'fixed', means auto calculate repeat times but do not cut by data.
+        symbolRepeatDirection: 'end', // 'end' means from 'start' to 'end'.
+
+        symbolClip: false,
+        symbolBoundingData: null, // Can be 60 or -40 or [-40, 60]
+        symbolPatternSize: 400, // 400 * 400 px
+
+        barGap: '-100%',      // In most case, overlap is needed.
+
+        // z can be set in data item, which is z2 actually.
+
+        // Disable progressive
+        progressive: 0,
+        hoverAnimation: false // Open only when needed.
+    },
+
+    getInitialData: function (option) {
+        // Disable stack.
+        option.stack = null;
+        return PictorialBarSeries.superApply(this, 'getInitialData', arguments);
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var BAR_BORDER_WIDTH_QUERY$1 = ['itemStyle', 'borderWidth'];
