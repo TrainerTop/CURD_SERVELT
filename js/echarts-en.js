@@ -65190,3 +65190,261 @@ var PictorialBarSeries = BaseBarSeries.extend({
 */
 
 var BAR_BORDER_WIDTH_QUERY$1 = ['itemStyle', 'borderWidth'];
+
+// index: +isHorizontal
+var LAYOUT_ATTRS = [
+    {xy: 'x', wh: 'width', index: 0, posDesc: ['left', 'right']},
+    {xy: 'y', wh: 'height', index: 1, posDesc: ['top', 'bottom']}
+];
+
+var pathForLineWidth = new Circle();
+
+var BarView$1 = extendChartView({
+
+    type: 'pictorialBar',
+
+    render: function (seriesModel, ecModel, api) {
+        var group = this.group;
+        var data = seriesModel.getData();
+        var oldData = this._data;
+
+        var cartesian = seriesModel.coordinateSystem;
+        var baseAxis = cartesian.getBaseAxis();
+        var isHorizontal = !!baseAxis.isHorizontal();
+        var coordSysRect = cartesian.grid.getRect();
+
+        var opt = {
+            ecSize: {width: api.getWidth(), height: api.getHeight()},
+            seriesModel: seriesModel,
+            coordSys: cartesian,
+            coordSysExtent: [
+                [coordSysRect.x, coordSysRect.x + coordSysRect.width],
+                [coordSysRect.y, coordSysRect.y + coordSysRect.height]
+            ],
+            isHorizontal: isHorizontal,
+            valueDim: LAYOUT_ATTRS[+isHorizontal],
+            categoryDim: LAYOUT_ATTRS[1 - isHorizontal]
+        };
+
+        data.diff(oldData)
+            .add(function (dataIndex) {
+                if (!data.hasValue(dataIndex)) {
+                    return;
+                }
+
+                var itemModel = getItemModel(data, dataIndex);
+                var symbolMeta = getSymbolMeta(data, dataIndex, itemModel, opt);
+
+                var bar = createBar(data, opt, symbolMeta);
+
+                data.setItemGraphicEl(dataIndex, bar);
+                group.add(bar);
+
+                updateCommon$1(bar, opt, symbolMeta);
+            })
+            .update(function (newIndex, oldIndex) {
+                var bar = oldData.getItemGraphicEl(oldIndex);
+
+                if (!data.hasValue(newIndex)) {
+                    group.remove(bar);
+                    return;
+                }
+
+                var itemModel = getItemModel(data, newIndex);
+                var symbolMeta = getSymbolMeta(data, newIndex, itemModel, opt);
+
+                var pictorialShapeStr = getShapeStr(data, symbolMeta);
+                if (bar && pictorialShapeStr !== bar.__pictorialShapeStr) {
+                    group.remove(bar);
+                    data.setItemGraphicEl(newIndex, null);
+                    bar = null;
+                }
+
+                if (bar) {
+                    updateBar(bar, opt, symbolMeta);
+                }
+                else {
+                    bar = createBar(data, opt, symbolMeta, true);
+                }
+
+                data.setItemGraphicEl(newIndex, bar);
+                bar.__pictorialSymbolMeta = symbolMeta;
+                // Add back
+                group.add(bar);
+
+                updateCommon$1(bar, opt, symbolMeta);
+            })
+            .remove(function (dataIndex) {
+                var bar = oldData.getItemGraphicEl(dataIndex);
+                bar && removeBar(oldData, dataIndex, bar.__pictorialSymbolMeta.animationModel, bar);
+            })
+            .execute();
+
+        this._data = data;
+
+        return this.group;
+    },
+
+    dispose: noop,
+
+    remove: function (ecModel, api) {
+        var group = this.group;
+        var data = this._data;
+        if (ecModel.get('animation')) {
+            if (data) {
+                data.eachItemGraphicEl(function (bar) {
+                    removeBar(data, bar.dataIndex, ecModel, bar);
+                });
+            }
+        }
+        else {
+            group.removeAll();
+        }
+    }
+});
+
+
+// Set or calculate default value about symbol, and calculate layout info.
+function getSymbolMeta(data, dataIndex, itemModel, opt) {
+    var layout = data.getItemLayout(dataIndex);
+    var symbolRepeat = itemModel.get('symbolRepeat');
+    var symbolClip = itemModel.get('symbolClip');
+    var symbolPosition = itemModel.get('symbolPosition') || 'start';
+    var symbolRotate = itemModel.get('symbolRotate');
+    var rotation = (symbolRotate || 0) * Math.PI / 180 || 0;
+    var symbolPatternSize = itemModel.get('symbolPatternSize') || 2;
+    var isAnimationEnabled = itemModel.isAnimationEnabled();
+
+    var symbolMeta = {
+        dataIndex: dataIndex,
+        layout: layout,
+        itemModel: itemModel,
+        symbolType: data.getItemVisual(dataIndex, 'symbol') || 'circle',
+        color: data.getItemVisual(dataIndex, 'color'),
+        symbolClip: symbolClip,
+        symbolRepeat: symbolRepeat,
+        symbolRepeatDirection: itemModel.get('symbolRepeatDirection'),
+        symbolPatternSize: symbolPatternSize,
+        rotation: rotation,
+        animationModel: isAnimationEnabled ? itemModel : null,
+        hoverAnimation: isAnimationEnabled && itemModel.get('hoverAnimation'),
+        z2: itemModel.getShallow('z', true) || 0
+    };
+
+    prepareBarLength(itemModel, symbolRepeat, layout, opt, symbolMeta);
+
+    prepareSymbolSize(
+        data, dataIndex, layout, symbolRepeat, symbolClip, symbolMeta.boundingLength,
+        symbolMeta.pxSign, symbolPatternSize, opt, symbolMeta
+    );
+
+    prepareLineWidth(itemModel, symbolMeta.symbolScale, rotation, opt, symbolMeta);
+
+    var symbolSize = symbolMeta.symbolSize;
+    var symbolOffset = itemModel.get('symbolOffset');
+    if (isArray(symbolOffset)) {
+        symbolOffset = [
+            parsePercent$1(symbolOffset[0], symbolSize[0]),
+            parsePercent$1(symbolOffset[1], symbolSize[1])
+        ];
+    }
+
+    prepareLayoutInfo(
+        itemModel, symbolSize, layout, symbolRepeat, symbolClip, symbolOffset,
+        symbolPosition, symbolMeta.valueLineWidth, symbolMeta.boundingLength, symbolMeta.repeatCutLength,
+        opt, symbolMeta
+    );
+
+    return symbolMeta;
+}
+
+// bar length can be negative.
+function prepareBarLength(itemModel, symbolRepeat, layout, opt, output) {
+    var valueDim = opt.valueDim;
+    var symbolBoundingData = itemModel.get('symbolBoundingData');
+    var valueAxis = opt.coordSys.getOtherAxis(opt.coordSys.getBaseAxis());
+    var zeroPx = valueAxis.toGlobalCoord(valueAxis.dataToCoord(0));
+    var pxSignIdx = 1 - +(layout[valueDim.wh] <= 0);
+    var boundingLength;
+
+    if (isArray(symbolBoundingData)) {
+        var symbolBoundingExtent = [
+            convertToCoordOnAxis(valueAxis, symbolBoundingData[0]) - zeroPx,
+            convertToCoordOnAxis(valueAxis, symbolBoundingData[1]) - zeroPx
+        ];
+        symbolBoundingExtent[1] < symbolBoundingExtent[0] && (symbolBoundingExtent.reverse());
+        boundingLength = symbolBoundingExtent[pxSignIdx];
+    }
+    else if (symbolBoundingData != null) {
+        boundingLength = convertToCoordOnAxis(valueAxis, symbolBoundingData) - zeroPx;
+    }
+    else if (symbolRepeat) {
+        boundingLength = opt.coordSysExtent[valueDim.index][pxSignIdx] - zeroPx;
+    }
+    else {
+        boundingLength = layout[valueDim.wh];
+    }
+
+    output.boundingLength = boundingLength;
+
+    if (symbolRepeat) {
+        output.repeatCutLength = layout[valueDim.wh];
+    }
+
+    output.pxSign = boundingLength > 0 ? 1 : boundingLength < 0 ? -1 : 0;
+}
+
+function convertToCoordOnAxis(axis, value) {
+    return axis.toGlobalCoord(axis.dataToCoord(axis.scale.parse(value)));
+}
+
+// Support ['100%', '100%']
+function prepareSymbolSize(
+    data, dataIndex, layout, symbolRepeat, symbolClip, boundingLength,
+    pxSign, symbolPatternSize, opt, output
+) {
+    var valueDim = opt.valueDim;
+    var categoryDim = opt.categoryDim;
+    var categorySize = Math.abs(layout[categoryDim.wh]);
+
+    var symbolSize = data.getItemVisual(dataIndex, 'symbolSize');
+    if (isArray(symbolSize)) {
+        symbolSize = symbolSize.slice();
+    }
+    else {
+        if (symbolSize == null) {
+            symbolSize = '100%';
+        }
+        symbolSize = [symbolSize, symbolSize];
+    }
+
+    // Note: percentage symbolSize (like '100%') do not consider lineWidth, because it is
+    // to complicated to calculate real percent value if considering scaled lineWidth.
+    // So the actual size will bigger than layout size if lineWidth is bigger than zero,
+    // which can be tolerated in pictorial chart.
+
+    symbolSize[categoryDim.index] = parsePercent$1(
+        symbolSize[categoryDim.index],
+        categorySize
+    );
+    symbolSize[valueDim.index] = parsePercent$1(
+        symbolSize[valueDim.index],
+        symbolRepeat ? categorySize : Math.abs(boundingLength)
+    );
+
+    output.symbolSize = symbolSize;
+
+    // If x or y is less than zero, show reversed shape.
+    var symbolScale = output.symbolScale = [
+        symbolSize[0] / symbolPatternSize,
+        symbolSize[1] / symbolPatternSize
+    ];
+    // Follow convention, 'right' and 'top' is the normal scale.
+    symbolScale[valueDim.index] *= (opt.isHorizontal ? -1 : 1) * pxSign;
+}
+
+function prepareLineWidth(itemModel, symbolScale, rotation, opt, output) {
+    // In symbols are drawn with scale, so do not need to care about the case that width
+    // or height are too small. But symbol use strokeNoScale, where acture lineWidth should
+    // be calculated.
+    var valueLineWidth = itemModel.get(BAR_BORDER_WIDTH_QUERY$1) || 0;
