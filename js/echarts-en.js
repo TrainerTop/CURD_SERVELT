@@ -65448,3 +65448,295 @@ function prepareLineWidth(itemModel, symbolScale, rotation, opt, output) {
     // or height are too small. But symbol use strokeNoScale, where acture lineWidth should
     // be calculated.
     var valueLineWidth = itemModel.get(BAR_BORDER_WIDTH_QUERY$1) || 0;
+
+    if (valueLineWidth) {
+        pathForLineWidth.attr({
+            scale: symbolScale.slice(),
+            rotation: rotation
+        });
+        pathForLineWidth.updateTransform();
+        valueLineWidth /= pathForLineWidth.getLineScale();
+        valueLineWidth *= symbolScale[opt.valueDim.index];
+    }
+
+    output.valueLineWidth = valueLineWidth;
+}
+
+function prepareLayoutInfo(
+    itemModel, symbolSize, layout, symbolRepeat, symbolClip, symbolOffset,
+    symbolPosition, valueLineWidth, boundingLength, repeatCutLength, opt, output
+) {
+    var categoryDim = opt.categoryDim;
+    var valueDim = opt.valueDim;
+    var pxSign = output.pxSign;
+
+    var unitLength = Math.max(symbolSize[valueDim.index] + valueLineWidth, 0);
+    var pathLen = unitLength;
+
+    // Note: rotation will not effect the layout of symbols, because user may
+    // want symbols to rotate on its center, which should not be translated
+    // when rotating.
+
+    if (symbolRepeat) {
+        var absBoundingLength = Math.abs(boundingLength);
+
+        var symbolMargin = retrieve(itemModel.get('symbolMargin'), '15%') + '';
+        var hasEndGap = false;
+        if (symbolMargin.lastIndexOf('!') === symbolMargin.length - 1) {
+            hasEndGap = true;
+            symbolMargin = symbolMargin.slice(0, symbolMargin.length - 1);
+        }
+        symbolMargin = parsePercent$1(symbolMargin, symbolSize[valueDim.index]);
+
+        var uLenWithMargin = Math.max(unitLength + symbolMargin * 2, 0);
+
+        // When symbol margin is less than 0, margin at both ends will be subtracted
+        // to ensure that all of the symbols will not be overflow the given area.
+        var endFix = hasEndGap ? 0 : symbolMargin * 2;
+
+        // Both final repeatTimes and final symbolMargin area calculated based on
+        // boundingLength.
+        var repeatSpecified = isNumeric(symbolRepeat);
+        var repeatTimes = repeatSpecified
+            ? symbolRepeat
+            : toIntTimes((absBoundingLength + endFix) / uLenWithMargin);
+
+        // Adjust calculate margin, to ensure each symbol is displayed
+        // entirely in the given layout area.
+        var mDiff = absBoundingLength - repeatTimes * unitLength;
+        symbolMargin = mDiff / 2 / (hasEndGap ? repeatTimes : repeatTimes - 1);
+        uLenWithMargin = unitLength + symbolMargin * 2;
+        endFix = hasEndGap ? 0 : symbolMargin * 2;
+
+        // Update repeatTimes when not all symbol will be shown.
+        if (!repeatSpecified && symbolRepeat !== 'fixed') {
+            repeatTimes = repeatCutLength
+                ? toIntTimes((Math.abs(repeatCutLength) + endFix) / uLenWithMargin)
+                : 0;
+        }
+
+        pathLen = repeatTimes * uLenWithMargin - endFix;
+        output.repeatTimes = repeatTimes;
+        output.symbolMargin = symbolMargin;
+    }
+
+    var sizeFix = pxSign * (pathLen / 2);
+    var pathPosition = output.pathPosition = [];
+    pathPosition[categoryDim.index] = layout[categoryDim.wh] / 2;
+    pathPosition[valueDim.index] = symbolPosition === 'start'
+        ? sizeFix
+        : symbolPosition === 'end'
+        ? boundingLength - sizeFix
+        : boundingLength / 2; // 'center'
+    if (symbolOffset) {
+        pathPosition[0] += symbolOffset[0];
+        pathPosition[1] += symbolOffset[1];
+    }
+
+    var bundlePosition = output.bundlePosition = [];
+    bundlePosition[categoryDim.index] = layout[categoryDim.xy];
+    bundlePosition[valueDim.index] = layout[valueDim.xy];
+
+    var barRectShape = output.barRectShape = extend({}, layout);
+    barRectShape[valueDim.wh] = pxSign * Math.max(
+        Math.abs(layout[valueDim.wh]), Math.abs(pathPosition[valueDim.index] + sizeFix)
+    );
+    barRectShape[categoryDim.wh] = layout[categoryDim.wh];
+
+    var clipShape = output.clipShape = {};
+    // Consider that symbol may be overflow layout rect.
+    clipShape[categoryDim.xy] = -layout[categoryDim.xy];
+    clipShape[categoryDim.wh] = opt.ecSize[categoryDim.wh];
+    clipShape[valueDim.xy] = 0;
+    clipShape[valueDim.wh] = layout[valueDim.wh];
+}
+
+function createPath(symbolMeta) {
+    var symbolPatternSize = symbolMeta.symbolPatternSize;
+    var path = createSymbol(
+        // Consider texture img, make a big size.
+        symbolMeta.symbolType,
+        -symbolPatternSize / 2,
+        -symbolPatternSize / 2,
+        symbolPatternSize,
+        symbolPatternSize,
+        symbolMeta.color
+    );
+    path.attr({
+        culling: true
+    });
+    path.type !== 'image' && path.setStyle({
+        strokeNoScale: true
+    });
+
+    return path;
+}
+
+function createOrUpdateRepeatSymbols(bar, opt, symbolMeta, isUpdate) {
+    var bundle = bar.__pictorialBundle;
+    var symbolSize = symbolMeta.symbolSize;
+    var valueLineWidth = symbolMeta.valueLineWidth;
+    var pathPosition = symbolMeta.pathPosition;
+    var valueDim = opt.valueDim;
+    var repeatTimes = symbolMeta.repeatTimes || 0;
+
+    var index = 0;
+    var unit = symbolSize[opt.valueDim.index] + valueLineWidth + symbolMeta.symbolMargin * 2;
+
+    eachPath(bar, function (path) {
+        path.__pictorialAnimationIndex = index;
+        path.__pictorialRepeatTimes = repeatTimes;
+        if (index < repeatTimes) {
+            updateAttr(path, null, makeTarget(index), symbolMeta, isUpdate);
+        }
+        else {
+            updateAttr(path, null, {scale: [0, 0]}, symbolMeta, isUpdate, function () {
+                bundle.remove(path);
+            });
+        }
+
+        updateHoverAnimation(path, symbolMeta);
+
+        index++;
+    });
+
+    for (; index < repeatTimes; index++) {
+        var path = createPath(symbolMeta);
+        path.__pictorialAnimationIndex = index;
+        path.__pictorialRepeatTimes = repeatTimes;
+        bundle.add(path);
+
+        var target = makeTarget(index);
+
+        updateAttr(
+            path,
+            {
+                position: target.position,
+                scale: [0, 0]
+            },
+            {
+                scale: target.scale,
+                rotation: target.rotation
+            },
+            symbolMeta,
+            isUpdate
+        );
+
+        // FIXME
+        // If all emphasis/normal through action.
+        path
+            .on('mouseover', onMouseOver)
+            .on('mouseout', onMouseOut);
+
+        updateHoverAnimation(path, symbolMeta);
+    }
+
+    function makeTarget(index) {
+        var position = pathPosition.slice();
+        // (start && pxSign > 0) || (end && pxSign < 0): i = repeatTimes - index
+        // Otherwise: i = index;
+        var pxSign = symbolMeta.pxSign;
+        var i = index;
+        if (symbolMeta.symbolRepeatDirection === 'start' ? pxSign > 0 : pxSign < 0) {
+            i = repeatTimes - 1 - index;
+        }
+        position[valueDim.index] = unit * (i - repeatTimes / 2 + 0.5) + pathPosition[valueDim.index];
+
+        return {
+            position: position,
+            scale: symbolMeta.symbolScale.slice(),
+            rotation: symbolMeta.rotation
+        };
+    }
+
+    function onMouseOver() {
+        eachPath(bar, function (path) {
+            path.trigger('emphasis');
+        });
+    }
+
+    function onMouseOut() {
+        eachPath(bar, function (path) {
+            path.trigger('normal');
+        });
+    }
+}
+
+function createOrUpdateSingleSymbol(bar, opt, symbolMeta, isUpdate) {
+    var bundle = bar.__pictorialBundle;
+    var mainPath = bar.__pictorialMainPath;
+
+    if (!mainPath) {
+        mainPath = bar.__pictorialMainPath = createPath(symbolMeta);
+        bundle.add(mainPath);
+
+        updateAttr(
+            mainPath,
+            {
+                position: symbolMeta.pathPosition.slice(),
+                scale: [0, 0],
+                rotation: symbolMeta.rotation
+            },
+            {
+                scale: symbolMeta.symbolScale.slice()
+            },
+            symbolMeta,
+            isUpdate
+        );
+
+        mainPath
+            .on('mouseover', onMouseOver)
+            .on('mouseout', onMouseOut);
+    }
+    else {
+        updateAttr(
+            mainPath,
+            null,
+            {
+                position: symbolMeta.pathPosition.slice(),
+                scale: symbolMeta.symbolScale.slice(),
+                rotation: symbolMeta.rotation
+            },
+            symbolMeta,
+            isUpdate
+        );
+    }
+
+    updateHoverAnimation(mainPath, symbolMeta);
+
+    function onMouseOver() {
+        this.trigger('emphasis');
+    }
+
+    function onMouseOut() {
+        this.trigger('normal');
+    }
+}
+
+// bar rect is used for label.
+function createOrUpdateBarRect(bar, symbolMeta, isUpdate) {
+    var rectShape = extend({}, symbolMeta.barRectShape);
+
+    var barRect = bar.__pictorialBarRect;
+    if (!barRect) {
+        barRect = bar.__pictorialBarRect = new Rect({
+            z2: 2,
+            shape: rectShape,
+            silent: true,
+            style: {
+                stroke: 'transparent',
+                fill: 'transparent',
+                lineWidth: 0
+            }
+        });
+
+        bar.add(barRect);
+    }
+    else {
+        updateAttr(barRect, null, {shape: rectShape}, symbolMeta, isUpdate);
+    }
+}
+
+function createOrUpdateClip(bar, opt, symbolMeta, isUpdate) {
+    // If not clip, symbol will be remove and rebuilt.
+    if (symbolMeta.symbolClip) {
