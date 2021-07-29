@@ -65740,3 +65740,280 @@ function createOrUpdateBarRect(bar, symbolMeta, isUpdate) {
 function createOrUpdateClip(bar, opt, symbolMeta, isUpdate) {
     // If not clip, symbol will be remove and rebuilt.
     if (symbolMeta.symbolClip) {
+        var clipPath = bar.__pictorialClipPath;
+        var clipShape = extend({}, symbolMeta.clipShape);
+        var valueDim = opt.valueDim;
+        var animationModel = symbolMeta.animationModel;
+        var dataIndex = symbolMeta.dataIndex;
+
+        if (clipPath) {
+            updateProps(
+                clipPath, {shape: clipShape}, animationModel, dataIndex
+            );
+        }
+        else {
+            clipShape[valueDim.wh] = 0;
+            clipPath = new Rect({shape: clipShape});
+            bar.__pictorialBundle.setClipPath(clipPath);
+            bar.__pictorialClipPath = clipPath;
+
+            var target = {};
+            target[valueDim.wh] = symbolMeta.clipShape[valueDim.wh];
+
+            graphic[isUpdate ? 'updateProps' : 'initProps'](
+                clipPath, {shape: target}, animationModel, dataIndex
+            );
+        }
+    }
+}
+
+function getItemModel(data, dataIndex) {
+    var itemModel = data.getItemModel(dataIndex);
+    itemModel.getAnimationDelayParams = getAnimationDelayParams;
+    itemModel.isAnimationEnabled = isAnimationEnabled;
+    return itemModel;
+}
+
+function getAnimationDelayParams(path) {
+    // The order is the same as the z-order, see `symbolRepeatDiretion`.
+    return {
+        index: path.__pictorialAnimationIndex,
+        count: path.__pictorialRepeatTimes
+    };
+}
+
+function isAnimationEnabled() {
+    // `animation` prop can be set on itemModel in pictorial bar chart.
+    return this.parentModel.isAnimationEnabled() && !!this.getShallow('animation');
+}
+
+function updateHoverAnimation(path, symbolMeta) {
+    path.off('emphasis').off('normal');
+
+    var scale = symbolMeta.symbolScale.slice();
+
+    symbolMeta.hoverAnimation && path
+        .on('emphasis', function () {
+            this.animateTo({
+                scale: [scale[0] * 1.1, scale[1] * 1.1]
+            }, 400, 'elasticOut');
+        })
+        .on('normal', function () {
+            this.animateTo({
+                scale: scale.slice()
+            }, 400, 'elasticOut');
+        });
+}
+
+function createBar(data, opt, symbolMeta, isUpdate) {
+    // bar is the main element for each data.
+    var bar = new Group();
+    // bundle is used for location and clip.
+    var bundle = new Group();
+    bar.add(bundle);
+    bar.__pictorialBundle = bundle;
+    bundle.attr('position', symbolMeta.bundlePosition.slice());
+
+    if (symbolMeta.symbolRepeat) {
+        createOrUpdateRepeatSymbols(bar, opt, symbolMeta);
+    }
+    else {
+        createOrUpdateSingleSymbol(bar, opt, symbolMeta);
+    }
+
+    createOrUpdateBarRect(bar, symbolMeta, isUpdate);
+
+    createOrUpdateClip(bar, opt, symbolMeta, isUpdate);
+
+    bar.__pictorialShapeStr = getShapeStr(data, symbolMeta);
+    bar.__pictorialSymbolMeta = symbolMeta;
+
+    return bar;
+}
+
+function updateBar(bar, opt, symbolMeta) {
+    var animationModel = symbolMeta.animationModel;
+    var dataIndex = symbolMeta.dataIndex;
+    var bundle = bar.__pictorialBundle;
+
+    updateProps(
+        bundle, {position: symbolMeta.bundlePosition.slice()}, animationModel, dataIndex
+    );
+
+    if (symbolMeta.symbolRepeat) {
+        createOrUpdateRepeatSymbols(bar, opt, symbolMeta, true);
+    }
+    else {
+        createOrUpdateSingleSymbol(bar, opt, symbolMeta, true);
+    }
+
+    createOrUpdateBarRect(bar, symbolMeta, true);
+
+    createOrUpdateClip(bar, opt, symbolMeta, true);
+}
+
+function removeBar(data, dataIndex, animationModel, bar) {
+    // Not show text when animating
+    var labelRect = bar.__pictorialBarRect;
+    labelRect && (labelRect.style.text = null);
+
+    var pathes = [];
+    eachPath(bar, function (path) {
+        pathes.push(path);
+    });
+    bar.__pictorialMainPath && pathes.push(bar.__pictorialMainPath);
+
+    // I do not find proper remove animation for clip yet.
+    bar.__pictorialClipPath && (animationModel = null);
+
+    each$1(pathes, function (path) {
+        updateProps(
+            path, {scale: [0, 0]}, animationModel, dataIndex,
+            function () {
+                bar.parent && bar.parent.remove(bar);
+            }
+        );
+    });
+
+    data.setItemGraphicEl(dataIndex, null);
+}
+
+function getShapeStr(data, symbolMeta) {
+    return [
+        data.getItemVisual(symbolMeta.dataIndex, 'symbol') || 'none',
+        !!symbolMeta.symbolRepeat,
+        !!symbolMeta.symbolClip
+    ].join(':');
+}
+
+function eachPath(bar, cb, context) {
+    // Do not use Group#eachChild, because it do not support remove.
+    each$1(bar.__pictorialBundle.children(), function (el) {
+        el !== bar.__pictorialBarRect && cb.call(context, el);
+    });
+}
+
+function updateAttr(el, immediateAttrs, animationAttrs, symbolMeta, isUpdate, cb) {
+    immediateAttrs && el.attr(immediateAttrs);
+    // when symbolCip used, only clip path has init animation, otherwise it would be weird effect.
+    if (symbolMeta.symbolClip && !isUpdate) {
+        animationAttrs && el.attr(animationAttrs);
+    }
+    else {
+        animationAttrs && graphic[isUpdate ? 'updateProps' : 'initProps'](
+            el, animationAttrs, symbolMeta.animationModel, symbolMeta.dataIndex, cb
+        );
+    }
+}
+
+function updateCommon$1(bar, opt, symbolMeta) {
+    var color = symbolMeta.color;
+    var dataIndex = symbolMeta.dataIndex;
+    var itemModel = symbolMeta.itemModel;
+    // Color must be excluded.
+    // Because symbol provide setColor individually to set fill and stroke
+    var normalStyle = itemModel.getModel('itemStyle').getItemStyle(['color']);
+    var hoverStyle = itemModel.getModel('emphasis.itemStyle').getItemStyle();
+    var cursorStyle = itemModel.getShallow('cursor');
+
+    eachPath(bar, function (path) {
+        // PENDING setColor should be before setStyle!!!
+        path.setColor(color);
+        path.setStyle(defaults(
+            {
+                fill: color,
+                opacity: symbolMeta.opacity
+            },
+            normalStyle
+        ));
+        setHoverStyle(path, hoverStyle);
+
+        cursorStyle && (path.cursor = cursorStyle);
+        path.z2 = symbolMeta.z2;
+    });
+
+    var barRectHoverStyle = {};
+    var barPositionOutside = opt.valueDim.posDesc[+(symbolMeta.boundingLength > 0)];
+    var barRect = bar.__pictorialBarRect;
+
+    setLabel(
+        barRect.style, barRectHoverStyle, itemModel,
+        color, opt.seriesModel, dataIndex, barPositionOutside
+    );
+
+    setHoverStyle(barRect, barRectHoverStyle);
+}
+
+function toIntTimes(times) {
+    var roundedTimes = Math.round(times);
+    // Escapse accurate error
+    return Math.abs(times - roundedTimes) < 1e-4
+        ? roundedTimes
+        : Math.ceil(times);
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// In case developer forget to include grid component
+registerLayout(curry(
+    layout, 'pictorialBar'
+));
+registerVisual(visualSymbol('pictorialBar', 'roundRect'));
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @constructor  module:echarts/coord/single/SingleAxis
+ * @extends {module:echarts/coord/Axis}
+ * @param {string} dim
+ * @param {*} scale
+ * @param {Array.<number>} coordExtent
+ * @param {string} axisType
+ * @param {string} position
+ */
+var SingleAxis = function (dim, scale, coordExtent, axisType, position) {
+
+    Axis.call(this, dim, scale, coordExtent);
+
+    /**
+     * Axis type
+     * - 'category'
+     * - 'value'
+     * - 'time'
+     * - 'log'
+     * @type {string}
+     */
