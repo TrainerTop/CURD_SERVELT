@@ -66261,3 +66261,274 @@ Single.prototype = {
      * @param  {module:echarts/coord/single/SingleAxis} axis
      * @param  {number} coordBase
      */
+    _updateAxisTransform: function (axis, coordBase) {
+
+        var axisExtent = axis.getExtent();
+        var extentSum = axisExtent[0] + axisExtent[1];
+        var isHorizontal = axis.isHorizontal();
+
+        axis.toGlobalCoord = isHorizontal
+            ? function (coord) {
+                return coord + coordBase;
+            }
+            : function (coord) {
+                return extentSum - coord + coordBase;
+            };
+
+        axis.toLocalCoord = isHorizontal
+            ? function (coord) {
+                return coord - coordBase;
+            }
+            : function (coord) {
+                return extentSum - coord + coordBase;
+            };
+    },
+
+    /**
+     * Get axis.
+     *
+     * @return {module:echarts/coord/single/SingleAxis}
+     */
+    getAxis: function () {
+        return this._axis;
+    },
+
+    /**
+     * Get axis, add it just for draw tooltip.
+     *
+     * @return {[type]} [description]
+     */
+    getBaseAxis: function () {
+        return this._axis;
+    },
+
+    /**
+     * @return {Array.<module:echarts/coord/Axis>}
+     */
+    getAxes: function () {
+        return [this._axis];
+    },
+
+    /**
+     * @return {Object} {baseAxes: [], otherAxes: []}
+     */
+    getTooltipAxes: function () {
+        return {baseAxes: [this.getAxis()]};
+    },
+
+    /**
+     * If contain point.
+     *
+     * @param  {Array.<number>} point
+     * @return {boolean}
+     */
+    containPoint: function (point) {
+        var rect = this.getRect();
+        var axis = this.getAxis();
+        var orient = axis.orient;
+        if (orient === 'horizontal') {
+            return axis.contain(axis.toLocalCoord(point[0]))
+            && (point[1] >= rect.y && point[1] <= (rect.y + rect.height));
+        }
+        else {
+            return axis.contain(axis.toLocalCoord(point[1]))
+            && (point[0] >= rect.y && point[0] <= (rect.y + rect.height));
+        }
+    },
+
+    /**
+     * @param {Array.<number>} point
+     * @return {Array.<number>}
+     */
+    pointToData: function (point) {
+        var axis = this.getAxis();
+        return [axis.coordToData(axis.toLocalCoord(
+            point[axis.orient === 'horizontal' ? 0 : 1]
+        ))];
+    },
+
+    /**
+     * Convert the series data to concrete point.
+     *
+     * @param  {number|Array.<number>} val
+     * @return {Array.<number>}
+     */
+    dataToPoint: function (val) {
+        var axis = this.getAxis();
+        var rect = this.getRect();
+        var pt = [];
+        var idx = axis.orient === 'horizontal' ? 0 : 1;
+
+        if (val instanceof Array) {
+            val = val[0];
+        }
+
+        pt[idx] = axis.toGlobalCoord(axis.dataToCoord(+val));
+        pt[1 - idx] = idx === 0 ? (rect.y + rect.height / 2) : (rect.x + rect.width / 2);
+        return pt;
+    }
+
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Single coordinate system creator.
+ */
+
+/**
+ * Create single coordinate system and inject it into seriesModel.
+ *
+ * @param {module:echarts/model/Global} ecModel
+ * @param {module:echarts/ExtensionAPI} api
+ * @return {Array.<module:echarts/coord/single/Single>}
+ */
+function create$3(ecModel, api) {
+    var singles = [];
+
+    ecModel.eachComponent('singleAxis', function (axisModel, idx) {
+
+        var single = new Single(axisModel, ecModel, api);
+        single.name = 'single_' + idx;
+        single.resize(axisModel, api);
+        axisModel.coordinateSystem = single;
+        singles.push(single);
+
+    });
+
+    ecModel.eachSeries(function (seriesModel) {
+        if (seriesModel.get('coordinateSystem') === 'singleAxis') {
+            var singleAxisModel = ecModel.queryComponents({
+                mainType: 'singleAxis',
+                index: seriesModel.get('singleAxisIndex'),
+                id: seriesModel.get('singleAxisId')
+            })[0];
+            seriesModel.coordinateSystem = singleAxisModel && singleAxisModel.coordinateSystem;
+        }
+    });
+
+    return singles;
+}
+
+CoordinateSystemManager.register('single', {
+    create: create$3,
+    dimensions: Single.prototype.dimensions
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @param {Object} opt {labelInside}
+ * @return {Object} {
+ *  position, rotation, labelDirection, labelOffset,
+ *  tickDirection, labelRotate, z2
+ * }
+ */
+function layout$2(axisModel, opt) {
+    opt = opt || {};
+    var single = axisModel.coordinateSystem;
+    var axis = axisModel.axis;
+    var layout = {};
+
+    var axisPosition = axis.position;
+    var orient = axis.orient;
+
+    var rect = single.getRect();
+    var rectBound = [rect.x, rect.x + rect.width, rect.y, rect.y + rect.height];
+
+    var positionMap = {
+        horizontal: {top: rectBound[2], bottom: rectBound[3]},
+        vertical: {left: rectBound[0], right: rectBound[1]}
+    };
+
+    layout.position = [
+        orient === 'vertical'
+            ? positionMap.vertical[axisPosition]
+            : rectBound[0],
+        orient === 'horizontal'
+            ? positionMap.horizontal[axisPosition]
+            : rectBound[3]
+    ];
+
+    var r = {horizontal: 0, vertical: 1};
+    layout.rotation = Math.PI / 2 * r[orient];
+
+    var directionMap = {top: -1, bottom: 1, right: 1, left: -1};
+
+    layout.labelDirection = layout.tickDirection
+        = layout.nameDirection
+        = directionMap[axisPosition];
+
+    if (axisModel.get('axisTick.inside')) {
+        layout.tickDirection = -layout.tickDirection;
+    }
+
+    if (retrieve(opt.labelInside, axisModel.get('axisLabel.inside'))) {
+        layout.labelDirection = -layout.labelDirection;
+    }
+
+    var labelRotation = opt.rotate;
+    labelRotation == null && (labelRotation = axisModel.get('axisLabel.rotate'));
+    layout.labelRotation = axisPosition === 'top' ? -labelRotation : labelRotation;
+
+    layout.z2 = 1;
+
+    return layout;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+var axisBuilderAttrs$2 = [
+    'axisLine', 'axisTickLabel', 'axisName'
