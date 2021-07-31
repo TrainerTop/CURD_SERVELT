@@ -66017,3 +66017,247 @@ var SingleAxis = function (dim, scale, coordExtent, axisType, position) {
      * - 'log'
      * @type {string}
      */
+    this.type = axisType || 'value';
+
+    /**
+     * Axis position
+     *  - 'top'
+     *  - 'bottom'
+     *  - 'left'
+     *  - 'right'
+     *  @type {string}
+     */
+    this.position = position || 'bottom';
+
+    /**
+     * Axis orient
+     *  - 'horizontal'
+     *  - 'vertical'
+     * @type {[type]}
+     */
+    this.orient = null;
+
+};
+
+SingleAxis.prototype = {
+
+    constructor: SingleAxis,
+
+    /**
+     * Axis model
+     * @type {module:echarts/coord/single/AxisModel}
+     */
+    model: null,
+
+    /**
+     * Judge the orient of the axis.
+     * @return {boolean}
+     */
+    isHorizontal: function () {
+        var position = this.position;
+        return position === 'top' || position === 'bottom';
+
+    },
+
+    /**
+     * @override
+     */
+    pointToData: function (point, clamp) {
+        return this.coordinateSystem.pointToData(point, clamp)[0];
+    },
+
+    /**
+     * Convert the local coord(processed by dataToCoord())
+     * to global coord(concrete pixel coord).
+     * designated by module:echarts/coord/single/Single.
+     * @type {Function}
+     */
+    toGlobalCoord: null,
+
+    /**
+     * Convert the global coord to local coord.
+     * designated by module:echarts/coord/single/Single.
+     * @type {Function}
+     */
+    toLocalCoord: null
+
+};
+
+inherits(SingleAxis, Axis);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Single coordinates system.
+ */
+
+/**
+ * Create a single coordinates system.
+ *
+ * @param {module:echarts/coord/single/AxisModel} axisModel
+ * @param {module:echarts/model/Global} ecModel
+ * @param {module:echarts/ExtensionAPI} api
+ */
+function Single(axisModel, ecModel, api) {
+
+    /**
+     * @type {string}
+     * @readOnly
+     */
+    this.dimension = 'single';
+
+    /**
+     * Add it just for draw tooltip.
+     *
+     * @type {Array.<string>}
+     * @readOnly
+     */
+    this.dimensions = ['single'];
+
+    /**
+     * @private
+     * @type {module:echarts/coord/single/SingleAxis}.
+     */
+    this._axis = null;
+
+    /**
+     * @private
+     * @type {module:zrender/core/BoundingRect}
+     */
+    this._rect;
+
+    this._init(axisModel, ecModel, api);
+
+    /**
+     * @type {module:echarts/coord/single/AxisModel}
+     */
+    this.model = axisModel;
+}
+
+Single.prototype = {
+
+    type: 'singleAxis',
+
+    axisPointerEnabled: true,
+
+    constructor: Single,
+
+    /**
+     * Initialize single coordinate system.
+     *
+     * @param  {module:echarts/coord/single/AxisModel} axisModel
+     * @param  {module:echarts/model/Global} ecModel
+     * @param  {module:echarts/ExtensionAPI} api
+     * @private
+     */
+    _init: function (axisModel, ecModel, api) {
+
+        var dim = this.dimension;
+
+        var axis = new SingleAxis(
+            dim,
+            createScaleByModel(axisModel),
+            [0, 0],
+            axisModel.get('type'),
+            axisModel.get('position')
+        );
+
+        var isCategory = axis.type === 'category';
+        axis.onBand = isCategory && axisModel.get('boundaryGap');
+        axis.inverse = axisModel.get('inverse');
+        axis.orient = axisModel.get('orient');
+
+        axisModel.axis = axis;
+        axis.model = axisModel;
+        axis.coordinateSystem = this;
+        this._axis = axis;
+    },
+
+    /**
+     * Update axis scale after data processed
+     * @param  {module:echarts/model/Global} ecModel
+     * @param  {module:echarts/ExtensionAPI} api
+     */
+    update: function (ecModel, api) {
+        ecModel.eachSeries(function (seriesModel) {
+            if (seriesModel.coordinateSystem === this) {
+                var data = seriesModel.getData();
+                each$1(data.mapDimension(this.dimension, true), function (dim) {
+                    this._axis.scale.unionExtentFromData(data, dim);
+                }, this);
+                niceScaleExtent(this._axis.scale, this._axis.model);
+            }
+        }, this);
+    },
+
+    /**
+     * Resize the single coordinate system.
+     *
+     * @param  {module:echarts/coord/single/AxisModel} axisModel
+     * @param  {module:echarts/ExtensionAPI} api
+     */
+    resize: function (axisModel, api) {
+        this._rect = getLayoutRect(
+            {
+                left: axisModel.get('left'),
+                top: axisModel.get('top'),
+                right: axisModel.get('right'),
+                bottom: axisModel.get('bottom'),
+                width: axisModel.get('width'),
+                height: axisModel.get('height')
+            },
+            {
+                width: api.getWidth(),
+                height: api.getHeight()
+            }
+        );
+
+        this._adjustAxis();
+    },
+
+    /**
+     * @return {module:zrender/core/BoundingRect}
+     */
+    getRect: function () {
+        return this._rect;
+    },
+
+    /**
+     * @private
+     */
+    _adjustAxis: function () {
+
+        var rect = this._rect;
+        var axis = this._axis;
+
+        var isHorizontal = axis.isHorizontal();
+        var extent = isHorizontal ? [0, rect.width] : [0, rect.height];
+        var idx = axis.reverse ? 1 : 0;
+
+        axis.setExtent(extent[idx], extent[1 - idx]);
+
+        this._updateAxisTransform(axis, isHorizontal ? rect.x : rect.y);
+
+    },
+
+    /**
+     * @param  {module:echarts/coord/single/SingleAxis} axis
+     * @param  {number} coordBase
+     */
