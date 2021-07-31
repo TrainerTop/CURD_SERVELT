@@ -67091,3 +67091,251 @@ function showTooltip(dataByCoordSys, axisInfo, payloadInfo, value) {
             formatter: axisPointerModel.get('label.formatter')
         },
         seriesDataIndices: payloadBatch.slice()
+    });
+}
+
+function updateModelActually(showValueMap, axesInfo, outputFinder) {
+    var outputAxesInfo = outputFinder.axesInfo = [];
+    // Basic logic: If no 'show' required, 'hide' this axisPointer.
+    each$14(axesInfo, function (axisInfo, key) {
+        var option = axisInfo.axisPointerModel.option;
+        var valItem = showValueMap[key];
+
+        if (valItem) {
+            !axisInfo.useHandle && (option.status = 'show');
+            option.value = valItem.value;
+            // For label formatter param and highlight.
+            option.seriesDataIndices = (valItem.payloadBatch || []).slice();
+        }
+        // When always show (e.g., handle used), remain
+        // original value and status.
+        else {
+            // If hide, value still need to be set, consider
+            // click legend to toggle axis blank.
+            !axisInfo.useHandle && (option.status = 'hide');
+        }
+
+        // If status is 'hide', should be no info in payload.
+        option.status === 'show' && outputAxesInfo.push({
+            axisDim: axisInfo.axis.dim,
+            axisIndex: axisInfo.axis.model.componentIndex,
+            value: option.value
+        });
+    });
+}
+
+function dispatchTooltipActually(dataByCoordSys, point, payload, dispatchAction) {
+    // Basic logic: If no showTip required, hideTip will be dispatched.
+    if (illegalPoint(point) || !dataByCoordSys.list.length) {
+        dispatchAction({type: 'hideTip'});
+        return;
+    }
+
+    // In most case only one axis (or event one series is used). It is
+    // convinient to fetch payload.seriesIndex and payload.dataIndex
+    // dirtectly. So put the first seriesIndex and dataIndex of the first
+    // axis on the payload.
+    var sampleItem = ((dataByCoordSys.list[0].dataByAxis[0] || {}).seriesDataIndices || [])[0] || {};
+
+    dispatchAction({
+        type: 'showTip',
+        escapeConnect: true,
+        x: point[0],
+        y: point[1],
+        tooltipOption: payload.tooltipOption,
+        position: payload.position,
+        dataIndexInside: sampleItem.dataIndexInside,
+        dataIndex: sampleItem.dataIndex,
+        seriesIndex: sampleItem.seriesIndex,
+        dataByCoordSys: dataByCoordSys.list
+    });
+}
+
+function dispatchHighDownActually(axesInfo, dispatchAction, api) {
+    // FIXME
+    // highlight status modification shoule be a stage of main process?
+    // (Consider confilct (e.g., legend and axisPointer) and setOption)
+
+    var zr = api.getZr();
+    var highDownKey = 'axisPointerLastHighlights';
+    var lastHighlights = inner$9(zr)[highDownKey] || {};
+    var newHighlights = inner$9(zr)[highDownKey] = {};
+
+    // Update highlight/downplay status according to axisPointer model.
+    // Build hash map and remove duplicate incidentally.
+    each$14(axesInfo, function (axisInfo, key) {
+        var option = axisInfo.axisPointerModel.option;
+        option.status === 'show' && each$14(option.seriesDataIndices, function (batchItem) {
+            var key = batchItem.seriesIndex + ' | ' + batchItem.dataIndex;
+            newHighlights[key] = batchItem;
+        });
+    });
+
+    // Diff.
+    var toHighlight = [];
+    var toDownplay = [];
+    each$1(lastHighlights, function (batchItem, key) {
+        !newHighlights[key] && toDownplay.push(batchItem);
+    });
+    each$1(newHighlights, function (batchItem, key) {
+        !lastHighlights[key] && toHighlight.push(batchItem);
+    });
+
+    toDownplay.length && api.dispatchAction({
+        type: 'downplay', escapeConnect: true, batch: toDownplay
+    });
+    toHighlight.length && api.dispatchAction({
+        type: 'highlight', escapeConnect: true, batch: toHighlight
+    });
+}
+
+function findInputAxisInfo(inputAxesInfo, axisInfo) {
+    for (var i = 0; i < (inputAxesInfo || []).length; i++) {
+        var inputAxisInfo = inputAxesInfo[i];
+        if (axisInfo.axis.dim === inputAxisInfo.axisDim
+            && axisInfo.axis.model.componentIndex === inputAxisInfo.axisIndex
+        ) {
+            return inputAxisInfo;
+        }
+    }
+}
+
+function makeMapperParam(axisInfo) {
+    var axisModel = axisInfo.axis.model;
+    var item = {};
+    var dim = item.axisDim = axisInfo.axis.dim;
+    item.axisIndex = item[dim + 'AxisIndex'] = axisModel.componentIndex;
+    item.axisName = item[dim + 'AxisName'] = axisModel.name;
+    item.axisId = item[dim + 'AxisId'] = axisModel.id;
+    return item;
+}
+
+function illegalPoint(point) {
+    return !point || point[0] == null || isNaN(point[0]) || point[1] == null || isNaN(point[1]);
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var AxisPointerModel = extendComponentModel({
+
+    type: 'axisPointer',
+
+    coordSysAxesInfo: null,
+
+    defaultOption: {
+        // 'auto' means that show when triggered by tooltip or handle.
+        show: 'auto',
+        // 'click' | 'mousemove' | 'none'
+        triggerOn: null, // set default in AxisPonterView.js
+
+        zlevel: 0,
+        z: 50,
+
+        type: 'line', // 'line' 'shadow' 'cross' 'none'.
+        // axispointer triggered by tootip determine snap automatically,
+        // see `modelHelper`.
+        snap: false,
+        triggerTooltip: true,
+
+        value: null,
+        status: null, // Init value depends on whether handle is used.
+
+        // [group0, group1, ...]
+        // Each group can be: {
+        //      mapper: function () {},
+        //      singleTooltip: 'multiple',  // 'multiple' or 'single'
+        //      xAxisId: ...,
+        //      yAxisName: ...,
+        //      angleAxisIndex: ...
+        // }
+        // mapper: can be ignored.
+        //      input: {axisInfo, value}
+        //      output: {axisInfo, value}
+        link: [],
+
+        // Do not set 'auto' here, otherwise global animation: false
+        // will not effect at this axispointer.
+        animation: null,
+        animationDurationUpdate: 200,
+
+        lineStyle: {
+            color: '#aaa',
+            width: 1,
+            type: 'solid'
+        },
+
+        shadowStyle: {
+            color: 'rgba(150,150,150,0.3)'
+        },
+
+        label: {
+            show: true,
+            formatter: null, // string | Function
+            precision: 'auto', // Or a number like 0, 1, 2 ...
+            margin: 3,
+            color: '#fff',
+            padding: [5, 7, 5, 7],
+            backgroundColor: 'auto', // default: axis line color
+            borderColor: null,
+            borderWidth: 0,
+            shadowBlur: 3,
+            shadowColor: '#aaa'
+            // Considering applicability, common style should
+            // better not have shadowOffset.
+            // shadowOffsetX: 0,
+            // shadowOffsetY: 2
+        },
+
+        handle: {
+            show: false,
+            /* eslint-disable */
+            icon: 'M10.7,11.9v-1.3H9.3v1.3c-4.9,0.3-8.8,4.4-8.8,9.4c0,5,3.9,9.1,8.8,9.4h1.3c4.9-0.3,8.8-4.4,8.8-9.4C19.5,16.3,15.6,12.2,10.7,11.9z M13.3,24.4H6.7v-1.2h6.6z M13.3,22H6.7v-1.2h6.6z M13.3,19.6H6.7v-1.2h6.6z', // jshint ignore:line
+            /* eslint-enable */
+            size: 45,
+            // handle margin is from symbol center to axis, which is stable when circular move.
+            margin: 50,
+            // color: '#1b8bbd'
+            // color: '#2f4554'
+            color: '#333',
+            shadowBlur: 3,
+            shadowColor: '#aaa',
+            shadowOffsetX: 0,
+            shadowOffsetY: 2,
+
+            // For mobile performance
+            throttle: 40
+        }
+    }
+
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
