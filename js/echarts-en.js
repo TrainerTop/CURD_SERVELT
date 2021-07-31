@@ -66532,3 +66532,293 @@ function layout$2(axisModel, opt) {
 
 var axisBuilderAttrs$2 = [
     'axisLine', 'axisTickLabel', 'axisName'
+];
+
+var selfBuilderAttr = 'splitLine';
+
+var SingleAxisView = AxisView.extend({
+
+    type: 'singleAxis',
+
+    axisPointerClass: 'SingleAxisPointer',
+
+    render: function (axisModel, ecModel, api, payload) {
+
+        var group = this.group;
+
+        group.removeAll();
+
+        var layout = layout$2(axisModel);
+
+        var axisBuilder = new AxisBuilder(axisModel, layout);
+
+        each$1(axisBuilderAttrs$2, axisBuilder.add, axisBuilder);
+
+        group.add(axisBuilder.getGroup());
+
+        if (axisModel.get(selfBuilderAttr + '.show')) {
+            this['_' + selfBuilderAttr](axisModel);
+        }
+
+        SingleAxisView.superCall(this, 'render', axisModel, ecModel, api, payload);
+    },
+
+    _splitLine: function (axisModel) {
+        var axis = axisModel.axis;
+
+        if (axis.scale.isBlank()) {
+            return;
+        }
+
+        var splitLineModel = axisModel.getModel('splitLine');
+        var lineStyleModel = splitLineModel.getModel('lineStyle');
+        var lineWidth = lineStyleModel.get('width');
+        var lineColors = lineStyleModel.get('color');
+
+        lineColors = lineColors instanceof Array ? lineColors : [lineColors];
+
+        var gridRect = axisModel.coordinateSystem.getRect();
+        var isHorizontal = axis.isHorizontal();
+
+        var splitLines = [];
+        var lineCount = 0;
+
+        var ticksCoords = axis.getTicksCoords({
+            tickModel: splitLineModel
+        });
+
+        var p1 = [];
+        var p2 = [];
+
+        for (var i = 0; i < ticksCoords.length; ++i) {
+            var tickCoord = axis.toGlobalCoord(ticksCoords[i].coord);
+            if (isHorizontal) {
+                p1[0] = tickCoord;
+                p1[1] = gridRect.y;
+                p2[0] = tickCoord;
+                p2[1] = gridRect.y + gridRect.height;
+            }
+            else {
+                p1[0] = gridRect.x;
+                p1[1] = tickCoord;
+                p2[0] = gridRect.x + gridRect.width;
+                p2[1] = tickCoord;
+            }
+            var colorIndex = (lineCount++) % lineColors.length;
+            splitLines[colorIndex] = splitLines[colorIndex] || [];
+            splitLines[colorIndex].push(new Line(
+                subPixelOptimizeLine({
+                    shape: {
+                        x1: p1[0],
+                        y1: p1[1],
+                        x2: p2[0],
+                        y2: p2[1]
+                    },
+                    style: {
+                        lineWidth: lineWidth
+                    },
+                    silent: true
+                })));
+        }
+
+        for (var i = 0; i < splitLines.length; ++i) {
+            this.group.add(mergePath(splitLines[i], {
+                style: {
+                    stroke: lineColors[i % lineColors.length],
+                    lineDash: lineStyleModel.getLineDash(lineWidth),
+                    lineWidth: lineWidth
+                },
+                silent: true
+            }));
+        }
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var AxisModel$4 = ComponentModel.extend({
+
+    type: 'singleAxis',
+
+    layoutMode: 'box',
+
+    /**
+     * @type {module:echarts/coord/single/SingleAxis}
+     */
+    axis: null,
+
+    /**
+     * @type {module:echarts/coord/single/Single}
+     */
+    coordinateSystem: null,
+
+    /**
+     * @override
+     */
+    getCoordSysModel: function () {
+        return this;
+    }
+
+});
+
+var defaultOption$2 = {
+
+    left: '5%',
+    top: '5%',
+    right: '5%',
+    bottom: '5%',
+
+    type: 'value',
+
+    position: 'bottom',
+
+    orient: 'horizontal',
+
+    axisLine: {
+        show: true,
+        lineStyle: {
+            width: 2,
+            type: 'solid'
+        }
+    },
+
+    // Single coordinate system and single axis is the,
+    // which is used as the parent tooltip model.
+    // same model, so we set default tooltip show as true.
+    tooltip: {
+        show: true
+    },
+
+    axisTick: {
+        show: true,
+        length: 6,
+        lineStyle: {
+            width: 2
+        }
+    },
+
+    axisLabel: {
+        show: true,
+        interval: 'auto'
+    },
+
+    splitLine: {
+        show: true,
+        lineStyle: {
+            type: 'dashed',
+            opacity: 0.2
+        }
+    }
+};
+
+function getAxisType$2(axisName, option) {
+    return option.type || (option.data ? 'category' : 'value');
+}
+
+merge(AxisModel$4.prototype, axisModelCommonMixin);
+
+axisModelCreator('single', AxisModel$4, getAxisType$2, defaultOption$2);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @param {Object} finder contains {seriesIndex, dataIndex, dataIndexInside}
+ * @param {module:echarts/model/Global} ecModel
+ * @return {Object} {point: [x, y], el: ...} point Will not be null.
+ */
+var findPointFromSeries = function (finder, ecModel) {
+    var point = [];
+    var seriesIndex = finder.seriesIndex;
+    var seriesModel;
+    if (seriesIndex == null || !(
+        seriesModel = ecModel.getSeriesByIndex(seriesIndex)
+    )) {
+        return {point: []};
+    }
+
+    var data = seriesModel.getData();
+    var dataIndex = queryDataIndex(data, finder);
+    if (dataIndex == null || dataIndex < 0 || isArray(dataIndex)) {
+        return {point: []};
+    }
+
+    var el = data.getItemGraphicEl(dataIndex);
+    var coordSys = seriesModel.coordinateSystem;
+
+    if (seriesModel.getTooltipPosition) {
+        point = seriesModel.getTooltipPosition(dataIndex) || [];
+    }
+    else if (coordSys && coordSys.dataToPoint) {
+        point = coordSys.dataToPoint(
+            data.getValues(
+                map(coordSys.dimensions, function (dim) {
+                    return data.mapDimension(dim);
+                }), dataIndex, true
+            )
+        ) || [];
+    }
+    else if (el) {
+        // Use graphic bounding rect
+        var rect = el.getBoundingRect().clone();
+        rect.applyTransform(el.transform);
+        point = [
+            rect.x + rect.width / 2,
+            rect.y + rect.height / 2
+        ];
+    }
+
+    return {point: point, el: el};
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
