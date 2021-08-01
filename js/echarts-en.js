@@ -67601,3 +67601,295 @@ BaseAxisPointer.prototype = {
      * @protected
      */
     animationThreshold: 15,
+
+    /**
+     * @implement
+     */
+    render: function (axisModel, axisPointerModel, api, forceRender) {
+        var value = axisPointerModel.get('value');
+        var status = axisPointerModel.get('status');
+
+        // Bind them to `this`, not in closure, otherwise they will not
+        // be replaced when user calling setOption in not merge mode.
+        this._axisModel = axisModel;
+        this._axisPointerModel = axisPointerModel;
+        this._api = api;
+
+        // Optimize: `render` will be called repeatly during mouse move.
+        // So it is power consuming if performing `render` each time,
+        // especially on mobile device.
+        if (!forceRender
+            && this._lastValue === value
+            && this._lastStatus === status
+        ) {
+            return;
+        }
+        this._lastValue = value;
+        this._lastStatus = status;
+
+        var group = this._group;
+        var handle = this._handle;
+
+        if (!status || status === 'hide') {
+            // Do not clear here, for animation better.
+            group && group.hide();
+            handle && handle.hide();
+            return;
+        }
+        group && group.show();
+        handle && handle.show();
+
+        // Otherwise status is 'show'
+        var elOption = {};
+        this.makeElOption(elOption, value, axisModel, axisPointerModel, api);
+
+        // Enable change axis pointer type.
+        var graphicKey = elOption.graphicKey;
+        if (graphicKey !== this._lastGraphicKey) {
+            this.clear(api);
+        }
+        this._lastGraphicKey = graphicKey;
+
+        var moveAnimation = this._moveAnimation
+            = this.determineAnimation(axisModel, axisPointerModel);
+
+        if (!group) {
+            group = this._group = new Group();
+            this.createPointerEl(group, elOption, axisModel, axisPointerModel);
+            this.createLabelEl(group, elOption, axisModel, axisPointerModel);
+            api.getZr().add(group);
+        }
+        else {
+            var doUpdateProps = curry(updateProps$1, axisPointerModel, moveAnimation);
+            this.updatePointerEl(group, elOption, doUpdateProps, axisPointerModel);
+            this.updateLabelEl(group, elOption, doUpdateProps, axisPointerModel);
+        }
+
+        updateMandatoryProps(group, axisPointerModel, true);
+
+        this._renderHandle(value);
+    },
+
+    /**
+     * @implement
+     */
+    remove: function (api) {
+        this.clear(api);
+    },
+
+    /**
+     * @implement
+     */
+    dispose: function (api) {
+        this.clear(api);
+    },
+
+    /**
+     * @protected
+     */
+    determineAnimation: function (axisModel, axisPointerModel) {
+        var animation = axisPointerModel.get('animation');
+        var axis = axisModel.axis;
+        var isCategoryAxis = axis.type === 'category';
+        var useSnap = axisPointerModel.get('snap');
+
+        // Value axis without snap always do not snap.
+        if (!useSnap && !isCategoryAxis) {
+            return false;
+        }
+
+        if (animation === 'auto' || animation == null) {
+            var animationThreshold = this.animationThreshold;
+            if (isCategoryAxis && axis.getBandWidth() > animationThreshold) {
+                return true;
+            }
+
+            // It is important to auto animation when snap used. Consider if there is
+            // a dataZoom, animation will be disabled when too many points exist, while
+            // it will be enabled for better visual effect when little points exist.
+            if (useSnap) {
+                var seriesDataCount = getAxisInfo(axisModel).seriesDataCount;
+                var axisExtent = axis.getExtent();
+                // Approximate band width
+                return Math.abs(axisExtent[0] - axisExtent[1]) / seriesDataCount > animationThreshold;
+            }
+
+            return false;
+        }
+
+        return animation === true;
+    },
+
+    /**
+     * add {pointer, label, graphicKey} to elOption
+     * @protected
+     */
+    makeElOption: function (elOption, value, axisModel, axisPointerModel, api) {
+        // Shoule be implemenented by sub-class.
+    },
+
+    /**
+     * @protected
+     */
+    createPointerEl: function (group, elOption, axisModel, axisPointerModel) {
+        var pointerOption = elOption.pointer;
+        if (pointerOption) {
+            var pointerEl = inner$11(group).pointerEl = new graphic[pointerOption.type](
+                clone$4(elOption.pointer)
+            );
+            group.add(pointerEl);
+        }
+    },
+
+    /**
+     * @protected
+     */
+    createLabelEl: function (group, elOption, axisModel, axisPointerModel) {
+        if (elOption.label) {
+            var labelEl = inner$11(group).labelEl = new Rect(
+                clone$4(elOption.label)
+            );
+
+            group.add(labelEl);
+            updateLabelShowHide(labelEl, axisPointerModel);
+        }
+    },
+
+    /**
+     * @protected
+     */
+    updatePointerEl: function (group, elOption, updateProps$$1) {
+        var pointerEl = inner$11(group).pointerEl;
+        if (pointerEl) {
+            pointerEl.setStyle(elOption.pointer.style);
+            updateProps$$1(pointerEl, {shape: elOption.pointer.shape});
+        }
+    },
+
+    /**
+     * @protected
+     */
+    updateLabelEl: function (group, elOption, updateProps$$1, axisPointerModel) {
+        var labelEl = inner$11(group).labelEl;
+        if (labelEl) {
+            labelEl.setStyle(elOption.label.style);
+            updateProps$$1(labelEl, {
+                // Consider text length change in vertical axis, animation should
+                // be used on shape, otherwise the effect will be weird.
+                shape: elOption.label.shape,
+                position: elOption.label.position
+            });
+
+            updateLabelShowHide(labelEl, axisPointerModel);
+        }
+    },
+
+    /**
+     * @private
+     */
+    _renderHandle: function (value) {
+        if (this._dragging || !this.updateHandleTransform) {
+            return;
+        }
+
+        var axisPointerModel = this._axisPointerModel;
+        var zr = this._api.getZr();
+        var handle = this._handle;
+        var handleModel = axisPointerModel.getModel('handle');
+
+        var status = axisPointerModel.get('status');
+        if (!handleModel.get('show') || !status || status === 'hide') {
+            handle && zr.remove(handle);
+            this._handle = null;
+            return;
+        }
+
+        var isInit;
+        if (!this._handle) {
+            isInit = true;
+            handle = this._handle = createIcon(
+                handleModel.get('icon'),
+                {
+                    cursor: 'move',
+                    draggable: true,
+                    onmousemove: function (e) {
+                        // Fot mobile devicem, prevent screen slider on the button.
+                        stop(e.event);
+                    },
+                    onmousedown: bind$2(this._onHandleDragMove, this, 0, 0),
+                    drift: bind$2(this._onHandleDragMove, this),
+                    ondragend: bind$2(this._onHandleDragEnd, this)
+                }
+            );
+            zr.add(handle);
+        }
+
+        updateMandatoryProps(handle, axisPointerModel, false);
+
+        // update style
+        var includeStyles = [
+            'color', 'borderColor', 'borderWidth', 'opacity',
+            'shadowColor', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'
+        ];
+        handle.setStyle(handleModel.getItemStyle(null, includeStyles));
+
+        // update position
+        var handleSize = handleModel.get('size');
+        if (!isArray(handleSize)) {
+            handleSize = [handleSize, handleSize];
+        }
+        handle.attr('scale', [handleSize[0] / 2, handleSize[1] / 2]);
+
+        createOrUpdate(
+            this,
+            '_doDispatchAxisPointer',
+            handleModel.get('throttle') || 0,
+            'fixRate'
+        );
+
+        this._moveHandleToValue(value, isInit);
+    },
+
+    /**
+     * @private
+     */
+    _moveHandleToValue: function (value, isInit) {
+        updateProps$1(
+            this._axisPointerModel,
+            !isInit && this._moveAnimation,
+            this._handle,
+            getHandleTransProps(this.getHandleTransform(
+                value, this._axisModel, this._axisPointerModel
+            ))
+        );
+    },
+
+    /**
+     * @private
+     */
+    _onHandleDragMove: function (dx, dy) {
+        var handle = this._handle;
+        if (!handle) {
+            return;
+        }
+
+        this._dragging = true;
+
+        // Persistent for throttle.
+        var trans = this.updateHandleTransform(
+            getHandleTransProps(handle),
+            [dx, dy],
+            this._axisModel,
+            this._axisPointerModel
+        );
+        this._payloadInfo = trans;
+
+        handle.stopAnimation();
+        handle.attr(getHandleTransProps(trans));
+        inner$11(handle).lastProp = null;
+
+        this._doDispatchAxisPointer();
+    },
+
+    /**
+     * Throttled method.
