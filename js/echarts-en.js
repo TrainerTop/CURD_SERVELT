@@ -68492,3 +68492,266 @@ registerAction({
 */
 
 var XY = ['x', 'y'];
+var WH = ['width', 'height'];
+
+var SingleAxisPointer = BaseAxisPointer.extend({
+
+    /**
+     * @override
+     */
+    makeElOption: function (elOption, value, axisModel, axisPointerModel, api) {
+        var axis = axisModel.axis;
+        var coordSys = axis.coordinateSystem;
+        var otherExtent = getGlobalExtent(coordSys, 1 - getPointDimIndex(axis));
+        var pixelValue = coordSys.dataToPoint(value)[0];
+
+        var axisPointerType = axisPointerModel.get('type');
+        if (axisPointerType && axisPointerType !== 'none') {
+            var elStyle = buildElStyle(axisPointerModel);
+            var pointerOption = pointerShapeBuilder$1[axisPointerType](
+                axis, pixelValue, otherExtent, elStyle
+            );
+            pointerOption.style = elStyle;
+
+            elOption.graphicKey = pointerOption.type;
+            elOption.pointer = pointerOption;
+        }
+
+        var layoutInfo = layout$2(axisModel);
+        buildCartesianSingleLabelElOption(
+            value, elOption, layoutInfo, axisModel, axisPointerModel, api
+        );
+    },
+
+    /**
+     * @override
+     */
+    getHandleTransform: function (value, axisModel, axisPointerModel) {
+        var layoutInfo = layout$2(axisModel, {labelInside: false});
+        layoutInfo.labelMargin = axisPointerModel.get('handle.margin');
+        return {
+            position: getTransformedPosition(axisModel.axis, value, layoutInfo),
+            rotation: layoutInfo.rotation + (layoutInfo.labelDirection < 0 ? Math.PI : 0)
+        };
+    },
+
+    /**
+     * @override
+     */
+    updateHandleTransform: function (transform, delta, axisModel, axisPointerModel) {
+        var axis = axisModel.axis;
+        var coordSys = axis.coordinateSystem;
+        var dimIndex = getPointDimIndex(axis);
+        var axisExtent = getGlobalExtent(coordSys, dimIndex);
+        var currPosition = transform.position;
+        currPosition[dimIndex] += delta[dimIndex];
+        currPosition[dimIndex] = Math.min(axisExtent[1], currPosition[dimIndex]);
+        currPosition[dimIndex] = Math.max(axisExtent[0], currPosition[dimIndex]);
+        var otherExtent = getGlobalExtent(coordSys, 1 - dimIndex);
+        var cursorOtherValue = (otherExtent[1] + otherExtent[0]) / 2;
+        var cursorPoint = [cursorOtherValue, cursorOtherValue];
+        cursorPoint[dimIndex] = currPosition[dimIndex];
+
+        return {
+            position: currPosition,
+            rotation: transform.rotation,
+            cursorPoint: cursorPoint,
+            tooltipOption: {
+                verticalAlign: 'middle'
+            }
+        };
+    }
+});
+
+var pointerShapeBuilder$1 = {
+
+    line: function (axis, pixelValue, otherExtent, elStyle) {
+        var targetShape = makeLineShape(
+            [pixelValue, otherExtent[0]],
+            [pixelValue, otherExtent[1]],
+            getPointDimIndex(axis)
+        );
+        subPixelOptimizeLine({
+            shape: targetShape,
+            style: elStyle
+        });
+        return {
+            type: 'Line',
+            shape: targetShape
+        };
+    },
+
+    shadow: function (axis, pixelValue, otherExtent, elStyle) {
+        var bandWidth = axis.getBandWidth();
+        var span = otherExtent[1] - otherExtent[0];
+        return {
+            type: 'Rect',
+            shape: makeRectShape(
+                [pixelValue - bandWidth / 2, otherExtent[0]],
+                [bandWidth, span],
+                getPointDimIndex(axis)
+            )
+        };
+    }
+};
+
+function getPointDimIndex(axis) {
+    return axis.isHorizontal() ? 0 : 1;
+}
+
+function getGlobalExtent(coordSys, dimIndex) {
+    var rect = coordSys.getRect();
+    return [rect[XY[dimIndex]], rect[XY[dimIndex]] + rect[WH[dimIndex]]];
+}
+
+AxisView.registerAxisPointerClass('SingleAxisPointer', SingleAxisPointer);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+extendComponentView({
+    type: 'single'
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file  Define the themeRiver view's series model
+ * @author Deqing Li(annong035@gmail.com)
+ */
+
+var DATA_NAME_INDEX = 2;
+
+var ThemeRiverSeries = SeriesModel.extend({
+
+    type: 'series.themeRiver',
+
+    dependencies: ['singleAxis'],
+
+    /**
+     * @readOnly
+     * @type {module:zrender/core/util#HashMap}
+     */
+    nameMap: null,
+
+    /**
+     * @override
+     */
+    init: function (option) {
+        // eslint-disable-next-line
+        ThemeRiverSeries.superApply(this, 'init', arguments);
+
+        // Put this function here is for the sake of consistency of code style.
+        // Enable legend selection for each data item
+        // Use a function instead of direct access because data reference may changed
+        this.legendDataProvider = function () {
+            return this.getRawData();
+        };
+    },
+
+    /**
+     * If there is no value of a certain point in the time for some event,set it value to 0.
+     *
+     * @param {Array} data  initial data in the option
+     * @return {Array}
+     */
+    fixData: function (data) {
+        var rawDataLength = data.length;
+
+        // grouped data by name
+        var groupResult = groupData(data, function (item) {
+            return item[2];
+        });
+        var layData = [];
+        groupResult.buckets.each(function (items, key) {
+            layData.push({name: key, dataList: items});
+        });
+
+        var layerNum = layData.length;
+        var largestLayer = -1;
+        var index = -1;
+        for (var i = 0; i < layerNum; ++i) {
+            var len = layData[i].dataList.length;
+            if (len > largestLayer) {
+                largestLayer = len;
+                index = i;
+            }
+        }
+
+        for (var k = 0; k < layerNum; ++k) {
+            if (k === index) {
+                continue;
+            }
+            var name = layData[k].name;
+            for (var j = 0; j < largestLayer; ++j) {
+                var timeValue = layData[index].dataList[j][0];
+                var length = layData[k].dataList.length;
+                var keyIndex = -1;
+                for (var l = 0; l < length; ++l) {
+                    var value = layData[k].dataList[l][0];
+                    if (value === timeValue) {
+                        keyIndex = l;
+                        break;
+                    }
+                }
+                if (keyIndex === -1) {
+                    data[rawDataLength] = [];
+                    data[rawDataLength][0] = timeValue;
+                    data[rawDataLength][1] = 0;
+                    data[rawDataLength][2] = name;
+                    rawDataLength++;
+
+                }
+            }
+        }
+        return data;
+    },
+
+    /**
+     * @override
+     * @param  {Object} option  the initial option that user gived
+     * @param  {module:echarts/model/Model} ecModel  the model object for themeRiver option
+     * @return {module:echarts/data/List}
+     */
+    getInitialData: function (option, ecModel) {
+
+        var singleAxisModel = ecModel.queryComponents({
+            mainType: 'singleAxis',
+            index: this.get('singleAxisIndex'),
+            id: this.get('singleAxisId')
+        })[0];
+
+        var axisType = singleAxisModel.get('type');
