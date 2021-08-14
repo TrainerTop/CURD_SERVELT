@@ -68755,3 +68755,275 @@ var ThemeRiverSeries = SeriesModel.extend({
         })[0];
 
         var axisType = singleAxisModel.get('type');
+
+        // filter the data item with the value of label is undefined
+        var filterData = filter(option.data, function (dataItem) {
+            return dataItem[2] !== undefined;
+        });
+
+        // ??? TODO design a stage to transfer data for themeRiver and lines?
+        var data = this.fixData(filterData || []);
+        var nameList = [];
+        var nameMap = this.nameMap = createHashMap();
+        var count = 0;
+
+        for (var i = 0; i < data.length; ++i) {
+            nameList.push(data[i][DATA_NAME_INDEX]);
+            if (!nameMap.get(data[i][DATA_NAME_INDEX])) {
+                nameMap.set(data[i][DATA_NAME_INDEX], count);
+                count++;
+            }
+        }
+
+        var dimensionsInfo = createDimensions(data, {
+            coordDimensions: ['single'],
+            dimensionsDefine: [
+                {
+                    name: 'time',
+                    type: getDimensionTypeByAxis(axisType)
+                },
+                {
+                    name: 'value',
+                    type: 'float'
+                },
+                {
+                    name: 'name',
+                    type: 'ordinal'
+                }
+            ],
+            encodeDefine: {
+                single: 0,
+                value: 1,
+                itemName: 2
+            }
+        });
+
+        var list = new List(dimensionsInfo, this);
+        list.initData(data);
+
+        return list;
+    },
+
+    /**
+     * The raw data is divided into multiple layers and each layer
+     *     has same name.
+     *
+     * @return {Array.<Array.<number>>}
+     */
+    getLayerSeries: function () {
+        var data = this.getData();
+        var lenCount = data.count();
+        var indexArr = [];
+
+        for (var i = 0; i < lenCount; ++i) {
+            indexArr[i] = i;
+        }
+
+        var timeDim = data.mapDimension('single');
+
+        // data group by name
+        var groupResult = groupData(indexArr, function (index) {
+            return data.get('name', index);
+        });
+        var layerSeries = [];
+        groupResult.buckets.each(function (items, key) {
+            items.sort(function (index1, index2) {
+                return data.get(timeDim, index1) - data.get(timeDim, index2);
+            });
+            layerSeries.push({name: key, indices: items});
+        });
+
+        return layerSeries;
+    },
+
+    /**
+     * Get data indices for show tooltip content
+     *
+     * @param {Array.<string>|string} dim  single coordinate dimension
+     * @param {number} value axis value
+     * @param {module:echarts/coord/single/SingleAxis} baseAxis  single Axis used
+     *     the themeRiver.
+     * @return {Object} {dataIndices, nestestValue}
+     */
+    getAxisTooltipData: function (dim, value, baseAxis) {
+        if (!isArray(dim)) {
+            dim = dim ? [dim] : [];
+        }
+
+        var data = this.getData();
+        var layerSeries = this.getLayerSeries();
+        var indices = [];
+        var layerNum = layerSeries.length;
+        var nestestValue;
+
+        for (var i = 0; i < layerNum; ++i) {
+            var minDist = Number.MAX_VALUE;
+            var nearestIdx = -1;
+            var pointNum = layerSeries[i].indices.length;
+            for (var j = 0; j < pointNum; ++j) {
+                var theValue = data.get(dim[0], layerSeries[i].indices[j]);
+                var dist = Math.abs(theValue - value);
+                if (dist <= minDist) {
+                    nestestValue = theValue;
+                    minDist = dist;
+                    nearestIdx = layerSeries[i].indices[j];
+                }
+            }
+            indices.push(nearestIdx);
+        }
+
+        return {dataIndices: indices, nestestValue: nestestValue};
+    },
+
+    /**
+     * @override
+     * @param {number} dataIndex  index of data
+     */
+    formatTooltip: function (dataIndex) {
+        var data = this.getData();
+        var htmlName = data.getName(dataIndex);
+        var htmlValue = data.get(data.mapDimension('value'), dataIndex);
+        if (isNaN(htmlValue) || htmlValue == null) {
+            htmlValue = '-';
+        }
+        return encodeHTML(htmlName + ' : ' + htmlValue);
+    },
+
+    defaultOption: {
+        zlevel: 0,
+        z: 2,
+
+        coordinateSystem: 'singleAxis',
+
+        // gap in axis's orthogonal orientation
+        boundaryGap: ['10%', '10%'],
+
+        // legendHoverLink: true,
+
+        singleAxisIndex: 0,
+
+        animationEasing: 'linear',
+
+        label: {
+            margin: 4,
+            show: true,
+            position: 'left',
+            color: '#000',
+            fontSize: 11
+        },
+
+        emphasis: {
+            label: {
+                show: true
+            }
+        }
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file  The file used to draw themeRiver view
+ * @author  Deqing Li(annong035@gmail.com)
+ */
+
+extendChartView({
+
+    type: 'themeRiver',
+
+    init: function () {
+        this._layers = [];
+    },
+
+    render: function (seriesModel, ecModel, api) {
+        var data = seriesModel.getData();
+
+        var group = this.group;
+
+        var layerSeries = seriesModel.getLayerSeries();
+
+        var layoutInfo = data.getLayout('layoutInfo');
+        var rect = layoutInfo.rect;
+        var boundaryGap = layoutInfo.boundaryGap;
+
+        group.attr('position', [0, rect.y + boundaryGap[0]]);
+
+        function keyGetter(item) {
+            return item.name;
+        }
+        var dataDiffer = new DataDiffer(
+            this._layersSeries || [], layerSeries,
+            keyGetter, keyGetter
+        );
+
+        var newLayersGroups = {};
+
+        dataDiffer
+            .add(bind(process, this, 'add'))
+            .update(bind(process, this, 'update'))
+            .remove(bind(process, this, 'remove'))
+            .execute();
+
+        function process(status, idx, oldIdx) {
+            var oldLayersGroups = this._layers;
+            if (status === 'remove') {
+                group.remove(oldLayersGroups[idx]);
+                return;
+            }
+            var points0 = [];
+            var points1 = [];
+            var color;
+            var indices = layerSeries[idx].indices;
+            for (var j = 0; j < indices.length; j++) {
+                var layout = data.getItemLayout(indices[j]);
+                var x = layout.x;
+                var y0 = layout.y0;
+                var y = layout.y;
+
+                points0.push([x, y0]);
+                points1.push([x, y0 + y]);
+
+                color = data.getItemVisual(indices[j], 'color');
+            }
+
+            var polygon;
+            var text;
+            var textLayout = data.getItemLayout(indices[0]);
+            var itemModel = data.getItemModel(indices[j - 1]);
+            var labelModel = itemModel.getModel('label');
+            var margin = labelModel.get('margin');
+            if (status === 'add') {
+                var layerGroup = newLayersGroups[idx] = new Group();
+                polygon = new Polygon$1({
+                    shape: {
+                        points: points0,
+                        stackedOnPoints: points1,
+                        smooth: 0.4,
+                        stackedOnSmooth: 0.4,
+                        smoothConstraint: false
+                    },
+                    z2: 0
+                });
+                text = new Text({
+                    style: {
+                        x: textLayout.x - margin,
+                        y: textLayout.y0 + textLayout.y / 2
+                    }
+                });
