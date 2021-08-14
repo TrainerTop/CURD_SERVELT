@@ -68202,3 +68202,293 @@ function getValueLabel(value, axis, ecModel, seriesDataIndices, opt) {
             text = formatter(params);
         }
     }
+
+    return text;
+}
+
+/**
+ * @param {module:echarts/coord/Axis} axis
+ * @param {number} value
+ * @param {Object} layoutInfo {
+ *  rotation, position, labelOffset, labelDirection, labelMargin
+ * }
+ */
+function getTransformedPosition(axis, value, layoutInfo) {
+    var transform = create$1();
+    rotate(transform, transform, layoutInfo.rotation);
+    translate(transform, transform, layoutInfo.position);
+
+    return applyTransform$1([
+        axis.dataToCoord(value),
+        (layoutInfo.labelOffset || 0)
+            + (layoutInfo.labelDirection || 1) * (layoutInfo.labelMargin || 0)
+    ], transform);
+}
+
+function buildCartesianSingleLabelElOption(
+    value, elOption, layoutInfo, axisModel, axisPointerModel, api
+) {
+    var textLayout = AxisBuilder.innerTextLayout(
+        layoutInfo.rotation, 0, layoutInfo.labelDirection
+    );
+    layoutInfo.labelMargin = axisPointerModel.get('label.margin');
+    buildLabelElOption(elOption, axisModel, axisPointerModel, api, {
+        position: getTransformedPosition(axisModel.axis, value, layoutInfo),
+        align: textLayout.textAlign,
+        verticalAlign: textLayout.textVerticalAlign
+    });
+}
+
+/**
+ * @param {Array.<number>} p1
+ * @param {Array.<number>} p2
+ * @param {number} [xDimIndex=0] or 1
+ */
+function makeLineShape(p1, p2, xDimIndex) {
+    xDimIndex = xDimIndex || 0;
+    return {
+        x1: p1[xDimIndex],
+        y1: p1[1 - xDimIndex],
+        x2: p2[xDimIndex],
+        y2: p2[1 - xDimIndex]
+    };
+}
+
+/**
+ * @param {Array.<number>} xy
+ * @param {Array.<number>} wh
+ * @param {number} [xDimIndex=0] or 1
+ */
+function makeRectShape(xy, wh, xDimIndex) {
+    xDimIndex = xDimIndex || 0;
+    return {
+        x: xy[xDimIndex],
+        y: xy[1 - xDimIndex],
+        width: wh[xDimIndex],
+        height: wh[1 - xDimIndex]
+    };
+}
+
+function makeSectorShape(cx, cy, r0, r, startAngle, endAngle) {
+    return {
+        cx: cx,
+        cy: cy,
+        r0: r0,
+        r: r,
+        startAngle: startAngle,
+        endAngle: endAngle,
+        clockwise: true
+    };
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var CartesianAxisPointer = BaseAxisPointer.extend({
+
+    /**
+     * @override
+     */
+    makeElOption: function (elOption, value, axisModel, axisPointerModel, api) {
+        var axis = axisModel.axis;
+        var grid = axis.grid;
+        var axisPointerType = axisPointerModel.get('type');
+        var otherExtent = getCartesian(grid, axis).getOtherAxis(axis).getGlobalExtent();
+        var pixelValue = axis.toGlobalCoord(axis.dataToCoord(value, true));
+
+        if (axisPointerType && axisPointerType !== 'none') {
+            var elStyle = buildElStyle(axisPointerModel);
+            var pointerOption = pointerShapeBuilder[axisPointerType](
+                axis, pixelValue, otherExtent, elStyle
+            );
+            pointerOption.style = elStyle;
+            elOption.graphicKey = pointerOption.type;
+            elOption.pointer = pointerOption;
+        }
+
+        var layoutInfo = layout$1(grid.model, axisModel);
+        buildCartesianSingleLabelElOption(
+            value, elOption, layoutInfo, axisModel, axisPointerModel, api
+        );
+    },
+
+    /**
+     * @override
+     */
+    getHandleTransform: function (value, axisModel, axisPointerModel) {
+        var layoutInfo = layout$1(axisModel.axis.grid.model, axisModel, {
+            labelInside: false
+        });
+        layoutInfo.labelMargin = axisPointerModel.get('handle.margin');
+        return {
+            position: getTransformedPosition(axisModel.axis, value, layoutInfo),
+            rotation: layoutInfo.rotation + (layoutInfo.labelDirection < 0 ? Math.PI : 0)
+        };
+    },
+
+    /**
+     * @override
+     */
+    updateHandleTransform: function (transform, delta, axisModel, axisPointerModel) {
+        var axis = axisModel.axis;
+        var grid = axis.grid;
+        var axisExtent = axis.getGlobalExtent(true);
+        var otherExtent = getCartesian(grid, axis).getOtherAxis(axis).getGlobalExtent();
+        var dimIndex = axis.dim === 'x' ? 0 : 1;
+
+        var currPosition = transform.position;
+        currPosition[dimIndex] += delta[dimIndex];
+        currPosition[dimIndex] = Math.min(axisExtent[1], currPosition[dimIndex]);
+        currPosition[dimIndex] = Math.max(axisExtent[0], currPosition[dimIndex]);
+
+        var cursorOtherValue = (otherExtent[1] + otherExtent[0]) / 2;
+        var cursorPoint = [cursorOtherValue, cursorOtherValue];
+        cursorPoint[dimIndex] = currPosition[dimIndex];
+
+        // Make tooltip do not overlap axisPointer and in the middle of the grid.
+        var tooltipOptions = [{verticalAlign: 'middle'}, {align: 'center'}];
+
+        return {
+            position: currPosition,
+            rotation: transform.rotation,
+            cursorPoint: cursorPoint,
+            tooltipOption: tooltipOptions[dimIndex]
+        };
+    }
+
+});
+
+function getCartesian(grid, axis) {
+    var opt = {};
+    opt[axis.dim + 'AxisIndex'] = axis.index;
+    return grid.getCartesian(opt);
+}
+
+var pointerShapeBuilder = {
+
+    line: function (axis, pixelValue, otherExtent, elStyle) {
+        var targetShape = makeLineShape(
+            [pixelValue, otherExtent[0]],
+            [pixelValue, otherExtent[1]],
+            getAxisDimIndex(axis)
+        );
+        subPixelOptimizeLine({
+            shape: targetShape,
+            style: elStyle
+        });
+        return {
+            type: 'Line',
+            shape: targetShape
+        };
+    },
+
+    shadow: function (axis, pixelValue, otherExtent, elStyle) {
+        var bandWidth = Math.max(1, axis.getBandWidth());
+        var span = otherExtent[1] - otherExtent[0];
+        return {
+            type: 'Rect',
+            shape: makeRectShape(
+                [pixelValue - bandWidth / 2, otherExtent[0]],
+                [bandWidth, span],
+                getAxisDimIndex(axis)
+            )
+        };
+    }
+};
+
+function getAxisDimIndex(axis) {
+    return axis.dim === 'x' ? 0 : 1;
+}
+
+AxisView.registerAxisPointerClass('CartesianAxisPointer', CartesianAxisPointer);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// CartesianAxisPointer is not supposed to be required here. But consider
+// echarts.simple.js and online build tooltip, which only require gridSimple,
+// CartesianAxisPointer should be able to required somewhere.
+registerPreprocessor(function (option) {
+    // Always has a global axisPointerModel for default setting.
+    if (option) {
+        (!option.axisPointer || option.axisPointer.length === 0)
+            && (option.axisPointer = {});
+
+        var link = option.axisPointer.link;
+        // Normalize to array to avoid object mergin. But if link
+        // is not set, remain null/undefined, otherwise it will
+        // override existent link setting.
+        if (link && !isArray(link)) {
+            option.axisPointer.link = [link];
+        }
+    }
+});
+
+// This process should proformed after coordinate systems created
+// and series data processed. So put it on statistic processing stage.
+registerProcessor(PRIORITY.PROCESSOR.STATISTIC, function (ecModel, api) {
+    // Build axisPointerModel, mergin tooltip.axisPointer model for each axis.
+    // allAxesInfo should be updated when setOption performed.
+    ecModel.getComponent('axisPointer').coordSysAxesInfo
+        = collect(ecModel, api);
+});
+
+// Broadcast to all views.
+registerAction({
+    type: 'updateAxisPointer',
+    event: 'updateAxisPointer',
+    update: ':updateAxisPointer'
+}, axisTrigger);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var XY = ['x', 'y'];
