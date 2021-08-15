@@ -69578,3 +69578,235 @@ var DEFAULT_TEXT_Z = 4;
  * @extends {module:zrender/graphic/Group}
  */
 function SunburstPiece(node, seriesModel, ecModel) {
+
+    Group.call(this);
+
+    var sector = new Sector({
+        z2: DEFAULT_SECTOR_Z
+    });
+    sector.seriesIndex = seriesModel.seriesIndex;
+
+    var text = new Text({
+        z2: DEFAULT_TEXT_Z,
+        silent: node.getModel('label').get('silent')
+    });
+    this.add(sector);
+    this.add(text);
+
+    this.updateData(true, node, 'normal', seriesModel, ecModel);
+
+    // Hover to change label and labelLine
+    function onEmphasis() {
+        text.ignore = text.hoverIgnore;
+    }
+    function onNormal() {
+        text.ignore = text.normalIgnore;
+    }
+    this.on('emphasis', onEmphasis)
+        .on('normal', onNormal)
+        .on('mouseover', onEmphasis)
+        .on('mouseout', onNormal);
+}
+
+var SunburstPieceProto = SunburstPiece.prototype;
+
+SunburstPieceProto.updateData = function (
+    firstCreate,
+    node,
+    state,
+    seriesModel,
+    ecModel
+) {
+    this.node = node;
+    node.piece = this;
+
+    seriesModel = seriesModel || this._seriesModel;
+    ecModel = ecModel || this._ecModel;
+
+    var sector = this.childAt(0);
+    sector.dataIndex = node.dataIndex;
+
+    var itemModel = node.getModel();
+    var layout = node.getLayout();
+    // if (!layout) {
+    //     console.log(node.getLayout());
+    // }
+    var sectorShape = extend({}, layout);
+    sectorShape.label = null;
+
+    var visualColor = getNodeColor(node, seriesModel, ecModel);
+
+    fillDefaultColor(node, seriesModel, visualColor);
+
+    var normalStyle = itemModel.getModel('itemStyle').getItemStyle();
+    var style;
+    if (state === 'normal') {
+        style = normalStyle;
+    }
+    else {
+        var stateStyle = itemModel.getModel(state + '.itemStyle')
+            .getItemStyle();
+        style = merge(stateStyle, normalStyle);
+    }
+    style = defaults(
+        {
+            lineJoin: 'bevel',
+            fill: style.fill || visualColor
+        },
+        style
+    );
+
+    if (firstCreate) {
+        sector.setShape(sectorShape);
+        sector.shape.r = layout.r0;
+        updateProps(
+            sector,
+            {
+                shape: {
+                    r: layout.r
+                }
+            },
+            seriesModel,
+            node.dataIndex
+        );
+        sector.useStyle(style);
+    }
+    else if (typeof style.fill === 'object' && style.fill.type
+        || typeof sector.style.fill === 'object' && sector.style.fill.type
+    ) {
+        // Disable animation for gradient since no interpolation method
+        // is supported for gradient
+        updateProps(sector, {
+            shape: sectorShape
+        }, seriesModel);
+        sector.useStyle(style);
+    }
+    else {
+        updateProps(sector, {
+            shape: sectorShape,
+            style: style
+        }, seriesModel);
+    }
+
+    this._updateLabel(seriesModel, visualColor, state);
+
+    var cursorStyle = itemModel.getShallow('cursor');
+    cursorStyle && sector.attr('cursor', cursorStyle);
+
+    if (firstCreate) {
+        var highlightPolicy = seriesModel.getShallow('highlightPolicy');
+        this._initEvents(sector, node, seriesModel, highlightPolicy);
+    }
+
+    this._seriesModel = seriesModel || this._seriesModel;
+    this._ecModel = ecModel || this._ecModel;
+};
+
+SunburstPieceProto.onEmphasis = function (highlightPolicy) {
+    var that = this;
+    this.node.hostTree.root.eachNode(function (n) {
+        if (n.piece) {
+            if (that.node === n) {
+                n.piece.updateData(false, n, 'emphasis');
+            }
+            else if (isNodeHighlighted(n, that.node, highlightPolicy)) {
+                n.piece.childAt(0).trigger('highlight');
+            }
+            else if (highlightPolicy !== NodeHighlightPolicy.NONE) {
+                n.piece.childAt(0).trigger('downplay');
+            }
+        }
+    });
+};
+
+SunburstPieceProto.onNormal = function () {
+    this.node.hostTree.root.eachNode(function (n) {
+        if (n.piece) {
+            n.piece.updateData(false, n, 'normal');
+        }
+    });
+};
+
+SunburstPieceProto.onHighlight = function () {
+    this.updateData(false, this.node, 'highlight');
+};
+
+SunburstPieceProto.onDownplay = function () {
+    this.updateData(false, this.node, 'downplay');
+};
+
+SunburstPieceProto._updateLabel = function (seriesModel, visualColor, state) {
+    var itemModel = this.node.getModel();
+    var normalModel = itemModel.getModel('label');
+    var labelModel = state === 'normal' || state === 'emphasis'
+        ? normalModel
+        : itemModel.getModel(state + '.label');
+    var labelHoverModel = itemModel.getModel('emphasis.label');
+
+    var text = retrieve(
+        seriesModel.getFormattedLabel(
+            this.node.dataIndex, 'normal', null, null, 'label'
+        ),
+        this.node.name
+    );
+    if (getLabelAttr('show') === false) {
+        text = '';
+    }
+
+    var layout = this.node.getLayout();
+    var labelMinAngle = labelModel.get('minAngle');
+    if (labelMinAngle == null) {
+        labelMinAngle = normalModel.get('minAngle');
+    }
+    labelMinAngle = labelMinAngle / 180 * Math.PI;
+    var angle = layout.endAngle - layout.startAngle;
+    if (labelMinAngle != null && Math.abs(angle) < labelMinAngle) {
+        // Not displaying text when angle is too small
+        text = '';
+    }
+
+    var label = this.childAt(1);
+
+    setLabelStyle(
+        label.style, label.hoverStyle || {}, normalModel, labelHoverModel,
+        {
+            defaultText: labelModel.getShallow('show') ? text : null,
+            autoColor: visualColor,
+            useInsideStyle: true
+        }
+    );
+
+    var midAngle = (layout.startAngle + layout.endAngle) / 2;
+    var dx = Math.cos(midAngle);
+    var dy = Math.sin(midAngle);
+
+    var r;
+    var labelPosition = getLabelAttr('position');
+    var labelPadding = getLabelAttr('distance') || 0;
+    var textAlign = getLabelAttr('align');
+    if (labelPosition === 'outside') {
+        r = layout.r + labelPadding;
+        textAlign = midAngle > Math.PI / 2 ? 'right' : 'left';
+    }
+    else {
+        if (!textAlign || textAlign === 'center') {
+            r = (layout.r + layout.r0) / 2;
+            textAlign = 'center';
+        }
+        else if (textAlign === 'left') {
+            r = layout.r0 + labelPadding;
+            if (midAngle > Math.PI / 2) {
+                textAlign = 'right';
+            }
+        }
+        else if (textAlign === 'right') {
+            r = layout.r - labelPadding;
+            if (midAngle > Math.PI / 2) {
+                textAlign = 'left';
+            }
+        }
+    }
+
+    label.attr('style', {
+        text: text,
+        textAlign: textAlign,
