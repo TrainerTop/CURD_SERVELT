@@ -69027,3 +69027,294 @@ extendChartView({
                         y: textLayout.y0 + textLayout.y / 2
                     }
                 });
+                layerGroup.add(polygon);
+                layerGroup.add(text);
+                group.add(layerGroup);
+
+                polygon.setClipPath(createGridClipShape$3(polygon.getBoundingRect(), seriesModel, function () {
+                    polygon.removeClipPath();
+                }));
+            }
+            else {
+                var layerGroup = oldLayersGroups[oldIdx];
+                polygon = layerGroup.childAt(0);
+                text = layerGroup.childAt(1);
+                group.add(layerGroup);
+
+                newLayersGroups[idx] = layerGroup;
+
+                updateProps(polygon, {
+                    shape: {
+                        points: points0,
+                        stackedOnPoints: points1
+                    }
+                }, seriesModel);
+
+                updateProps(text, {
+                    style: {
+                        x: textLayout.x - margin,
+                        y: textLayout.y0 + textLayout.y / 2
+                    }
+                }, seriesModel);
+            }
+
+            var hoverItemStyleModel = itemModel.getModel('emphasis.itemStyle');
+            var itemStyleModel = itemModel.getModel('itemStyle');
+
+            setTextStyle(text.style, labelModel, {
+                text: labelModel.get('show')
+                    ? seriesModel.getFormattedLabel(indices[j - 1], 'normal')
+                        || data.getName(indices[j - 1])
+                    : null,
+                textVerticalAlign: 'middle'
+            });
+
+            polygon.setStyle(extend({
+                fill: color
+            }, itemStyleModel.getItemStyle(['color'])));
+
+            setHoverStyle(polygon, hoverItemStyleModel.getItemStyle());
+        }
+
+        this._layersSeries = layerSeries;
+        this._layers = newLayersGroups;
+    },
+
+    dispose: function () {}
+});
+
+// add animation to the view
+function createGridClipShape$3(rect, seriesModel, cb) {
+    var rectEl = new Rect({
+        shape: {
+            x: rect.x - 10,
+            y: rect.y - 10,
+            width: 0,
+            height: rect.height + 20
+        }
+    });
+    initProps(rectEl, {
+        shape: {
+            width: rect.width + 20,
+            height: rect.height + 20
+        }
+    }, seriesModel, cb);
+
+    return rectEl;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file  Using layout algorithm transform the raw data to layout information.
+ * @author Deqing Li(annong035@gmail.com)
+ */
+
+var themeRiverLayout = function (ecModel, api) {
+
+    ecModel.eachSeriesByType('themeRiver', function (seriesModel) {
+
+        var data = seriesModel.getData();
+
+        var single = seriesModel.coordinateSystem;
+
+        var layoutInfo = {};
+
+        // use the axis boundingRect for view
+        var rect = single.getRect();
+
+        layoutInfo.rect = rect;
+
+        var boundaryGap = seriesModel.get('boundaryGap');
+
+        var axis = single.getAxis();
+
+        layoutInfo.boundaryGap = boundaryGap;
+
+        if (axis.orient === 'horizontal') {
+            boundaryGap[0] = parsePercent$1(boundaryGap[0], rect.height);
+            boundaryGap[1] = parsePercent$1(boundaryGap[1], rect.height);
+            var height = rect.height - boundaryGap[0] - boundaryGap[1];
+            themeRiverLayout$1(data, seriesModel, height);
+        }
+        else {
+            boundaryGap[0] = parsePercent$1(boundaryGap[0], rect.width);
+            boundaryGap[1] = parsePercent$1(boundaryGap[1], rect.width);
+            var width = rect.width - boundaryGap[0] - boundaryGap[1];
+            themeRiverLayout$1(data, seriesModel, width);
+        }
+
+        data.setLayout('layoutInfo', layoutInfo);
+    });
+};
+
+/**
+ * The layout information about themeriver
+ *
+ * @param {module:echarts/data/List} data  data in the series
+ * @param {module:echarts/model/Series} seriesModel  the model object of themeRiver series
+ * @param {number} height  value used to compute every series height
+ */
+function themeRiverLayout$1(data, seriesModel, height) {
+    if (!data.count()) {
+        return;
+    }
+    var coordSys = seriesModel.coordinateSystem;
+    // the data in each layer are organized into a series.
+    var layerSeries = seriesModel.getLayerSeries();
+
+    // the points in each layer.
+    var timeDim = data.mapDimension('single');
+    var valueDim = data.mapDimension('value');
+    var layerPoints = map(layerSeries, function (singleLayer) {
+        return map(singleLayer.indices, function (idx) {
+            var pt = coordSys.dataToPoint(data.get(timeDim, idx));
+            pt[1] = data.get(valueDim, idx);
+            return pt;
+        });
+    });
+
+    var base = computeBaseline(layerPoints);
+    var baseLine = base.y0;
+    var ky = height / base.max;
+
+    // set layout information for each item.
+    var n = layerSeries.length;
+    var m = layerSeries[0].indices.length;
+    var baseY0;
+    for (var j = 0; j < m; ++j) {
+        baseY0 = baseLine[j] * ky;
+        data.setItemLayout(layerSeries[0].indices[j], {
+            layerIndex: 0,
+            x: layerPoints[0][j][0],
+            y0: baseY0,
+            y: layerPoints[0][j][1] * ky
+        });
+        for (var i = 1; i < n; ++i) {
+            baseY0 += layerPoints[i - 1][j][1] * ky;
+            data.setItemLayout(layerSeries[i].indices[j], {
+                layerIndex: i,
+                x: layerPoints[i][j][0],
+                y0: baseY0,
+                y: layerPoints[i][j][1] * ky
+            });
+        }
+    }
+}
+
+/**
+ * Compute the baseLine of the rawdata
+ * Inspired by Lee Byron's paper Stacked Graphs - Geometry & Aesthetics
+ *
+ * @param  {Array.<Array>} data  the points in each layer
+ * @return {Object}
+ */
+function computeBaseline(data) {
+    var layerNum = data.length;
+    var pointNum = data[0].length;
+    var sums = [];
+    var y0 = [];
+    var max = 0;
+    var temp;
+    var base = {};
+
+    for (var i = 0; i < pointNum; ++i) {
+        for (var j = 0, temp = 0; j < layerNum; ++j) {
+            temp += data[j][i][1];
+        }
+        if (temp > max) {
+            max = temp;
+        }
+        sums.push(temp);
+    }
+
+    for (var k = 0; k < pointNum; ++k) {
+        y0[k] = (max - sums[k]) / 2;
+    }
+    max = 0;
+
+    for (var l = 0; l < pointNum; ++l) {
+        var sum = sums[l] + y0[l];
+        if (sum > max) {
+            max = sum;
+        }
+    }
+    base.y0 = y0;
+    base.max = max;
+
+    return base;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file Visual encoding for themeRiver view
+ * @author Deqing Li(annong035@gmail.com)
+ */
+
+var themeRiverVisual = function (ecModel) {
+    ecModel.eachSeriesByType('themeRiver', function (seriesModel) {
+        var data = seriesModel.getData();
+        var rawData = seriesModel.getRawData();
+        var colorList = seriesModel.get('color');
+        var idxMap = createHashMap();
+
+        data.each(function (idx) {
+            idxMap.set(data.getRawIndex(idx), idx);
+        });
+
+        rawData.each(function (rawIndex) {
+            var name = rawData.getName(rawIndex);
+            var color = colorList[(seriesModel.nameMap.get(name) - 1) % colorList.length];
+
+            rawData.setItemVisual(rawIndex, 'color', color);
+
+            var idx = idxMap.get(rawIndex);
+
+            if (idx != null) {
+                data.setItemVisual(idx, 'color', color);
+            }
+        });
+    });
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
