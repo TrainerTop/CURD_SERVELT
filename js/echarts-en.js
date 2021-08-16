@@ -69810,3 +69810,271 @@ SunburstPieceProto._updateLabel = function (seriesModel, visualColor, state) {
     label.attr('style', {
         text: text,
         textAlign: textAlign,
+        textVerticalAlign: getLabelAttr('verticalAlign') || 'middle',
+        opacity: getLabelAttr('opacity')
+    });
+
+    var textX = r * dx + layout.cx;
+    var textY = r * dy + layout.cy;
+    label.attr('position', [textX, textY]);
+
+    var rotateType = getLabelAttr('rotate');
+    var rotate = 0;
+    if (rotateType === 'radial') {
+        rotate = -midAngle;
+        if (rotate < -Math.PI / 2) {
+            rotate += Math.PI;
+        }
+    }
+    else if (rotateType === 'tangential') {
+        rotate = Math.PI / 2 - midAngle;
+        if (rotate > Math.PI / 2) {
+            rotate -= Math.PI;
+        }
+        else if (rotate < -Math.PI / 2) {
+            rotate += Math.PI;
+        }
+    } else if (typeof rotateType === 'number') {
+        rotate = rotateType * Math.PI / 180;
+    }
+    label.attr('rotation', rotate);
+
+    function getLabelAttr(name) {
+        var stateAttr = labelModel.get(name);
+        if (stateAttr == null) {
+            return normalModel.get(name);
+        }
+        else {
+            return stateAttr;
+        }
+    }
+};
+
+SunburstPieceProto._initEvents = function (
+    sector,
+    node,
+    seriesModel,
+    highlightPolicy
+) {
+    sector.off('mouseover').off('mouseout').off('emphasis').off('normal');
+
+    var that = this;
+    var onEmphasis = function () {
+        that.onEmphasis(highlightPolicy);
+    };
+    var onNormal = function () {
+        that.onNormal();
+    };
+    var onDownplay = function () {
+        that.onDownplay();
+    };
+    var onHighlight = function () {
+        that.onHighlight();
+    };
+
+    if (seriesModel.isAnimationEnabled()) {
+        sector
+            .on('mouseover', onEmphasis)
+            .on('mouseout', onNormal)
+            .on('emphasis', onEmphasis)
+            .on('normal', onNormal)
+            .on('downplay', onDownplay)
+            .on('highlight', onHighlight);
+    }
+};
+
+inherits(SunburstPiece, Group);
+
+/**
+ * Get node color
+ *
+ * @param {TreeNode} node the node to get color
+ * @param {module:echarts/model/Series} seriesModel series
+ * @param {module:echarts/model/Global} ecModel echarts defaults
+ */
+function getNodeColor(node, seriesModel, ecModel) {
+    // Color from visualMap
+    var visualColor = node.getVisual('color');
+    var visualMetaList = node.getVisual('visualMeta');
+    if (!visualMetaList || visualMetaList.length === 0) {
+        // Use first-generation color if has no visualMap
+        visualColor = null;
+    }
+
+    // Self color or level color
+    var color = node.getModel('itemStyle').get('color');
+    if (color) {
+        return color;
+    }
+    else if (visualColor) {
+        // Color mapping
+        return visualColor;
+    }
+    else if (node.depth === 0) {
+        // Virtual root node
+        return ecModel.option.color[0];
+    }
+    else {
+        // First-generation color
+        var length = ecModel.option.color.length;
+        color = ecModel.option.color[getRootId(node) % length];
+    }
+    return color;
+}
+
+/**
+ * Get index of root in sorted order
+ *
+ * @param {TreeNode} node current node
+ * @return {number} index in root
+ */
+function getRootId(node) {
+    var ancestor = node;
+    while (ancestor.depth > 1) {
+        ancestor = ancestor.parentNode;
+    }
+
+    var virtualRoot = node.getAncestors()[0];
+    return indexOf(virtualRoot.children, ancestor);
+}
+
+function isNodeHighlighted(node, activeNode, policy) {
+    if (policy === NodeHighlightPolicy.NONE) {
+        return false;
+    }
+    else if (policy === NodeHighlightPolicy.SELF) {
+        return node === activeNode;
+    }
+    else if (policy === NodeHighlightPolicy.ANCESTOR) {
+        return node === activeNode || node.isAncestorOf(activeNode);
+    }
+    else {
+        return node === activeNode || node.isDescendantOf(activeNode);
+    }
+}
+
+// Fix tooltip callback function params.color incorrect when pick a default color
+function fillDefaultColor(node, seriesModel, color) {
+    var data = seriesModel.getData();
+    data.setItemVisual(node.dataIndex, 'color', color);
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var ROOT_TO_NODE_ACTION = 'sunburstRootToNode';
+
+var SunburstView = Chart.extend({
+
+    type: 'sunburst',
+
+    init: function () {
+    },
+
+    render: function (seriesModel, ecModel, api, payload) {
+        var that = this;
+
+        this.seriesModel = seriesModel;
+        this.api = api;
+        this.ecModel = ecModel;
+
+        var data = seriesModel.getData();
+        var virtualRoot = data.tree.root;
+
+        var newRoot = seriesModel.getViewRoot();
+
+        var group = this.group;
+
+        var renderLabelForZeroData = seriesModel.get('renderLabelForZeroData');
+
+        var newChildren = [];
+        newRoot.eachNode(function (node) {
+            newChildren.push(node);
+        });
+        var oldChildren = this._oldChildren || [];
+
+        dualTravel(newChildren, oldChildren);
+
+        renderRollUp(virtualRoot, newRoot);
+
+        if (payload && payload.highlight && payload.highlight.piece) {
+            var highlightPolicy = seriesModel.getShallow('highlightPolicy');
+            payload.highlight.piece.onEmphasis(highlightPolicy);
+        }
+        else if (payload && payload.unhighlight) {
+            var piece = this.virtualPiece;
+            if (!piece && virtualRoot.children.length) {
+                piece = virtualRoot.children[0].piece;
+            }
+            if (piece) {
+                piece.onNormal();
+            }
+        }
+
+        this._initEvents();
+
+        this._oldChildren = newChildren;
+
+        function dualTravel(newChildren, oldChildren) {
+            if (newChildren.length === 0 && oldChildren.length === 0) {
+                return;
+            }
+
+            new DataDiffer(oldChildren, newChildren, getKey, getKey)
+                .add(processNode)
+                .update(processNode)
+                .remove(curry(processNode, null))
+                .execute();
+
+            function getKey(node) {
+                return node.getId();
+            }
+
+            function processNode(newId, oldId) {
+                var newNode = newId == null ? null : newChildren[newId];
+                var oldNode = oldId == null ? null : oldChildren[oldId];
+
+                doRenderNode(newNode, oldNode);
+            }
+        }
+
+        function doRenderNode(newNode, oldNode) {
+            if (!renderLabelForZeroData && newNode && !newNode.getValue()) {
+                // Not render data with value 0
+                newNode = null;
+            }
+
+            if (newNode !== virtualRoot && oldNode !== virtualRoot) {
+                if (oldNode && oldNode.piece) {
+                    if (newNode) {
+                        // Update
+                        oldNode.piece.updateData(
+                            false, newNode, 'normal', seriesModel, ecModel);
+
+                        // For tooltip
+                        data.setItemGraphicEl(newNode.dataIndex, oldNode.piece);
+                    }
+                    else {
+                        // Remove
+                        removeNode(oldNode);
+                    }
+                }
+                else if (newNode) {
+                    // Add
+                    var piece = new SunburstPiece(
