@@ -70602,3 +70602,259 @@ function dataToCoordSize$1(dataSize, dataItem) {
         var p2 = [];
         p1[dimIdx] = val - halfSize;
         p2[dimIdx] = val + halfSize;
+        p1[1 - dimIdx] = p2[1 - dimIdx] = dataItem[1 - dimIdx];
+        return Math.abs(this.dataToPoint(p1)[dimIdx] - this.dataToPoint(p2)[dimIdx]);
+    }, this);
+}
+
+var prepareGeo = function (coordSys) {
+    var rect = coordSys.getBoundingRect();
+    return {
+        coordSys: {
+            type: 'geo',
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            zoom: coordSys.getZoom()
+        },
+        api: {
+            coord: function (data) {
+                // do not provide "out" and noRoam param,
+                // Compatible with this usage:
+                // echarts.util.map(item.points, api.coord)
+                return coordSys.dataToPoint(data);
+            },
+            size: bind(dataToCoordSize$1, coordSys)
+        }
+    };
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+function dataToCoordSize$2(dataSize, dataItem) {
+    // dataItem is necessary in log axis.
+    var axis = this.getAxis();
+    var val = dataItem instanceof Array ? dataItem[0] : dataItem;
+    var halfSize = (dataSize instanceof Array ? dataSize[0] : dataSize) / 2;
+    return axis.type === 'category'
+        ? axis.getBandWidth()
+        : Math.abs(axis.dataToCoord(val - halfSize) - axis.dataToCoord(val + halfSize));
+}
+
+var prepareSingleAxis = function (coordSys) {
+    var rect = coordSys.getRect();
+
+    return {
+        coordSys: {
+            type: 'singleAxis',
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height
+        },
+        api: {
+            coord: function (val) {
+                // do not provide "out" param
+                return coordSys.dataToPoint(val);
+            },
+            size: bind(dataToCoordSize$2, coordSys)
+        }
+    };
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+function dataToCoordSize$3(dataSize, dataItem) {
+    // dataItem is necessary in log axis.
+    return map(['Radius', 'Angle'], function (dim, dimIdx) {
+        var axis = this['get' + dim + 'Axis']();
+        var val = dataItem[dimIdx];
+        var halfSize = dataSize[dimIdx] / 2;
+        var method = 'dataTo' + dim;
+
+        var result = axis.type === 'category'
+            ? axis.getBandWidth()
+            : Math.abs(axis[method](val - halfSize) - axis[method](val + halfSize));
+
+        if (dim === 'Angle') {
+            result = result * Math.PI / 180;
+        }
+
+        return result;
+
+    }, this);
+}
+
+var preparePolar = function (coordSys) {
+    var radiusAxis = coordSys.getRadiusAxis();
+    var angleAxis = coordSys.getAngleAxis();
+    var radius = radiusAxis.getExtent();
+    radius[0] > radius[1] && radius.reverse();
+
+    return {
+        coordSys: {
+            type: 'polar',
+            cx: coordSys.cx,
+            cy: coordSys.cy,
+            r: radius[1],
+            r0: radius[0]
+        },
+        api: {
+            coord: bind(function (data) {
+                var radius = radiusAxis.dataToRadius(data[0]);
+                var angle = angleAxis.dataToAngle(data[1]);
+                var coord = coordSys.coordToPoint([radius, angle]);
+                coord.push(radius, angle * Math.PI / 180);
+                return coord;
+            }),
+            size: bind(dataToCoordSize$3, coordSys)
+        }
+    };
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var prepareCalendar = function (coordSys) {
+    var rect = coordSys.getRect();
+    var rangeInfo = coordSys.getRangeInfo();
+
+    return {
+        coordSys: {
+            type: 'calendar',
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            cellWidth: coordSys.getCellWidth(),
+            cellHeight: coordSys.getCellHeight(),
+            rangeInfo: {
+                start: rangeInfo.start,
+                end: rangeInfo.end,
+                weeks: rangeInfo.weeks,
+                dayCount: rangeInfo.allDay
+            }
+        },
+        api: {
+            coord: function (data, clamp) {
+                return coordSys.dataToPoint(data, clamp);
+            }
+        }
+    };
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var ITEM_STYLE_NORMAL_PATH = ['itemStyle'];
+var ITEM_STYLE_EMPHASIS_PATH = ['emphasis', 'itemStyle'];
+var LABEL_NORMAL = ['label'];
+var LABEL_EMPHASIS = ['emphasis', 'label'];
+// Use prefix to avoid index to be the same as el.name,
+// which will cause weird udpate animation.
+var GROUP_DIFF_PREFIX = 'e\0\0';
+
+/**
+ * To reduce total package size of each coordinate systems, the modules `prepareCustom`
+ * of each coordinate systems are not required by each coordinate systems directly, but
+ * required by the module `custom`.
+ *
+ * prepareInfoForCustomSeries {Function}: optional
+ *     @return {Object} {coordSys: {...}, api: {
+ *         coord: function (data, clamp) {}, // return point in global.
+ *         size: function (dataSize, dataItem) {} // return size of each axis in coordSys.
+ *     }}
+ */
+var prepareCustoms = {
+    cartesian2d: prepareCartesian2d,
+    geo: prepareGeo,
+    singleAxis: prepareSingleAxis,
+    polar: preparePolar,
+    calendar: prepareCalendar
+};
+
+
+// ------
+// Model
+// ------
+
+SeriesModel.extend({
+
+    type: 'series.custom',
+
+    dependencies: ['grid', 'polar', 'geo', 'singleAxis', 'calendar'],
+
+    defaultOption: {
+        coordinateSystem: 'cartesian2d', // Can be set as 'none'
+        zlevel: 0,
+        z: 2,
+        legendHoverLink: true,
+
+        useTransform: true
