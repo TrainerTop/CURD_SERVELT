@@ -70858,3 +70858,273 @@ SeriesModel.extend({
         legendHoverLink: true,
 
         useTransform: true
+
+        // Cartesian coordinate system
+        // xAxisIndex: 0,
+        // yAxisIndex: 0,
+
+        // Polar coordinate system
+        // polarIndex: 0,
+
+        // Geo coordinate system
+        // geoIndex: 0,
+
+        // label: {}
+        // itemStyle: {}
+    },
+
+    /**
+     * @override
+     */
+    getInitialData: function (option, ecModel) {
+        return createListFromArray(this.getSource(), this);
+    },
+
+    /**
+     * @override
+     */
+    getDataParams: function (dataIndex, dataType, el) {
+        var params = SeriesModel.prototype.getDataParams.apply(this, arguments);
+        el && (params.info = el.info);
+        return params;
+    }
+});
+
+// -----
+// View
+// -----
+
+Chart.extend({
+
+    type: 'custom',
+
+    /**
+     * @private
+     * @type {module:echarts/data/List}
+     */
+    _data: null,
+
+    /**
+     * @override
+     */
+    render: function (customSeries, ecModel, api, payload) {
+        var oldData = this._data;
+        var data = customSeries.getData();
+        var group = this.group;
+        var renderItem = makeRenderItem(customSeries, data, ecModel, api);
+
+        // By default, merge mode is applied. In most cases, custom series is
+        // used in the scenario that data amount is not large but graphic elements
+        // is complicated, where merge mode is probably necessary for optimization.
+        // For example, reuse graphic elements and only update the transform when
+        // roam or data zoom according to `actionType`.
+        data.diff(oldData)
+            .add(function (newIdx) {
+                createOrUpdate$1(
+                    null, newIdx, renderItem(newIdx, payload), customSeries, group, data
+                );
+            })
+            .update(function (newIdx, oldIdx) {
+                var el = oldData.getItemGraphicEl(oldIdx);
+                createOrUpdate$1(
+                    el, newIdx, renderItem(newIdx, payload), customSeries, group, data
+                );
+            })
+            .remove(function (oldIdx) {
+                var el = oldData.getItemGraphicEl(oldIdx);
+                el && group.remove(el);
+            })
+            .execute();
+
+        this._data = data;
+    },
+
+    incrementalPrepareRender: function (customSeries, ecModel, api) {
+        this.group.removeAll();
+        this._data = null;
+    },
+
+    incrementalRender: function (params, customSeries, ecModel, api, payload) {
+        var data = customSeries.getData();
+        var renderItem = makeRenderItem(customSeries, data, ecModel, api);
+        function setIncrementalAndHoverLayer(el) {
+            if (!el.isGroup) {
+                el.incremental = true;
+                el.useHoverLayer = true;
+            }
+        }
+        for (var idx = params.start; idx < params.end; idx++) {
+            var el = createOrUpdate$1(null, idx, renderItem(idx, payload), customSeries, this.group, data);
+            el.traverse(setIncrementalAndHoverLayer);
+        }
+    },
+
+    /**
+     * @override
+     */
+    dispose: noop,
+
+    /**
+     * @override
+     */
+    filterForExposedEvent: function (eventType, query, targetEl, packedEvent) {
+        var elementName = query.element;
+        if (elementName == null || targetEl.name === elementName) {
+            return true;
+        }
+
+        // Enable to give a name on a group made by `renderItem`, and listen
+        // events that triggerd by its descendents.
+        while ((targetEl = targetEl.parent) && targetEl !== this.group) {
+            if (targetEl.name === elementName) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+});
+
+
+function createEl(elOption) {
+    var graphicType = elOption.type;
+    var el;
+
+    if (graphicType === 'path') {
+        var shape = elOption.shape;
+        // Using pathRect brings convenience to users sacle svg path.
+        var pathRect = (shape.width != null && shape.height != null)
+            ? {
+                x: shape.x || 0,
+                y: shape.y || 0,
+                width: shape.width,
+                height: shape.height
+            }
+            : null;
+        var pathData = getPathData(shape);
+        // Path is also used for icon, so layout 'center' by default.
+        el = makePath(pathData, null, pathRect, shape.layout || 'center');
+        el.__customPathData = pathData;
+    }
+    else if (graphicType === 'image') {
+        el = new ZImage({});
+        el.__customImagePath = elOption.style.image;
+    }
+    else if (graphicType === 'text') {
+        el = new Text({});
+        el.__customText = elOption.style.text;
+    }
+    else {
+        var Clz = graphic[graphicType.charAt(0).toUpperCase() + graphicType.slice(1)];
+
+        if (__DEV__) {
+            assert$1(Clz, 'graphic type "' + graphicType + '" can not be found.');
+        }
+
+        el = new Clz();
+    }
+
+    el.__customGraphicType = graphicType;
+    el.name = elOption.name;
+
+    return el;
+}
+
+function updateEl(el, dataIndex, elOption, animatableModel, data, isInit, isRoot) {
+    var transitionProps = {};
+    var elOptionStyle = elOption.style || {};
+
+    elOption.shape && (transitionProps.shape = clone(elOption.shape));
+    elOption.position && (transitionProps.position = elOption.position.slice());
+    elOption.scale && (transitionProps.scale = elOption.scale.slice());
+    elOption.origin && (transitionProps.origin = elOption.origin.slice());
+    elOption.rotation && (transitionProps.rotation = elOption.rotation);
+
+    if (el.type === 'image' && elOption.style) {
+        var targetStyle = transitionProps.style = {};
+        each$1(['x', 'y', 'width', 'height'], function (prop) {
+            prepareStyleTransition(prop, targetStyle, elOptionStyle, el.style, isInit);
+        });
+    }
+
+    if (el.type === 'text' && elOption.style) {
+        var targetStyle = transitionProps.style = {};
+        each$1(['x', 'y'], function (prop) {
+            prepareStyleTransition(prop, targetStyle, elOptionStyle, el.style, isInit);
+        });
+        // Compatible with previous: both support
+        // textFill and fill, textStroke and stroke in 'text' element.
+        !elOptionStyle.hasOwnProperty('textFill') && elOptionStyle.fill && (
+            elOptionStyle.textFill = elOptionStyle.fill
+        );
+        !elOptionStyle.hasOwnProperty('textStroke') && elOptionStyle.stroke && (
+            elOptionStyle.textStroke = elOptionStyle.stroke
+        );
+    }
+
+    if (el.type !== 'group') {
+        el.useStyle(elOptionStyle);
+
+        // Init animation.
+        if (isInit) {
+            el.style.opacity = 0;
+            var targetOpacity = elOptionStyle.opacity;
+            targetOpacity == null && (targetOpacity = 1);
+            initProps(el, {style: {opacity: targetOpacity}}, animatableModel, dataIndex);
+        }
+    }
+
+    if (isInit) {
+        el.attr(transitionProps);
+    }
+    else {
+        updateProps(el, transitionProps, animatableModel, dataIndex);
+    }
+
+    // Merge by default.
+    // z2 must not be null/undefined, otherwise sort error may occur.
+    elOption.hasOwnProperty('z2') && el.attr('z2', elOption.z2 || 0);
+    elOption.hasOwnProperty('silent') && el.attr('silent', elOption.silent);
+    elOption.hasOwnProperty('invisible') && el.attr('invisible', elOption.invisible);
+    elOption.hasOwnProperty('ignore') && el.attr('ignore', elOption.ignore);
+    // `elOption.info` enables user to mount some info on
+    // elements and use them in event handlers.
+    // Update them only when user specified, otherwise, remain.
+    elOption.hasOwnProperty('info') && el.attr('info', elOption.info);
+
+    // If `elOption.styleEmphasis` is `false`, remove hover style. The
+    // logic is ensured by `graphicUtil.setElementHoverStyle`.
+    var styleEmphasis = elOption.styleEmphasis;
+    var disableStyleEmphasis = styleEmphasis === false;
+    if (!(
+        // Try to escapse setting hover style for performance.
+        (el.__cusHasEmphStl && styleEmphasis == null)
+        || (!el.__cusHasEmphStl && disableStyleEmphasis)
+    )) {
+        // Should not use graphicUtil.setHoverStyle, since the styleEmphasis
+        // should not be share by group and its descendants.
+        setElementHoverStyle(el, styleEmphasis);
+        el.__cusHasEmphStl = !disableStyleEmphasis;
+    }
+    isRoot && setAsHoverStyleTrigger(el, !disableStyleEmphasis);
+}
+
+function prepareStyleTransition(prop, targetStyle, elOptionStyle, oldElStyle, isInit) {
+    if (elOptionStyle[prop] != null && !isInit) {
+        targetStyle[prop] = elOptionStyle[prop];
+        elOptionStyle[prop] = oldElStyle[prop];
+    }
+}
+
+function makeRenderItem(customSeries, data, ecModel, api) {
+    var renderItem = customSeries.get('renderItem');
+    var coordSys = customSeries.coordinateSystem;
+    var prepareResult = {};
+
+    if (coordSys) {
+        if (__DEV__) {
+            assert$1(renderItem, 'series.render is required.');
+            assert$1(
+                coordSys.prepareCustoms || prepareCustoms[coordSys.type],
+                'This coordSys does not support custom series.'
+            );
