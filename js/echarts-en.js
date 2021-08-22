@@ -71128,3 +71128,289 @@ function makeRenderItem(customSeries, data, ecModel, api) {
                 coordSys.prepareCustoms || prepareCustoms[coordSys.type],
                 'This coordSys does not support custom series.'
             );
+        }
+
+        prepareResult = coordSys.prepareCustoms
+            ? coordSys.prepareCustoms()
+            : prepareCustoms[coordSys.type](coordSys);
+    }
+
+    var userAPI = defaults({
+        getWidth: api.getWidth,
+        getHeight: api.getHeight,
+        getZr: api.getZr,
+        getDevicePixelRatio: api.getDevicePixelRatio,
+        value: value,
+        style: style,
+        styleEmphasis: styleEmphasis,
+        visual: visual,
+        barLayout: barLayout,
+        currentSeriesIndices: currentSeriesIndices,
+        font: font
+    }, prepareResult.api || {});
+
+    var userParams = {
+        // The life cycle of context: current round of rendering.
+        // The global life cycle is probably not necessary, because
+        // user can store global status by themselves.
+        context: {},
+        seriesId: customSeries.id,
+        seriesName: customSeries.name,
+        seriesIndex: customSeries.seriesIndex,
+        coordSys: prepareResult.coordSys,
+        dataInsideLength: data.count(),
+        encode: wrapEncodeDef(customSeries.getData())
+    };
+
+    // Do not support call `api` asynchronously without dataIndexInside input.
+    var currDataIndexInside;
+    var currDirty = true;
+    var currItemModel;
+    var currLabelNormalModel;
+    var currLabelEmphasisModel;
+    var currVisualColor;
+
+    return function (dataIndexInside, payload) {
+        currDataIndexInside = dataIndexInside;
+        currDirty = true;
+
+        return renderItem && renderItem(
+            defaults({
+                dataIndexInside: dataIndexInside,
+                dataIndex: data.getRawIndex(dataIndexInside),
+                // Can be used for optimization when zoom or roam.
+                actionType: payload ? payload.type : null
+            }, userParams),
+            userAPI
+        );
+    };
+
+    // Do not update cache until api called.
+    function updateCache(dataIndexInside) {
+        dataIndexInside == null && (dataIndexInside = currDataIndexInside);
+        if (currDirty) {
+            currItemModel = data.getItemModel(dataIndexInside);
+            currLabelNormalModel = currItemModel.getModel(LABEL_NORMAL);
+            currLabelEmphasisModel = currItemModel.getModel(LABEL_EMPHASIS);
+            currVisualColor = data.getItemVisual(dataIndexInside, 'color');
+
+            currDirty = false;
+        }
+    }
+
+    /**
+     * @public
+     * @param {number|string} dim
+     * @param {number} [dataIndexInside=currDataIndexInside]
+     * @return {number|string} value
+     */
+    function value(dim, dataIndexInside) {
+        dataIndexInside == null && (dataIndexInside = currDataIndexInside);
+        return data.get(data.getDimension(dim || 0), dataIndexInside);
+    }
+
+    /**
+     * By default, `visual` is applied to style (to support visualMap).
+     * `visual.color` is applied at `fill`. If user want apply visual.color on `stroke`,
+     * it can be implemented as:
+     * `api.style({stroke: api.visual('color'), fill: null})`;
+     * @public
+     * @param {Object} [extra]
+     * @param {number} [dataIndexInside=currDataIndexInside]
+     */
+    function style(extra, dataIndexInside) {
+        dataIndexInside == null && (dataIndexInside = currDataIndexInside);
+        updateCache(dataIndexInside);
+
+        var itemStyle = currItemModel.getModel(ITEM_STYLE_NORMAL_PATH).getItemStyle();
+
+        currVisualColor != null && (itemStyle.fill = currVisualColor);
+        var opacity = data.getItemVisual(dataIndexInside, 'opacity');
+        opacity != null && (itemStyle.opacity = opacity);
+
+        setTextStyle(itemStyle, currLabelNormalModel, null, {
+            autoColor: currVisualColor,
+            isRectText: true
+        });
+
+        itemStyle.text = currLabelNormalModel.getShallow('show')
+            ? retrieve2(
+                customSeries.getFormattedLabel(dataIndexInside, 'normal'),
+                getDefaultLabel(data, dataIndexInside)
+            )
+            : null;
+
+        extra && extend(itemStyle, extra);
+        return itemStyle;
+    }
+
+    /**
+     * @public
+     * @param {Object} [extra]
+     * @param {number} [dataIndexInside=currDataIndexInside]
+     */
+    function styleEmphasis(extra, dataIndexInside) {
+        dataIndexInside == null && (dataIndexInside = currDataIndexInside);
+        updateCache(dataIndexInside);
+
+        var itemStyle = currItemModel.getModel(ITEM_STYLE_EMPHASIS_PATH).getItemStyle();
+
+        setTextStyle(itemStyle, currLabelEmphasisModel, null, {
+            isRectText: true
+        }, true);
+
+        itemStyle.text = currLabelEmphasisModel.getShallow('show')
+            ? retrieve3(
+                customSeries.getFormattedLabel(dataIndexInside, 'emphasis'),
+                customSeries.getFormattedLabel(dataIndexInside, 'normal'),
+                getDefaultLabel(data, dataIndexInside)
+            )
+            : null;
+
+        extra && extend(itemStyle, extra);
+        return itemStyle;
+    }
+
+    /**
+     * @public
+     * @param {string} visualType
+     * @param {number} [dataIndexInside=currDataIndexInside]
+     */
+    function visual(visualType, dataIndexInside) {
+        dataIndexInside == null && (dataIndexInside = currDataIndexInside);
+        return data.getItemVisual(dataIndexInside, visualType);
+    }
+
+    /**
+     * @public
+     * @param {number} opt.count Positive interger.
+     * @param {number} [opt.barWidth]
+     * @param {number} [opt.barMaxWidth]
+     * @param {number} [opt.barGap]
+     * @param {number} [opt.barCategoryGap]
+     * @return {Object} {width, offset, offsetCenter} is not support, return undefined.
+     */
+    function barLayout(opt) {
+        if (coordSys.getBaseAxis) {
+            var baseAxis = coordSys.getBaseAxis();
+            return getLayoutOnAxis(defaults({axis: baseAxis}, opt), api);
+        }
+    }
+
+    /**
+     * @public
+     * @return {Array.<number>}
+     */
+    function currentSeriesIndices() {
+        return ecModel.getCurrentSeriesIndices();
+    }
+
+    /**
+     * @public
+     * @param {Object} opt
+     * @param {string} [opt.fontStyle]
+     * @param {number} [opt.fontWeight]
+     * @param {number} [opt.fontSize]
+     * @param {string} [opt.fontFamily]
+     * @return {string} font string
+     */
+    function font(opt) {
+        return getFont(opt, ecModel);
+    }
+}
+
+function wrapEncodeDef(data) {
+    var encodeDef = {};
+    each$1(data.dimensions, function (dimName, dataDimIndex) {
+        var dimInfo = data.getDimensionInfo(dimName);
+        if (!dimInfo.isExtraCoord) {
+            var coordDim = dimInfo.coordDim;
+            var dataDims = encodeDef[coordDim] = encodeDef[coordDim] || [];
+            dataDims[dimInfo.coordDimIndex] = dataDimIndex;
+        }
+    });
+    return encodeDef;
+}
+
+function createOrUpdate$1(el, dataIndex, elOption, animatableModel, group, data) {
+    el = doCreateOrUpdate(el, dataIndex, elOption, animatableModel, group, data, true);
+    el && data.setItemGraphicEl(dataIndex, el);
+
+    return el;
+}
+
+function doCreateOrUpdate(el, dataIndex, elOption, animatableModel, group, data, isRoot) {
+
+    // [Rule]
+    // By default, follow merge mode.
+    //     (It probably brings benifit for performance in some cases of large data, where
+    //     user program can be optimized to that only updated props needed to be re-calculated,
+    //     or according to `actionType` some calculation can be skipped.)
+    // If `renderItem` returns `null`/`undefined`/`false`, remove the previous el if existing.
+    //     (It seems that violate the "merge" principle, but most of users probably intuitively
+    //     regard "return;" as "show nothing element whatever", so make a exception to meet the
+    //     most cases.)
+
+    var simplyRemove = !elOption; // `null`/`undefined`/`false`
+    elOption = elOption || {};
+    var elOptionType = elOption.type;
+    var elOptionShape = elOption.shape;
+    var elOptionStyle = elOption.style;
+
+    if (el && (
+        simplyRemove
+        // || elOption.$merge === false
+        // If `elOptionType` is `null`, follow the merge principle.
+        || (elOptionType != null
+            && elOptionType !== el.__customGraphicType
+        )
+        || (elOptionType === 'path'
+            && hasOwnPathData(elOptionShape) && getPathData(elOptionShape) !== el.__customPathData
+        )
+        || (elOptionType === 'image'
+            && hasOwn(elOptionStyle, 'image') && elOptionStyle.image !== el.__customImagePath
+        )
+        // FIXME test and remove this restriction?
+        || (elOptionType === 'text'
+            && hasOwn(elOptionShape, 'text') && elOptionStyle.text !== el.__customText
+        )
+    )) {
+        group.remove(el);
+        el = null;
+    }
+
+    // `elOption.type` is undefined when `renderItem` returns nothing.
+    if (simplyRemove) {
+        return;
+    }
+
+    var isInit = !el;
+    !el && (el = createEl(elOption));
+    updateEl(el, dataIndex, elOption, animatableModel, data, isInit, isRoot);
+
+    if (elOptionType === 'group') {
+        mergeChildren(el, dataIndex, elOption, animatableModel, data);
+    }
+
+    // Always add whatever already added to ensure sequence.
+    group.add(el);
+
+    return el;
+}
+
+// Usage:
+// (1) By default, `elOption.$mergeChildren` is `'byIndex'`, which indicates that
+//     the existing children will not be removed, and enables the feature that
+//     update some of the props of some of the children simply by construct
+//     the returned children of `renderItem` like:
+//     `var children = group.children = []; children[3] = {opacity: 0.5};`
+// (2) If `elOption.$mergeChildren` is `'byName'`, add/update/remove children
+//     by child.name. But that might be lower performance.
+// (3) If `elOption.$mergeChildren` is `false`, the existing children will be
+//     replaced totally.
+// (4) If `!elOption.children`, following the "merge" principle, nothing will happen.
+//
+// For implementation simpleness, do not provide a direct way to remove sinlge
+// child (otherwise the total indicies of the children array have to be modified).
+// User can remove a single child by set its `ignore` as `true` or replace
+// it by another element, where its `$merge` can be set as `true` if necessary.
