@@ -71414,3 +71414,263 @@ function doCreateOrUpdate(el, dataIndex, elOption, animatableModel, group, data,
 // child (otherwise the total indicies of the children array have to be modified).
 // User can remove a single child by set its `ignore` as `true` or replace
 // it by another element, where its `$merge` can be set as `true` if necessary.
+function mergeChildren(el, dataIndex, elOption, animatableModel, data) {
+    var newChildren = elOption.children;
+    var newLen = newChildren ? newChildren.length : 0;
+    var mergeChildren = elOption.$mergeChildren;
+    // `diffChildrenByName` has been deprecated.
+    var byName = mergeChildren === 'byName' || elOption.diffChildrenByName;
+    var notMerge = mergeChildren === false;
+
+    // For better performance on roam update, only enter if necessary.
+    if (!newLen && !byName && !notMerge) {
+        return;
+    }
+
+    if (byName) {
+        diffGroupChildren({
+            oldChildren: el.children() || [],
+            newChildren: newChildren || [],
+            dataIndex: dataIndex,
+            animatableModel: animatableModel,
+            group: el,
+            data: data
+        });
+        return;
+    }
+
+    notMerge && el.removeAll();
+
+    // Mapping children of a group simply by index, which
+    // might be better performance.
+    var index = 0;
+    for (; index < newLen; index++) {
+        newChildren[index] && doCreateOrUpdate(
+            el.childAt(index),
+            dataIndex,
+            newChildren[index],
+            animatableModel,
+            el,
+            data
+        );
+    }
+    if (__DEV__) {
+        assert$1(
+            !notMerge || el.childCount() === index,
+            'MUST NOT contain empty item in children array when `group.$mergeChildren` is `false`.'
+        );
+    }
+}
+
+function diffGroupChildren(context) {
+    (new DataDiffer(
+        context.oldChildren,
+        context.newChildren,
+        getKey,
+        getKey,
+        context
+    ))
+        .add(processAddUpdate)
+        .update(processAddUpdate)
+        .remove(processRemove)
+        .execute();
+}
+
+function getKey(item, idx) {
+    var name = item && item.name;
+    return name != null ? name : GROUP_DIFF_PREFIX + idx;
+}
+
+function processAddUpdate(newIndex, oldIndex) {
+    var context = this.context;
+    var childOption = newIndex != null ? context.newChildren[newIndex] : null;
+    var child = oldIndex != null ? context.oldChildren[oldIndex] : null;
+
+    doCreateOrUpdate(
+        child,
+        context.dataIndex,
+        childOption,
+        context.animatableModel,
+        context.group,
+        context.data
+    );
+}
+
+function processRemove(oldIndex) {
+    var context = this.context;
+    var child = context.oldChildren[oldIndex];
+    child && context.group.remove(child);
+}
+
+function getPathData(shape) {
+    // "d" follows the SVG convention.
+    return shape && (shape.pathData || shape.d);
+}
+
+function hasOwnPathData(shape) {
+    return shape && (shape.hasOwnProperty('pathData') || shape.hasOwnProperty('d'));
+}
+
+function hasOwn(host, prop) {
+    return host && host.hasOwnProperty(prop);
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// -------------
+// Preprocessor
+// -------------
+
+registerPreprocessor(function (option) {
+    var graphicOption = option.graphic;
+
+    // Convert
+    // {graphic: [{left: 10, type: 'circle'}, ...]}
+    // or
+    // {graphic: {left: 10, type: 'circle'}}
+    // to
+    // {graphic: [{elements: [{left: 10, type: 'circle'}, ...]}]}
+    if (isArray(graphicOption)) {
+        if (!graphicOption[0] || !graphicOption[0].elements) {
+            option.graphic = [{elements: graphicOption}];
+        }
+        else {
+            // Only one graphic instance can be instantiated. (We dont
+            // want that too many views are created in echarts._viewMap)
+            option.graphic = [option.graphic[0]];
+        }
+    }
+    else if (graphicOption && !graphicOption.elements) {
+        option.graphic = [{elements: [graphicOption]}];
+    }
+});
+
+// ------
+// Model
+// ------
+
+var GraphicModel = extendComponentModel({
+
+    type: 'graphic',
+
+    defaultOption: {
+
+        // Extra properties for each elements:
+        //
+        // left/right/top/bottom: (like 12, '22%', 'center', default undefined)
+        //      If left/rigth is set, shape.x/shape.cx/position will not be used.
+        //      If top/bottom is set, shape.y/shape.cy/position will not be used.
+        //      This mechanism is useful when you want to position a group/element
+        //      against the right side or the center of this container.
+        //
+        // width/height: (can only be pixel value, default 0)
+        //      Only be used to specify contianer(group) size, if needed. And
+        //      can not be percentage value (like '33%'). See the reason in the
+        //      layout algorithm below.
+        //
+        // bounding: (enum: 'all' (default) | 'raw')
+        //      Specify how to calculate boundingRect when locating.
+        //      'all': Get uioned and transformed boundingRect
+        //          from both itself and its descendants.
+        //          This mode simplies confining a group of elements in the bounding
+        //          of their ancester container (e.g., using 'right: 0').
+        //      'raw': Only use the boundingRect of itself and before transformed.
+        //          This mode is similar to css behavior, which is useful when you
+        //          want an element to be able to overflow its container. (Consider
+        //          a rotated circle needs to be located in a corner.)
+        // info: custom info. enables user to mount some info on elements and use them
+        //      in event handlers. Update them only when user specified, otherwise, remain.
+
+        // Note: elements is always behind its ancestors in this elements array.
+        elements: [],
+        parentId: null
+    },
+
+    /**
+     * Save el options for the sake of the performance (only update modified graphics).
+     * The order is the same as those in option. (ancesters -> descendants)
+     *
+     * @private
+     * @type {Array.<Object>}
+     */
+    _elOptionsToUpdate: null,
+
+    /**
+     * @override
+     */
+    mergeOption: function (option) {
+        // Prevent default merge to elements
+        var elements = this.option.elements;
+        this.option.elements = null;
+
+        GraphicModel.superApply(this, 'mergeOption', arguments);
+
+        this.option.elements = elements;
+    },
+
+    /**
+     * @override
+     */
+    optionUpdated: function (newOption, isInit) {
+        var thisOption = this.option;
+        var newList = (isInit ? thisOption : newOption).elements;
+        var existList = thisOption.elements = isInit ? [] : thisOption.elements;
+
+        var flattenedList = [];
+        this._flatten(newList, flattenedList);
+
+        var mappingResult = mappingToExists(existList, flattenedList);
+        makeIdAndName(mappingResult);
+
+        // Clear elOptionsToUpdate
+        var elOptionsToUpdate = this._elOptionsToUpdate = [];
+
+        each$1(mappingResult, function (resultItem, index) {
+            var newElOption = resultItem.option;
+
+            if (__DEV__) {
+                assert$1(
+                    isObject$1(newElOption) || resultItem.exist,
+                    'Empty graphic option definition'
+                );
+            }
+
+            if (!newElOption) {
+                return;
+            }
+
+            elOptionsToUpdate.push(newElOption);
+
+            setKeyInfoToNewElOption(resultItem, newElOption);
+
+            mergeNewElOptionToExist(existList, index, newElOption);
+
+            setLayoutInfoToExist(existList[index], newElOption);
+
+        }, this);
+
+        // Clean
+        for (var i = existList.length - 1; i >= 0; i--) {
+            if (existList[i] == null) {
+                existList.splice(i, 1);
+            }
+            else {
+                // $action should be volatile, otherwise option gotten from
+                // `getOption` will contain unexpected $action.
