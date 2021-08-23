@@ -71674,3 +71674,283 @@ var GraphicModel = extendComponentModel({
             else {
                 // $action should be volatile, otherwise option gotten from
                 // `getOption` will contain unexpected $action.
+                delete existList[i].$action;
+            }
+        }
+    },
+
+    /**
+     * Convert
+     * [{
+     *  type: 'group',
+     *  id: 'xx',
+     *  children: [{type: 'circle'}, {type: 'polygon'}]
+     * }]
+     * to
+     * [
+     *  {type: 'group', id: 'xx'},
+     *  {type: 'circle', parentId: 'xx'},
+     *  {type: 'polygon', parentId: 'xx'}
+     * ]
+     *
+     * @private
+     * @param {Array.<Object>} optionList option list
+     * @param {Array.<Object>} result result of flatten
+     * @param {Object} parentOption parent option
+     */
+    _flatten: function (optionList, result, parentOption) {
+        each$1(optionList, function (option) {
+            if (!option) {
+                return;
+            }
+
+            if (parentOption) {
+                option.parentOption = parentOption;
+            }
+
+            result.push(option);
+
+            var children = option.children;
+            if (option.type === 'group' && children) {
+                this._flatten(children, result, option);
+            }
+            // Deleting for JSON output, and for not affecting group creation.
+            delete option.children;
+        }, this);
+    },
+
+    // FIXME
+    // Pass to view using payload? setOption has a payload?
+    useElOptionsToUpdate: function () {
+        var els = this._elOptionsToUpdate;
+        // Clear to avoid render duplicately when zooming.
+        this._elOptionsToUpdate = null;
+        return els;
+    }
+});
+
+// -----
+// View
+// -----
+
+extendComponentView({
+
+    type: 'graphic',
+
+    /**
+     * @override
+     */
+    init: function (ecModel, api) {
+
+        /**
+         * @private
+         * @type {module:zrender/core/util.HashMap}
+         */
+        this._elMap = createHashMap();
+
+        /**
+         * @private
+         * @type {module:echarts/graphic/GraphicModel}
+         */
+        this._lastGraphicModel;
+    },
+
+    /**
+     * @override
+     */
+    render: function (graphicModel, ecModel, api) {
+
+        // Having leveraged between use cases and algorithm complexity, a very
+        // simple layout mechanism is used:
+        // The size(width/height) can be determined by itself or its parent (not
+        // implemented yet), but can not by its children. (Top-down travel)
+        // The location(x/y) can be determined by the bounding rect of itself
+        // (can including its descendants or not) and the size of its parent.
+        // (Bottom-up travel)
+
+        // When `chart.clear()` or `chart.setOption({...}, true)` with the same id,
+        // view will be reused.
+        if (graphicModel !== this._lastGraphicModel) {
+            this._clear();
+        }
+        this._lastGraphicModel = graphicModel;
+
+        this._updateElements(graphicModel);
+        this._relocate(graphicModel, api);
+    },
+
+    /**
+     * Update graphic elements.
+     *
+     * @private
+     * @param {Object} graphicModel graphic model
+     */
+    _updateElements: function (graphicModel) {
+        var elOptionsToUpdate = graphicModel.useElOptionsToUpdate();
+
+        if (!elOptionsToUpdate) {
+            return;
+        }
+
+        var elMap = this._elMap;
+        var rootGroup = this.group;
+
+        // Top-down tranverse to assign graphic settings to each elements.
+        each$1(elOptionsToUpdate, function (elOption) {
+            var $action = elOption.$action;
+            var id = elOption.id;
+            var existEl = elMap.get(id);
+            var parentId = elOption.parentId;
+            var targetElParent = parentId != null ? elMap.get(parentId) : rootGroup;
+
+            var elOptionStyle = elOption.style;
+            if (elOption.type === 'text' && elOptionStyle) {
+                // In top/bottom mode, textVerticalAlign should not be used, which cause
+                // inaccurately locating.
+                if (elOption.hv && elOption.hv[1]) {
+                    elOptionStyle.textVerticalAlign = elOptionStyle.textBaseline = null;
+                }
+
+                // Compatible with previous setting: both support fill and textFill,
+                // stroke and textStroke.
+                !elOptionStyle.hasOwnProperty('textFill') && elOptionStyle.fill && (
+                    elOptionStyle.textFill = elOptionStyle.fill
+                );
+                !elOptionStyle.hasOwnProperty('textStroke') && elOptionStyle.stroke && (
+                    elOptionStyle.textStroke = elOptionStyle.stroke
+                );
+            }
+
+            // Remove unnecessary props to avoid potential problems.
+            var elOptionCleaned = getCleanedElOption(elOption);
+
+            // For simple, do not support parent change, otherwise reorder is needed.
+            if (__DEV__) {
+                existEl && assert$1(
+                    targetElParent === existEl.parent,
+                    'Changing parent is not supported.'
+                );
+            }
+
+            if (!$action || $action === 'merge') {
+                existEl
+                    ? existEl.attr(elOptionCleaned)
+                    : createEl$1(id, targetElParent, elOptionCleaned, elMap);
+            }
+            else if ($action === 'replace') {
+                removeEl(existEl, elMap);
+                createEl$1(id, targetElParent, elOptionCleaned, elMap);
+            }
+            else if ($action === 'remove') {
+                removeEl(existEl, elMap);
+            }
+
+            var el = elMap.get(id);
+            if (el) {
+                el.__ecGraphicWidth = elOption.width;
+                el.__ecGraphicHeight = elOption.height;
+                setEventData(el, graphicModel, elOption);
+            }
+        });
+    },
+
+    /**
+     * Locate graphic elements.
+     *
+     * @private
+     * @param {Object} graphicModel graphic model
+     * @param {module:echarts/ExtensionAPI} api extension API
+     */
+    _relocate: function (graphicModel, api) {
+        var elOptions = graphicModel.option.elements;
+        var rootGroup = this.group;
+        var elMap = this._elMap;
+
+        // Bottom-up tranvese all elements (consider ec resize) to locate elements.
+        for (var i = elOptions.length - 1; i >= 0; i--) {
+            var elOption = elOptions[i];
+            var el = elMap.get(elOption.id);
+
+            if (!el) {
+                continue;
+            }
+
+            var parentEl = el.parent;
+            var containerInfo = parentEl === rootGroup
+                ? {
+                    width: api.getWidth(),
+                    height: api.getHeight()
+                }
+                : { // Like 'position:absolut' in css, default 0.
+                    width: parentEl.__ecGraphicWidth || 0,
+                    height: parentEl.__ecGraphicHeight || 0
+                };
+
+            positionElement(
+                el, elOption, containerInfo, null,
+                {hv: elOption.hv, boundingMode: elOption.bounding}
+            );
+        }
+    },
+
+    /**
+     * Clear all elements.
+     *
+     * @private
+     */
+    _clear: function () {
+        var elMap = this._elMap;
+        elMap.each(function (el) {
+            removeEl(el, elMap);
+        });
+        this._elMap = createHashMap();
+    },
+
+    /**
+     * @override
+     */
+    dispose: function () {
+        this._clear();
+    }
+});
+
+function createEl$1(id, targetElParent, elOption, elMap) {
+    var graphicType = elOption.type;
+
+    if (__DEV__) {
+        assert$1(graphicType, 'graphic type MUST be set');
+    }
+
+    var Clz = graphic[graphicType.charAt(0).toUpperCase() + graphicType.slice(1)];
+
+    if (__DEV__) {
+        assert$1(Clz, 'graphic type can not be found');
+    }
+
+    var el = new Clz(elOption);
+    targetElParent.add(el);
+    elMap.set(id, el);
+    el.__ecGraphicId = id;
+}
+
+function removeEl(existEl, elMap) {
+    var existElParent = existEl && existEl.parent;
+    if (existElParent) {
+        existEl.type === 'group' && existEl.traverse(function (el) {
+            removeEl(el, elMap);
+        });
+        elMap.removeKey(existEl.__ecGraphicId);
+        existElParent.remove(existEl);
+    }
+}
+
+// Remove unnecessary props to avoid potential problems.
+function getCleanedElOption(elOption) {
+    elOption = extend({}, elOption);
+    each$1(
+        ['id', 'parentId', '$action', 'hv', 'bounding'].concat(LOCATION_PARAMS),
+        function (name) {
+            delete elOption[name];
+        }
+    );
+    return elOption;
