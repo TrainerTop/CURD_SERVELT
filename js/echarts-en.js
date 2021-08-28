@@ -72229,3 +72229,270 @@ var LegendModel = extendComponentModel({
         }
         selected[name] = true;
     },
+
+    /**
+     * @param {string} name
+     */
+    unSelect: function (name) {
+        if (this.get('selectedMode') !== 'single') {
+            this.option.selected[name] = false;
+        }
+    },
+
+    /**
+     * @param {string} name
+     */
+    toggleSelected: function (name) {
+        var selected = this.option.selected;
+        // Default is true
+        if (!selected.hasOwnProperty(name)) {
+            selected[name] = true;
+        }
+        this[selected[name] ? 'unSelect' : 'select'](name);
+    },
+
+    /**
+     * @param {string} name
+     */
+    isSelected: function (name) {
+        var selected = this.option.selected;
+        return !(selected.hasOwnProperty(name) && !selected[name])
+            && indexOf(this._availableNames, name) >= 0;
+    },
+
+    defaultOption: {
+        // 一级层叠
+        zlevel: 0,
+        // 二级层叠
+        z: 4,
+        show: true,
+
+        // 布局方式，默认为水平布局，可选为：
+        // 'horizontal' | 'vertical'
+        orient: 'horizontal',
+
+        left: 'center',
+        // right: 'center',
+
+        top: 0,
+        // bottom: null,
+
+        // 水平对齐
+        // 'auto' | 'left' | 'right'
+        // 默认为 'auto', 根据 x 的位置判断是左对齐还是右对齐
+        align: 'auto',
+
+        backgroundColor: 'rgba(0,0,0,0)',
+        // 图例边框颜色
+        borderColor: '#ccc',
+        borderRadius: 0,
+        // 图例边框线宽，单位px，默认为0（无边框）
+        borderWidth: 0,
+        // 图例内边距，单位px，默认各方向内边距为5，
+        // 接受数组分别设定上右下左边距，同css
+        padding: 5,
+        // 各个item之间的间隔，单位px，默认为10，
+        // 横向布局时为水平间隔，纵向布局时为纵向间隔
+        itemGap: 10,
+        // 图例图形宽度
+        itemWidth: 25,
+        // 图例图形高度
+        itemHeight: 14,
+
+        // 图例关闭时候的颜色
+        inactiveColor: '#ccc',
+
+        textStyle: {
+            // 图例文字颜色
+            color: '#333'
+        },
+        // formatter: '',
+        // 选择模式，默认开启图例开关
+        selectedMode: true,
+        // 配置默认选中状态，可配合LEGEND.SELECTED事件做动态数据载入
+        // selected: null,
+        // 图例内容（详见legend.data，数组中每一项代表一个item
+        // data: [],
+
+        // Tooltip 相关配置
+        tooltip: {
+            show: false
+        }
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+function legendSelectActionHandler(methodName, payload, ecModel) {
+    var selectedMap = {};
+    var isToggleSelect = methodName === 'toggleSelected';
+    var isSelected;
+    // Update all legend components
+    ecModel.eachComponent('legend', function (legendModel) {
+        if (isToggleSelect && isSelected != null) {
+            // Force other legend has same selected status
+            // Or the first is toggled to true and other are toggled to false
+            // In the case one legend has some item unSelected in option. And if other legend
+            // doesn't has the item, they will assume it is selected.
+            legendModel[isSelected ? 'select' : 'unSelect'](payload.name);
+        }
+        else {
+            legendModel[methodName](payload.name);
+            isSelected = legendModel.isSelected(payload.name);
+        }
+        var legendData = legendModel.getData();
+        each$1(legendData, function (model) {
+            var name = model.get('name');
+            // Wrap element
+            if (name === '\n' || name === '') {
+                return;
+            }
+            var isItemSelected = legendModel.isSelected(name);
+            if (selectedMap.hasOwnProperty(name)) {
+                // Unselected if any legend is unselected
+                selectedMap[name] = selectedMap[name] && isItemSelected;
+            }
+            else {
+                selectedMap[name] = isItemSelected;
+            }
+        });
+    });
+    // Return the event explicitly
+    return {
+        name: payload.name,
+        selected: selectedMap
+    };
+}
+/**
+ * @event legendToggleSelect
+ * @type {Object}
+ * @property {string} type 'legendToggleSelect'
+ * @property {string} [from]
+ * @property {string} name Series name or data item name
+ */
+registerAction(
+    'legendToggleSelect', 'legendselectchanged',
+    curry(legendSelectActionHandler, 'toggleSelected')
+);
+
+/**
+ * @event legendSelect
+ * @type {Object}
+ * @property {string} type 'legendSelect'
+ * @property {string} name Series name or data item name
+ */
+registerAction(
+    'legendSelect', 'legendselected',
+    curry(legendSelectActionHandler, 'select')
+);
+
+/**
+ * @event legendUnSelect
+ * @type {Object}
+ * @property {string} type 'legendUnSelect'
+ * @property {string} name Series name or data item name
+ */
+registerAction(
+    'legendUnSelect', 'legendunselected',
+    curry(legendSelectActionHandler, 'unSelect')
+);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Layout list like component.
+ * It will box layout each items in group of component and then position the whole group in the viewport
+ * @param {module:zrender/group/Group} group
+ * @param {module:echarts/model/Component} componentModel
+ * @param {module:echarts/ExtensionAPI}
+ */
+function layout$3(group, componentModel, api) {
+    var boxLayoutParams = componentModel.getBoxLayoutParams();
+    var padding = componentModel.get('padding');
+    var viewportSize = {width: api.getWidth(), height: api.getHeight()};
+
+    var rect = getLayoutRect(
+        boxLayoutParams,
+        viewportSize,
+        padding
+    );
+
+    box(
+        componentModel.get('orient'),
+        group,
+        componentModel.get('itemGap'),
+        rect.width,
+        rect.height
+    );
+
+    positionElement(
+        group,
+        boxLayoutParams,
+        viewportSize,
+        padding
+    );
+}
+
+function makeBackground(rect, componentModel) {
+    var padding = normalizeCssArray$1(
+        componentModel.get('padding')
+    );
+    var style = componentModel.getItemStyle(['color', 'opacity']);
+    style.fill = componentModel.get('backgroundColor');
+    var rect = new Rect({
+        shape: {
+            x: rect.x - padding[3],
+            y: rect.y - padding[0],
+            width: rect.width + padding[1] + padding[3],
+            height: rect.height + padding[0] + padding[2],
+            r: componentModel.get('borderRadius')
+        },
+        style: style,
+        silent: true,
+        z2: -1
+    });
+    // FIXME
+    // `subPixelOptimizeRect` may bring some gap between edge of viewpart
+    // and background rect when setting like `left: 0`, `top: 0`.
+    // graphic.subPixelOptimizeRect(rect);
+
+    return rect;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
