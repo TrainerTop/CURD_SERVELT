@@ -71954,3 +71954,278 @@ function getCleanedElOption(elOption) {
         }
     );
     return elOption;
+}
+
+function isSetLoc(obj, props) {
+    var isSet;
+    each$1(props, function (prop) {
+        obj[prop] != null && obj[prop] !== 'auto' && (isSet = true);
+    });
+    return isSet;
+}
+
+function setKeyInfoToNewElOption(resultItem, newElOption) {
+    var existElOption = resultItem.exist;
+
+    // Set id and type after id assigned.
+    newElOption.id = resultItem.keyInfo.id;
+    !newElOption.type && existElOption && (newElOption.type = existElOption.type);
+
+    // Set parent id if not specified
+    if (newElOption.parentId == null) {
+        var newElParentOption = newElOption.parentOption;
+        if (newElParentOption) {
+            newElOption.parentId = newElParentOption.id;
+        }
+        else if (existElOption) {
+            newElOption.parentId = existElOption.parentId;
+        }
+    }
+
+    // Clear
+    newElOption.parentOption = null;
+}
+
+function mergeNewElOptionToExist(existList, index, newElOption) {
+    // Update existing options, for `getOption` feature.
+    var newElOptCopy = extend({}, newElOption);
+    var existElOption = existList[index];
+
+    var $action = newElOption.$action || 'merge';
+    if ($action === 'merge') {
+        if (existElOption) {
+
+            if (__DEV__) {
+                var newType = newElOption.type;
+                assert$1(
+                    !newType || existElOption.type === newType,
+                    'Please set $action: "replace" to change `type`'
+                );
+            }
+
+            // We can ensure that newElOptCopy and existElOption are not
+            // the same object, so `merge` will not change newElOptCopy.
+            merge(existElOption, newElOptCopy, true);
+            // Rigid body, use ignoreSize.
+            mergeLayoutParam(existElOption, newElOptCopy, {ignoreSize: true});
+            // Will be used in render.
+            copyLayoutParams(newElOption, existElOption);
+        }
+        else {
+            existList[index] = newElOptCopy;
+        }
+    }
+    else if ($action === 'replace') {
+        existList[index] = newElOptCopy;
+    }
+    else if ($action === 'remove') {
+        // null will be cleaned later.
+        existElOption && (existList[index] = null);
+    }
+}
+
+function setLayoutInfoToExist(existItem, newElOption) {
+    if (!existItem) {
+        return;
+    }
+    existItem.hv = newElOption.hv = [
+        // Rigid body, dont care `width`.
+        isSetLoc(newElOption, ['left', 'right']),
+        // Rigid body, dont care `height`.
+        isSetLoc(newElOption, ['top', 'bottom'])
+    ];
+    // Give default group size. Otherwise layout error may occur.
+    if (existItem.type === 'group') {
+        existItem.width == null && (existItem.width = newElOption.width = 0);
+        existItem.height == null && (existItem.height = newElOption.height = 0);
+    }
+}
+
+function setEventData(el, graphicModel, elOption) {
+    var eventData = el.eventData;
+    // Simple optimize for large amount of elements that no need event.
+    if (!el.silent && !el.ignore && !eventData) {
+        eventData = el.eventData = {
+            componentType: 'graphic',
+            componentIndex: graphicModel.componentIndex,
+            name: el.name
+        };
+    }
+
+    // `elOption.info` enables user to mount some info on
+    // elements and use them in event handlers.
+    if (eventData) {
+        eventData.info = el.info;
+    }
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var LegendModel = extendComponentModel({
+
+    type: 'legend.plain',
+
+    dependencies: ['series'],
+
+    layoutMode: {
+        type: 'box',
+        // legend.width/height are maxWidth/maxHeight actually,
+        // whereas realy width/height is calculated by its content.
+        // (Setting {left: 10, right: 10} does not make sense).
+        // So consider the case:
+        // `setOption({legend: {left: 10});`
+        // then `setOption({legend: {right: 10});`
+        // The previous `left` should be cleared by setting `ignoreSize`.
+        ignoreSize: true
+    },
+
+    init: function (option, parentModel, ecModel) {
+        this.mergeDefaultAndTheme(option, ecModel);
+
+        option.selected = option.selected || {};
+    },
+
+    mergeOption: function (option) {
+        LegendModel.superCall(this, 'mergeOption', option);
+    },
+
+    optionUpdated: function () {
+        this._updateData(this.ecModel);
+
+        var legendData = this._data;
+
+        // If selectedMode is single, try to select one
+        if (legendData[0] && this.get('selectedMode') === 'single') {
+            var hasSelected = false;
+            // If has any selected in option.selected
+            for (var i = 0; i < legendData.length; i++) {
+                var name = legendData[i].get('name');
+                if (this.isSelected(name)) {
+                    // Force to unselect others
+                    this.select(name);
+                    hasSelected = true;
+                    break;
+                }
+            }
+            // Try select the first if selectedMode is single
+            !hasSelected && this.select(legendData[0].get('name'));
+        }
+    },
+
+    _updateData: function (ecModel) {
+        var potentialData = [];
+        var availableNames = [];
+
+        ecModel.eachRawSeries(function (seriesModel) {
+            var seriesName = seriesModel.name;
+            availableNames.push(seriesName);
+            var isPotential;
+
+            if (seriesModel.legendDataProvider) {
+                var data = seriesModel.legendDataProvider();
+                var names = data.mapArray(data.getName);
+
+                if (!ecModel.isSeriesFiltered(seriesModel)) {
+                    availableNames = availableNames.concat(names);
+                }
+
+                if (names.length) {
+                    potentialData = potentialData.concat(names);
+                }
+                else {
+                    isPotential = true;
+                }
+            }
+            else {
+                isPotential = true;
+            }
+
+            if (isPotential && isNameSpecified(seriesModel)) {
+                potentialData.push(seriesModel.name);
+            }
+        });
+
+        /**
+         * @type {Array.<string>}
+         * @private
+         */
+        this._availableNames = availableNames;
+
+        // If legend.data not specified in option, use availableNames as data,
+        // which is convinient for user preparing option.
+        var rawData = this.get('data') || potentialData;
+
+        var legendData = map(rawData, function (dataItem) {
+            // Can be string or number
+            if (typeof dataItem === 'string' || typeof dataItem === 'number') {
+                dataItem = {
+                    name: dataItem
+                };
+            }
+            return new Model(dataItem, this, this.ecModel);
+        }, this);
+
+        /**
+         * @type {Array.<module:echarts/model/Model>}
+         * @private
+         */
+        this._data = legendData;
+    },
+
+    /**
+     * @return {Array.<module:echarts/model/Model>}
+     */
+    getData: function () {
+        return this._data;
+    },
+
+    /**
+     * @param {string} name
+     */
+    select: function (name) {
+        var selected = this.option.selected;
+        var selectedMode = this.get('selectedMode');
+        if (selectedMode === 'single') {
+            var data = this._data;
+            each$1(data, function (dataItem) {
+                selected[dataItem.get('name')] = false;
+            });
+        }
+        selected[name] = true;
+    },
