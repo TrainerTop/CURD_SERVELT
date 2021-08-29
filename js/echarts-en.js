@@ -73050,3 +73050,289 @@ function mergeAndNormalizeLayoutParams(legendModel, target, raw) {
     ignoreSize[orient.index] = 0;
     mergeLayoutParam(target, raw, {
         type: 'box', ignoreSize: ignoreSize
+    });
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Separate legend and scrollable legend to reduce package size.
+ */
+
+var Group$4 = Group;
+
+var WH$1 = ['width', 'height'];
+var XY$1 = ['x', 'y'];
+
+var ScrollableLegendView = LegendView.extend({
+
+    type: 'legend.scroll',
+
+    newlineDisabled: true,
+
+    init: function () {
+
+        ScrollableLegendView.superCall(this, 'init');
+
+        /**
+         * @private
+         * @type {number} For `scroll`.
+         */
+        this._currentIndex = 0;
+
+        /**
+         * @private
+         * @type {module:zrender/container/Group}
+         */
+        this.group.add(this._containerGroup = new Group$4());
+        this._containerGroup.add(this.getContentGroup());
+
+        /**
+         * @private
+         * @type {module:zrender/container/Group}
+         */
+        this.group.add(this._controllerGroup = new Group$4());
+
+        /**
+         *
+         * @private
+         */
+        this._showController;
+    },
+
+    /**
+     * @override
+     */
+    resetInner: function () {
+        ScrollableLegendView.superCall(this, 'resetInner');
+
+        this._controllerGroup.removeAll();
+        this._containerGroup.removeClipPath();
+        this._containerGroup.__rectSize = null;
+    },
+
+    /**
+     * @override
+     */
+    renderInner: function (itemAlign, legendModel, ecModel, api) {
+        var me = this;
+
+        // Render content items.
+        ScrollableLegendView.superCall(this, 'renderInner', itemAlign, legendModel, ecModel, api);
+
+        var controllerGroup = this._controllerGroup;
+
+        // FIXME: support be 'auto' adapt to size number text length,
+        // e.g., '3/12345' should not overlap with the control arrow button.
+        var pageIconSize = legendModel.get('pageIconSize', true);
+        if (!isArray(pageIconSize)) {
+            pageIconSize = [pageIconSize, pageIconSize];
+        }
+
+        createPageButton('pagePrev', 0);
+
+        var pageTextStyleModel = legendModel.getModel('pageTextStyle');
+        controllerGroup.add(new Text({
+            name: 'pageText',
+            style: {
+                textFill: pageTextStyleModel.getTextColor(),
+                font: pageTextStyleModel.getFont(),
+                textVerticalAlign: 'middle',
+                textAlign: 'center'
+            },
+            silent: true
+        }));
+
+        createPageButton('pageNext', 1);
+
+        function createPageButton(name, iconIdx) {
+            var pageDataIndexName = name + 'DataIndex';
+            var icon = createIcon(
+                legendModel.get('pageIcons', true)[legendModel.getOrient().name][iconIdx],
+                {
+                    // Buttons will be created in each render, so we do not need
+                    // to worry about avoiding using legendModel kept in scope.
+                    onclick: bind(
+                        me._pageGo, me, pageDataIndexName, legendModel, api
+                    )
+                },
+                {
+                    x: -pageIconSize[0] / 2,
+                    y: -pageIconSize[1] / 2,
+                    width: pageIconSize[0],
+                    height: pageIconSize[1]
+                }
+            );
+            icon.name = name;
+            controllerGroup.add(icon);
+        }
+    },
+
+    /**
+     * @override
+     */
+    layoutInner: function (legendModel, itemAlign, maxSize, isFirstRender) {
+        var contentGroup = this.getContentGroup();
+        var containerGroup = this._containerGroup;
+        var controllerGroup = this._controllerGroup;
+
+        var orientIdx = legendModel.getOrient().index;
+        var wh = WH$1[orientIdx];
+        var hw = WH$1[1 - orientIdx];
+        var yx = XY$1[1 - orientIdx];
+
+        // Place items in contentGroup.
+        box(
+            legendModel.get('orient'),
+            contentGroup,
+            legendModel.get('itemGap'),
+            !orientIdx ? null : maxSize.width,
+            orientIdx ? null : maxSize.height
+        );
+
+        box(
+            // Buttons in controller are layout always horizontally.
+            'horizontal',
+            controllerGroup,
+            legendModel.get('pageButtonItemGap', true)
+        );
+
+        var contentRect = contentGroup.getBoundingRect();
+        var controllerRect = controllerGroup.getBoundingRect();
+        var showController = this._showController = contentRect[wh] > maxSize[wh];
+
+        var contentPos = [-contentRect.x, -contentRect.y];
+        // Remain contentPos when scroll animation perfroming.
+        // If first rendering, `contentGroup.position` is [0, 0], which
+        // does not make sense and may cause unexepcted animation if adopted.
+        if (!isFirstRender) {
+            contentPos[orientIdx] = contentGroup.position[orientIdx];
+        }
+
+        // Layout container group based on 0.
+        var containerPos = [0, 0];
+        var controllerPos = [-controllerRect.x, -controllerRect.y];
+        var pageButtonGap = retrieve2(
+            legendModel.get('pageButtonGap', true), legendModel.get('itemGap', true)
+        );
+
+        // Place containerGroup and controllerGroup and contentGroup.
+        if (showController) {
+            var pageButtonPosition = legendModel.get('pageButtonPosition', true);
+            // controller is on the right / bottom.
+            if (pageButtonPosition === 'end') {
+                controllerPos[orientIdx] += maxSize[wh] - controllerRect[wh];
+            }
+            // controller is on the left / top.
+            else {
+                containerPos[orientIdx] += controllerRect[wh] + pageButtonGap;
+            }
+        }
+
+        // Always align controller to content as 'middle'.
+        controllerPos[1 - orientIdx] += contentRect[hw] / 2 - controllerRect[hw] / 2;
+
+        contentGroup.attr('position', contentPos);
+        containerGroup.attr('position', containerPos);
+        controllerGroup.attr('position', controllerPos);
+
+        // Calculate `mainRect` and set `clipPath`.
+        // mainRect should not be calculated by `this.group.getBoundingRect()`
+        // for sake of the overflow.
+        var mainRect = this.group.getBoundingRect();
+        var mainRect = {x: 0, y: 0};
+        // Consider content may be overflow (should be clipped).
+        mainRect[wh] = showController ? maxSize[wh] : contentRect[wh];
+        mainRect[hw] = Math.max(contentRect[hw], controllerRect[hw]);
+        // `containerRect[yx] + containerPos[1 - orientIdx]` is 0.
+        mainRect[yx] = Math.min(0, controllerRect[yx] + controllerPos[1 - orientIdx]);
+
+        containerGroup.__rectSize = maxSize[wh];
+        if (showController) {
+            var clipShape = {x: 0, y: 0};
+            clipShape[wh] = Math.max(maxSize[wh] - controllerRect[wh] - pageButtonGap, 0);
+            clipShape[hw] = mainRect[hw];
+            containerGroup.setClipPath(new Rect({shape: clipShape}));
+            // Consider content may be larger than container, container rect
+            // can not be obtained from `containerGroup.getBoundingRect()`.
+            containerGroup.__rectSize = clipShape[wh];
+        }
+        else {
+            // Do not remove or ignore controller. Keep them set as place holders.
+            controllerGroup.eachChild(function (child) {
+                child.attr({invisible: true, silent: true});
+            });
+        }
+
+        // Content translate animation.
+        var pageInfo = this._getPageInfo(legendModel);
+        pageInfo.pageIndex != null && updateProps(
+            contentGroup,
+            {position: pageInfo.contentPosition},
+            // When switch from "show controller" to "not show controller", view should be
+            // updated immediately without animation, otherwise causes weird efffect.
+            showController ? legendModel : false
+        );
+
+        this._updatePageInfoView(legendModel, pageInfo);
+
+        return mainRect;
+    },
+
+    _pageGo: function (to, legendModel, api) {
+        var scrollDataIndex = this._getPageInfo(legendModel)[to];
+
+        scrollDataIndex != null && api.dispatchAction({
+            type: 'legendScroll',
+            scrollDataIndex: scrollDataIndex,
+            legendId: legendModel.id
+        });
+    },
+
+    _updatePageInfoView: function (legendModel, pageInfo) {
+        var controllerGroup = this._controllerGroup;
+
+        each$1(['pagePrev', 'pageNext'], function (name) {
+            var canJump = pageInfo[name + 'DataIndex'] != null;
+            var icon = controllerGroup.childOfName(name);
+            if (icon) {
+                icon.setStyle(
+                    'fill',
+                    canJump
+                        ? legendModel.get('pageIconColor', true)
+                        : legendModel.get('pageIconInactiveColor', true)
+                );
+                icon.cursor = canJump ? 'pointer' : 'default';
+            }
+        });
+
+        var pageText = controllerGroup.childOfName('pageText');
+        var pageFormatter = legendModel.get('pageFormatter');
+        var pageIndex = pageInfo.pageIndex;
+        var current = pageIndex != null ? pageIndex + 1 : 0;
+        var total = pageInfo.pageCount;
+
+        pageText && pageFormatter && pageText.setStyle(
+            'text',
+            isString(pageFormatter)
+                ? pageFormatter.replace('{current}', current).replace('{total}', total)
+                : pageFormatter({current: current, total: total})
+        );
+    },
