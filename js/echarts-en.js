@@ -73336,3 +73336,286 @@ var ScrollableLegendView = LegendView.extend({
                 : pageFormatter({current: current, total: total})
         );
     },
+
+    /**
+     * @param {module:echarts/model/Model} legendModel
+     * @return {Object} {
+     *  contentPosition: Array.<number>, null when data item not found.
+     *  pageIndex: number, null when data item not found.
+     *  pageCount: number, always be a number, can be 0.
+     *  pagePrevDataIndex: number, null when no next page.
+     *  pageNextDataIndex: number, null when no previous page.
+     * }
+     */
+    _getPageInfo: function (legendModel) {
+        var scrollDataIndex = legendModel.get('scrollDataIndex', true);
+        var contentGroup = this.getContentGroup();
+        var containerRectSize = this._containerGroup.__rectSize;
+        var orientIdx = legendModel.getOrient().index;
+        var wh = WH$1[orientIdx];
+        var xy = XY$1[orientIdx];
+        var targetItemIndex = this._findTargetItemIndex(scrollDataIndex);
+        var children = contentGroup.children();
+        var targetItem = children[targetItemIndex];
+        var itemCount = children.length;
+        var pCount = !itemCount ? 0 : 1;
+
+        var result = {
+            contentPosition: contentGroup.position.slice(),
+            pageCount: pCount,
+            pageIndex: pCount - 1,
+            pagePrevDataIndex: null,
+            pageNextDataIndex: null
+        };
+
+        if (!targetItem) {
+            return result;
+        }
+
+        var targetItemInfo = getItemInfo(targetItem);
+        result.contentPosition[orientIdx] = -targetItemInfo.s;
+
+        // Strategy:
+        // (1) Always align based on the left/top most item.
+        // (2) It is user-friendly that the last item shown in the
+        // current window is shown at the begining of next window.
+        // Otherwise if half of the last item is cut by the window,
+        // it will have no chance to display entirely.
+        // (3) Consider that item size probably be different, we
+        // have calculate pageIndex by size rather than item index,
+        // and we can not get page index directly by division.
+        // (4) The window is to narrow to contain more than
+        // one item, we should make sure that the page can be fliped.
+
+        for (var i = targetItemIndex + 1,
+            winStartItemInfo = targetItemInfo,
+            winEndItemInfo = targetItemInfo,
+            currItemInfo = null;
+            i <= itemCount;
+            ++i
+        ) {
+            currItemInfo = getItemInfo(children[i]);
+            if (
+                // Half of the last item is out of the window.
+                (!currItemInfo && winEndItemInfo.e > winStartItemInfo.s + containerRectSize)
+                // If the current item does not intersect with the window, the new page
+                // can be started at the current item or the last item.
+                || (currItemInfo && !intersect(currItemInfo, winStartItemInfo.s))
+            ) {
+                if (winEndItemInfo.i > winStartItemInfo.i) {
+                    winStartItemInfo = winEndItemInfo;
+                }
+                else { // e.g., when page size is smaller than item size.
+                    winStartItemInfo = currItemInfo;
+                }
+                if (winStartItemInfo) {
+                    if (result.pageNextDataIndex == null) {
+                        result.pageNextDataIndex = winStartItemInfo.i;
+                    }
+                    ++result.pageCount;
+                }
+            }
+            winEndItemInfo = currItemInfo;
+        }
+
+        for (var i = targetItemIndex - 1,
+            winStartItemInfo = targetItemInfo,
+            winEndItemInfo = targetItemInfo,
+            currItemInfo = null;
+            i >= -1;
+            --i
+        ) {
+            currItemInfo = getItemInfo(children[i]);
+            if (
+                // If the the end item does not intersect with the window started
+                // from the current item, a page can be settled.
+                (!currItemInfo || !intersect(winEndItemInfo, currItemInfo.s))
+                // e.g., when page size is smaller than item size.
+                && winStartItemInfo.i < winEndItemInfo.i
+            ) {
+                winEndItemInfo = winStartItemInfo;
+                if (result.pagePrevDataIndex == null) {
+                    result.pagePrevDataIndex = winStartItemInfo.i;
+                }
+                ++result.pageCount;
+                ++result.pageIndex;
+            }
+            winStartItemInfo = currItemInfo;
+        }
+
+        return result;
+
+        function getItemInfo(el) {
+            if (el) {
+                var itemRect = el.getBoundingRect();
+                var start = itemRect[xy] + el.position[orientIdx];
+                return {
+                    s: start,
+                    e: start + itemRect[wh],
+                    i: el.__legendDataIndex
+                };
+            }
+        }
+
+        function intersect(itemInfo, winStart) {
+            return itemInfo.e >= winStart && itemInfo.s <= winStart + containerRectSize;
+        }
+    },
+
+    _findTargetItemIndex: function (targetDataIndex) {
+        var index;
+        var contentGroup = this.getContentGroup();
+        if (this._showController) {
+            contentGroup.eachChild(function (child, idx) {
+                if (child.__legendDataIndex === targetDataIndex) {
+                    index = idx;
+                }
+            });
+        }
+        else {
+            index = 0;
+        }
+        return index;
+    }
+
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @event legendScroll
+ * @type {Object}
+ * @property {string} type 'legendScroll'
+ * @property {string} scrollDataIndex
+ */
+registerAction(
+    'legendScroll', 'legendscroll',
+    function (payload, ecModel) {
+        var scrollDataIndex = payload.scrollDataIndex;
+
+        scrollDataIndex != null && ecModel.eachComponent(
+            {mainType: 'legend', subType: 'scroll', query: payload},
+            function (legendModel) {
+                legendModel.setScrollDataIndex(scrollDataIndex);
+            }
+        );
+    }
+);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * Legend component entry file8
+ */
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+extendComponentModel({
+
+    type: 'tooltip',
+
+    dependencies: ['axisPointer'],
+
+    defaultOption: {
+        zlevel: 0,
+
+        z: 60,
+
+        show: true,
+
+        // tooltip主体内容
+        showContent: true,
+
+        // 'trigger' only works on coordinate system.
+        // 'item' | 'axis' | 'none'
+        trigger: 'item',
+
+        // 'click' | 'mousemove' | 'none'
+        triggerOn: 'mousemove|click',
+
+        alwaysShowContent: false,
+
+        displayMode: 'single', // 'single' | 'multipleByCoordSys'
+
+        renderMode: 'auto', // 'auto' | 'html' | 'richText'
+        // 'auto': use html by default, and use non-html if `document` is not defined
+        // 'html': use html for tooltip
+        // 'richText': use canvas, svg, and etc. for tooltip
+
+        // 位置 {Array} | {Function}
+        // position: null
+        // Consider triggered from axisPointer handle, verticalAlign should be 'middle'
+        // align: null,
+        // verticalAlign: null,
+
+        // 是否约束 content 在 viewRect 中。默认 false 是为了兼容以前版本。
+        confine: false,
+
+        // 内容格式器：{string}（Template） ¦ {Function}
+        // formatter: null
+
+        showDelay: 0,
+
+        // 隐藏延迟，单位ms
+        hideDelay: 100,
+
+        // 动画变换时间，单位s
+        transitionDuration: 0.4,
+
+        enterable: false,
+
+        // 提示背景颜色，默认为透明度为0.7的黑色
+        backgroundColor: 'rgba(50,50,50,0.7)',
+
+        // 提示边框颜色
