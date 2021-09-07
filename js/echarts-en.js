@@ -74166,3 +74166,275 @@ TooltipRichContent.prototype = {
 * specific language governing permissions and limitations
 * under the License.
 */
+
+var bind$3 = bind;
+var each$17 = each$1;
+var parsePercent$2 = parsePercent$1;
+
+var proxyRect = new Rect({
+    shape: {x: -1, y: -1, width: 2, height: 2}
+});
+
+extendComponentView({
+
+    type: 'tooltip',
+
+    init: function (ecModel, api) {
+        if (env$1.node) {
+            return;
+        }
+
+        var tooltipModel = ecModel.getComponent('tooltip');
+        var renderMode = tooltipModel.get('renderMode');
+        this._renderMode = getTooltipRenderMode(renderMode);
+
+        var tooltipContent;
+        if (this._renderMode === 'html') {
+            tooltipContent = new TooltipContent(api.getDom(), api);
+            this._newLine = '<br/>';
+        }
+        else {
+            tooltipContent = new TooltipRichContent(api);
+            this._newLine = '\n';
+        }
+
+        this._tooltipContent = tooltipContent;
+    },
+
+    render: function (tooltipModel, ecModel, api) {
+        if (env$1.node) {
+            return;
+        }
+
+        // Reset
+        this.group.removeAll();
+
+        /**
+         * @private
+         * @type {module:echarts/component/tooltip/TooltipModel}
+         */
+        this._tooltipModel = tooltipModel;
+
+        /**
+         * @private
+         * @type {module:echarts/model/Global}
+         */
+        this._ecModel = ecModel;
+
+        /**
+         * @private
+         * @type {module:echarts/ExtensionAPI}
+         */
+        this._api = api;
+
+        /**
+         * Should be cleaned when render.
+         * @private
+         * @type {Array.<Array.<Object>>}
+         */
+        this._lastDataByCoordSys = null;
+
+        /**
+         * @private
+         * @type {boolean}
+         */
+        this._alwaysShowContent = tooltipModel.get('alwaysShowContent');
+
+        var tooltipContent = this._tooltipContent;
+        tooltipContent.update();
+        tooltipContent.setEnterable(tooltipModel.get('enterable'));
+
+        this._initGlobalListener();
+
+        this._keepShow();
+    },
+
+    _initGlobalListener: function () {
+        var tooltipModel = this._tooltipModel;
+        var triggerOn = tooltipModel.get('triggerOn');
+
+        register(
+            'itemTooltip',
+            this._api,
+            bind$3(function (currTrigger, e, dispatchAction) {
+                // If 'none', it is not controlled by mouse totally.
+                if (triggerOn !== 'none') {
+                    if (triggerOn.indexOf(currTrigger) >= 0) {
+                        this._tryShow(e, dispatchAction);
+                    }
+                    else if (currTrigger === 'leave') {
+                        this._hide(dispatchAction);
+                    }
+                }
+            }, this)
+        );
+    },
+
+    _keepShow: function () {
+        var tooltipModel = this._tooltipModel;
+        var ecModel = this._ecModel;
+        var api = this._api;
+
+        // Try to keep the tooltip show when refreshing
+        if (this._lastX != null
+            && this._lastY != null
+            // When user is willing to control tooltip totally using API,
+            // self.manuallyShowTip({x, y}) might cause tooltip hide,
+            // which is not expected.
+            && tooltipModel.get('triggerOn') !== 'none'
+        ) {
+            var self = this;
+            clearTimeout(this._refreshUpdateTimeout);
+            this._refreshUpdateTimeout = setTimeout(function () {
+                // Show tip next tick after other charts are rendered
+                // In case highlight action has wrong result
+                // FIXME
+                self.manuallyShowTip(tooltipModel, ecModel, api, {
+                    x: self._lastX,
+                    y: self._lastY
+                });
+            });
+        }
+    },
+
+    /**
+     * Show tip manually by
+     * dispatchAction({
+     *     type: 'showTip',
+     *     x: 10,
+     *     y: 10
+     * });
+     * Or
+     * dispatchAction({
+     *      type: 'showTip',
+     *      seriesIndex: 0,
+     *      dataIndex or dataIndexInside or name
+     * });
+     *
+     *  TODO Batch
+     */
+    manuallyShowTip: function (tooltipModel, ecModel, api, payload) {
+        if (payload.from === this.uid || env$1.node) {
+            return;
+        }
+
+        var dispatchAction = makeDispatchAction$1(payload, api);
+
+        // Reset ticket
+        this._ticket = '';
+
+        // When triggered from axisPointer.
+        var dataByCoordSys = payload.dataByCoordSys;
+
+        if (payload.tooltip && payload.x != null && payload.y != null) {
+            var el = proxyRect;
+            el.position = [payload.x, payload.y];
+            el.update();
+            el.tooltip = payload.tooltip;
+            // Manually show tooltip while view is not using zrender elements.
+            this._tryShow({
+                offsetX: payload.x,
+                offsetY: payload.y,
+                target: el
+            }, dispatchAction);
+        }
+        else if (dataByCoordSys) {
+            this._tryShow({
+                offsetX: payload.x,
+                offsetY: payload.y,
+                position: payload.position,
+                event: {},
+                dataByCoordSys: payload.dataByCoordSys,
+                tooltipOption: payload.tooltipOption
+            }, dispatchAction);
+        }
+        else if (payload.seriesIndex != null) {
+
+            if (this._manuallyAxisShowTip(tooltipModel, ecModel, api, payload)) {
+                return;
+            }
+
+            var pointInfo = findPointFromSeries(payload, ecModel);
+            var cx = pointInfo.point[0];
+            var cy = pointInfo.point[1];
+            if (cx != null && cy != null) {
+                this._tryShow({
+                    offsetX: cx,
+                    offsetY: cy,
+                    position: payload.position,
+                    target: pointInfo.el,
+                    event: {}
+                }, dispatchAction);
+            }
+        }
+        else if (payload.x != null && payload.y != null) {
+            // FIXME
+            // should wrap dispatchAction like `axisPointer/globalListener` ?
+            api.dispatchAction({
+                type: 'updateAxisPointer',
+                x: payload.x,
+                y: payload.y
+            });
+
+            this._tryShow({
+                offsetX: payload.x,
+                offsetY: payload.y,
+                position: payload.position,
+                target: api.getZr().findHover(payload.x, payload.y).target,
+                event: {}
+            }, dispatchAction);
+        }
+    },
+
+    manuallyHideTip: function (tooltipModel, ecModel, api, payload) {
+        var tooltipContent = this._tooltipContent;
+
+        if (!this._alwaysShowContent && this._tooltipModel) {
+            tooltipContent.hideLater(this._tooltipModel.get('hideDelay'));
+        }
+
+        this._lastX = this._lastY = null;
+
+        if (payload.from !== this.uid) {
+            this._hide(makeDispatchAction$1(payload, api));
+        }
+    },
+
+    // Be compatible with previous design, that is, when tooltip.type is 'axis' and
+    // dispatchAction 'showTip' with seriesIndex and dataIndex will trigger axis pointer
+    // and tooltip.
+    _manuallyAxisShowTip: function (tooltipModel, ecModel, api, payload) {
+        var seriesIndex = payload.seriesIndex;
+        var dataIndex = payload.dataIndex;
+        var coordSysAxesInfo = ecModel.getComponent('axisPointer').coordSysAxesInfo;
+
+        if (seriesIndex == null || dataIndex == null || coordSysAxesInfo == null) {
+            return;
+        }
+
+        var seriesModel = ecModel.getSeriesByIndex(seriesIndex);
+        if (!seriesModel) {
+            return;
+        }
+
+        var data = seriesModel.getData();
+        var tooltipModel = buildTooltipModel([
+            data.getItemModel(dataIndex),
+            seriesModel,
+            (seriesModel.coordinateSystem || {}).model,
+            tooltipModel
+        ]);
+
+        if (tooltipModel.get('trigger') !== 'axis') {
+            return;
+        }
+
+        api.dispatchAction({
+            type: 'updateAxisPointer',
+            seriesIndex: seriesIndex,
+            dataIndex: dataIndex,
+            position: payload.position
+        });
+
+        return true;
+    },
