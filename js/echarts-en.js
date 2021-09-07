@@ -74438,3 +74438,289 @@ extendComponentView({
 
         return true;
     },
+
+    _tryShow: function (e, dispatchAction) {
+        var el = e.target;
+        var tooltipModel = this._tooltipModel;
+
+        if (!tooltipModel) {
+            return;
+        }
+
+        // Save mouse x, mouse y. So we can try to keep showing the tip if chart is refreshed
+        this._lastX = e.offsetX;
+        this._lastY = e.offsetY;
+
+        var dataByCoordSys = e.dataByCoordSys;
+        if (dataByCoordSys && dataByCoordSys.length) {
+            this._showAxisTooltip(dataByCoordSys, e);
+        }
+        // Always show item tooltip if mouse is on the element with dataIndex
+        else if (el && el.dataIndex != null) {
+            this._lastDataByCoordSys = null;
+            this._showSeriesItemTooltip(e, el, dispatchAction);
+        }
+        // Tooltip provided directly. Like legend.
+        else if (el && el.tooltip) {
+            this._lastDataByCoordSys = null;
+            this._showComponentItemTooltip(e, el, dispatchAction);
+        }
+        else {
+            this._lastDataByCoordSys = null;
+            this._hide(dispatchAction);
+        }
+    },
+
+    _showOrMove: function (tooltipModel, cb) {
+        // showDelay is used in this case: tooltip.enterable is set
+        // as true. User intent to move mouse into tooltip and click
+        // something. `showDelay` makes it easyer to enter the content
+        // but tooltip do not move immediately.
+        var delay = tooltipModel.get('showDelay');
+        cb = bind(cb, this);
+        clearTimeout(this._showTimout);
+        delay > 0
+            ? (this._showTimout = setTimeout(cb, delay))
+            : cb();
+    },
+
+    _showAxisTooltip: function (dataByCoordSys, e) {
+        var ecModel = this._ecModel;
+        var globalTooltipModel = this._tooltipModel;
+        var point = [e.offsetX, e.offsetY];
+        var singleDefaultHTML = [];
+        var singleParamsList = [];
+        var singleTooltipModel = buildTooltipModel([
+            e.tooltipOption,
+            globalTooltipModel
+        ]);
+
+        var renderMode = this._renderMode;
+        var newLine = this._newLine;
+
+        var markers = {};
+
+        each$17(dataByCoordSys, function (itemCoordSys) {
+            // var coordParamList = [];
+            // var coordDefaultHTML = [];
+            // var coordTooltipModel = buildTooltipModel([
+            //     e.tooltipOption,
+            //     itemCoordSys.tooltipOption,
+            //     ecModel.getComponent(itemCoordSys.coordSysMainType, itemCoordSys.coordSysIndex),
+            //     globalTooltipModel
+            // ]);
+            // var displayMode = coordTooltipModel.get('displayMode');
+            // var paramsList = displayMode === 'single' ? singleParamsList : [];
+
+            each$17(itemCoordSys.dataByAxis, function (item) {
+                var axisModel = ecModel.getComponent(item.axisDim + 'Axis', item.axisIndex);
+                var axisValue = item.value;
+                var seriesDefaultHTML = [];
+
+                if (!axisModel || axisValue == null) {
+                    return;
+                }
+
+                var valueLabel = getValueLabel(
+                    axisValue, axisModel.axis, ecModel,
+                    item.seriesDataIndices,
+                    item.valueLabelOpt
+                );
+
+                each$1(item.seriesDataIndices, function (idxItem) {
+                    var series = ecModel.getSeriesByIndex(idxItem.seriesIndex);
+                    var dataIndex = idxItem.dataIndexInside;
+                    var dataParams = series && series.getDataParams(dataIndex);
+                    dataParams.axisDim = item.axisDim;
+                    dataParams.axisIndex = item.axisIndex;
+                    dataParams.axisType = item.axisType;
+                    dataParams.axisId = item.axisId;
+                    dataParams.axisValue = getAxisRawValue(axisModel.axis, axisValue);
+                    dataParams.axisValueLabel = valueLabel;
+
+                    if (dataParams) {
+                        singleParamsList.push(dataParams);
+                        var seriesTooltip = series.formatTooltip(dataIndex, true, null, renderMode);
+
+                        var html;
+                        if (isObject$1(seriesTooltip)) {
+                            html = seriesTooltip.html;
+                            var newMarkers = seriesTooltip.markers;
+                            merge(markers, newMarkers);
+                        }
+                        else {
+                            html = seriesTooltip;
+                        }
+                        seriesDefaultHTML.push(html);
+                    }
+                });
+
+                // Default tooltip content
+                // FIXME
+                // (1) shold be the first data which has name?
+                // (2) themeRiver, firstDataIndex is array, and first line is unnecessary.
+                var firstLine = valueLabel;
+                if (renderMode !== 'html') {
+                    singleDefaultHTML.push(seriesDefaultHTML.join(newLine));
+                }
+                else {
+                    singleDefaultHTML.push(
+                        (firstLine ? encodeHTML(firstLine) + newLine : '')
+                        + seriesDefaultHTML.join(newLine)
+                    );
+                }
+            });
+        }, this);
+
+        // In most case, the second axis is shown upper than the first one.
+        singleDefaultHTML.reverse();
+        singleDefaultHTML = singleDefaultHTML.join(this._newLine + this._newLine);
+
+        var positionExpr = e.position;
+        this._showOrMove(singleTooltipModel, function () {
+            if (this._updateContentNotChangedOnAxis(dataByCoordSys)) {
+                this._updatePosition(
+                    singleTooltipModel,
+                    positionExpr,
+                    point[0], point[1],
+                    this._tooltipContent,
+                    singleParamsList
+                );
+            }
+            else {
+                this._showTooltipContent(
+                    singleTooltipModel, singleDefaultHTML, singleParamsList, Math.random(),
+                    point[0], point[1], positionExpr, undefined, markers
+                );
+            }
+        });
+
+        // Do not trigger events here, because this branch only be entered
+        // from dispatchAction.
+    },
+
+    _showSeriesItemTooltip: function (e, el, dispatchAction) {
+        var ecModel = this._ecModel;
+        // Use dataModel in element if possible
+        // Used when mouseover on a element like markPoint or edge
+        // In which case, the data is not main data in series.
+        var seriesIndex = el.seriesIndex;
+        var seriesModel = ecModel.getSeriesByIndex(seriesIndex);
+
+        // For example, graph link.
+        var dataModel = el.dataModel || seriesModel;
+        var dataIndex = el.dataIndex;
+        var dataType = el.dataType;
+        var data = dataModel.getData();
+
+        var tooltipModel = buildTooltipModel([
+            data.getItemModel(dataIndex),
+            dataModel,
+            seriesModel && (seriesModel.coordinateSystem || {}).model,
+            this._tooltipModel
+        ]);
+
+        var tooltipTrigger = tooltipModel.get('trigger');
+        if (tooltipTrigger != null && tooltipTrigger !== 'item') {
+            return;
+        }
+
+        var params = dataModel.getDataParams(dataIndex, dataType);
+        var seriesTooltip = dataModel.formatTooltip(dataIndex, false, dataType, this._renderMode);
+        var defaultHtml;
+        var markers;
+        if (isObject$1(seriesTooltip)) {
+            defaultHtml = seriesTooltip.html;
+            markers = seriesTooltip.markers;
+        }
+        else {
+            defaultHtml = seriesTooltip;
+            markers = null;
+        }
+
+        var asyncTicket = 'item_' + dataModel.name + '_' + dataIndex;
+
+        this._showOrMove(tooltipModel, function () {
+            this._showTooltipContent(
+                tooltipModel, defaultHtml, params, asyncTicket,
+                e.offsetX, e.offsetY, e.position, e.target, markers
+            );
+        });
+
+        // FIXME
+        // duplicated showtip if manuallyShowTip is called from dispatchAction.
+        dispatchAction({
+            type: 'showTip',
+            dataIndexInside: dataIndex,
+            dataIndex: data.getRawIndex(dataIndex),
+            seriesIndex: seriesIndex,
+            from: this.uid
+        });
+    },
+
+    _showComponentItemTooltip: function (e, el, dispatchAction) {
+        var tooltipOpt = el.tooltip;
+        if (typeof tooltipOpt === 'string') {
+            var content = tooltipOpt;
+            tooltipOpt = {
+                content: content,
+                // Fixed formatter
+                formatter: content
+            };
+        }
+        var subTooltipModel = new Model(tooltipOpt, this._tooltipModel, this._ecModel);
+        var defaultHtml = subTooltipModel.get('content');
+        var asyncTicket = Math.random();
+
+        // Do not check whether `trigger` is 'none' here, because `trigger`
+        // only works on cooridinate system. In fact, we have not found case
+        // that requires setting `trigger` nothing on component yet.
+
+        this._showOrMove(subTooltipModel, function () {
+            this._showTooltipContent(
+                subTooltipModel, defaultHtml, subTooltipModel.get('formatterParams') || {},
+                asyncTicket, e.offsetX, e.offsetY, e.position, el
+            );
+        });
+
+        // If not dispatch showTip, tip may be hide triggered by axis.
+        dispatchAction({
+            type: 'showTip',
+            from: this.uid
+        });
+    },
+
+    _showTooltipContent: function (
+        tooltipModel, defaultHtml, params, asyncTicket, x, y, positionExpr, el, markers
+    ) {
+        // Reset ticket
+        this._ticket = '';
+
+        if (!tooltipModel.get('showContent') || !tooltipModel.get('show')) {
+            return;
+        }
+
+        var tooltipContent = this._tooltipContent;
+
+        var formatter = tooltipModel.get('formatter');
+        positionExpr = positionExpr || tooltipModel.get('position');
+        var html = defaultHtml;
+
+        if (formatter && typeof formatter === 'string') {
+            html = formatTpl(formatter, params, true);
+        }
+        else if (typeof formatter === 'function') {
+            var callback = bind$3(function (cbTicket, html) {
+                if (cbTicket === this._ticket) {
+                    tooltipContent.setContent(html, markers, tooltipModel);
+                    this._updatePosition(
+                        tooltipModel, positionExpr, x, y, tooltipContent, params, el
+                    );
+                }
+            }, this);
+            this._ticket = asyncTicket;
+            html = formatter(params, asyncTicket, callback);
+        }
+
+        tooltipContent.setContent(html, markers, tooltipModel);
+        tooltipContent.show(tooltipModel);
