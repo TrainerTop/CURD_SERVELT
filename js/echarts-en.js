@@ -74724,3 +74724,305 @@ extendComponentView({
 
         tooltipContent.setContent(html, markers, tooltipModel);
         tooltipContent.show(tooltipModel);
+
+        this._updatePosition(
+            tooltipModel, positionExpr, x, y, tooltipContent, params, el
+        );
+    },
+
+    /**
+     * @param  {string|Function|Array.<number>|Object} positionExpr
+     * @param  {number} x Mouse x
+     * @param  {number} y Mouse y
+     * @param  {boolean} confine Whether confine tooltip content in view rect.
+     * @param  {Object|<Array.<Object>} params
+     * @param  {module:zrender/Element} el target element
+     * @param  {module:echarts/ExtensionAPI} api
+     * @return {Array.<number>}
+     */
+    _updatePosition: function (tooltipModel, positionExpr, x, y, content, params, el) {
+        var viewWidth = this._api.getWidth();
+        var viewHeight = this._api.getHeight();
+        positionExpr = positionExpr || tooltipModel.get('position');
+
+        var contentSize = content.getSize();
+        var align = tooltipModel.get('align');
+        var vAlign = tooltipModel.get('verticalAlign');
+        var rect = el && el.getBoundingRect().clone();
+        el && rect.applyTransform(el.transform);
+
+        if (typeof positionExpr === 'function') {
+            // Callback of position can be an array or a string specify the position
+            positionExpr = positionExpr([x, y], params, content.el, rect, {
+                viewSize: [viewWidth, viewHeight],
+                contentSize: contentSize.slice()
+            });
+        }
+
+        if (isArray(positionExpr)) {
+            x = parsePercent$2(positionExpr[0], viewWidth);
+            y = parsePercent$2(positionExpr[1], viewHeight);
+        }
+        else if (isObject$1(positionExpr)) {
+            positionExpr.width = contentSize[0];
+            positionExpr.height = contentSize[1];
+            var layoutRect = getLayoutRect(
+                positionExpr, {width: viewWidth, height: viewHeight}
+            );
+            x = layoutRect.x;
+            y = layoutRect.y;
+            align = null;
+            // When positionExpr is left/top/right/bottom,
+            // align and verticalAlign will not work.
+            vAlign = null;
+        }
+        // Specify tooltip position by string 'top' 'bottom' 'left' 'right' around graphic element
+        else if (typeof positionExpr === 'string' && el) {
+            var pos = calcTooltipPosition(
+                positionExpr, rect, contentSize
+            );
+            x = pos[0];
+            y = pos[1];
+        }
+        else {
+            var pos = refixTooltipPosition(
+                x, y, content, viewWidth, viewHeight, align ? null : 20, vAlign ? null : 20
+            );
+            x = pos[0];
+            y = pos[1];
+        }
+
+        align && (x -= isCenterAlign(align) ? contentSize[0] / 2 : align === 'right' ? contentSize[0] : 0);
+        vAlign && (y -= isCenterAlign(vAlign) ? contentSize[1] / 2 : vAlign === 'bottom' ? contentSize[1] : 0);
+
+        if (tooltipModel.get('confine')) {
+            var pos = confineTooltipPosition(
+                x, y, content, viewWidth, viewHeight
+            );
+            x = pos[0];
+            y = pos[1];
+        }
+
+        content.moveTo(x, y);
+    },
+
+    // FIXME
+    // Should we remove this but leave this to user?
+    _updateContentNotChangedOnAxis: function (dataByCoordSys) {
+        var lastCoordSys = this._lastDataByCoordSys;
+        var contentNotChanged = !!lastCoordSys
+            && lastCoordSys.length === dataByCoordSys.length;
+
+        contentNotChanged && each$17(lastCoordSys, function (lastItemCoordSys, indexCoordSys) {
+            var lastDataByAxis = lastItemCoordSys.dataByAxis || {};
+            var thisItemCoordSys = dataByCoordSys[indexCoordSys] || {};
+            var thisDataByAxis = thisItemCoordSys.dataByAxis || [];
+            contentNotChanged &= lastDataByAxis.length === thisDataByAxis.length;
+
+            contentNotChanged && each$17(lastDataByAxis, function (lastItem, indexAxis) {
+                var thisItem = thisDataByAxis[indexAxis] || {};
+                var lastIndices = lastItem.seriesDataIndices || [];
+                var newIndices = thisItem.seriesDataIndices || [];
+
+                contentNotChanged
+                    &= lastItem.value === thisItem.value
+                    && lastItem.axisType === thisItem.axisType
+                    && lastItem.axisId === thisItem.axisId
+                    && lastIndices.length === newIndices.length;
+
+                contentNotChanged && each$17(lastIndices, function (lastIdxItem, j) {
+                    var newIdxItem = newIndices[j];
+                    contentNotChanged
+                        &= lastIdxItem.seriesIndex === newIdxItem.seriesIndex
+                        && lastIdxItem.dataIndex === newIdxItem.dataIndex;
+                });
+            });
+        });
+
+        this._lastDataByCoordSys = dataByCoordSys;
+
+        return !!contentNotChanged;
+    },
+
+    _hide: function (dispatchAction) {
+        // Do not directly hideLater here, because this behavior may be prevented
+        // in dispatchAction when showTip is dispatched.
+
+        // FIXME
+        // duplicated hideTip if manuallyHideTip is called from dispatchAction.
+        this._lastDataByCoordSys = null;
+        dispatchAction({
+            type: 'hideTip',
+            from: this.uid
+        });
+    },
+
+    dispose: function (ecModel, api) {
+        if (env$1.node) {
+            return;
+        }
+        this._tooltipContent.hide();
+        unregister('itemTooltip', api);
+    }
+});
+
+
+/**
+ * @param {Array.<Object|module:echarts/model/Model>} modelCascade
+ * From top to bottom. (the last one should be globalTooltipModel);
+ */
+function buildTooltipModel(modelCascade) {
+    var resultModel = modelCascade.pop();
+    while (modelCascade.length) {
+        var tooltipOpt = modelCascade.pop();
+        if (tooltipOpt) {
+            if (Model.isInstance(tooltipOpt)) {
+                tooltipOpt = tooltipOpt.get('tooltip', true);
+            }
+            // In each data item tooltip can be simply write:
+            // {
+            //  value: 10,
+            //  tooltip: 'Something you need to know'
+            // }
+            if (typeof tooltipOpt === 'string') {
+                tooltipOpt = {formatter: tooltipOpt};
+            }
+            resultModel = new Model(tooltipOpt, resultModel, resultModel.ecModel);
+        }
+    }
+    return resultModel;
+}
+
+function makeDispatchAction$1(payload, api) {
+    return payload.dispatchAction || bind(api.dispatchAction, api);
+}
+
+function refixTooltipPosition(x, y, content, viewWidth, viewHeight, gapH, gapV) {
+    var size = content.getOuterSize();
+    var width = size.width;
+    var height = size.height;
+
+    if (gapH != null) {
+        if (x + width + gapH > viewWidth) {
+            x -= width + gapH;
+        }
+        else {
+            x += gapH;
+        }
+    }
+    if (gapV != null) {
+        if (y + height + gapV > viewHeight) {
+            y -= height + gapV;
+        }
+        else {
+            y += gapV;
+        }
+    }
+    return [x, y];
+}
+
+function confineTooltipPosition(x, y, content, viewWidth, viewHeight) {
+    var size = content.getOuterSize();
+    var width = size.width;
+    var height = size.height;
+
+    x = Math.min(x + width, viewWidth) - width;
+    y = Math.min(y + height, viewHeight) - height;
+    x = Math.max(x, 0);
+    y = Math.max(y, 0);
+
+    return [x, y];
+}
+
+function calcTooltipPosition(position, rect, contentSize) {
+    var domWidth = contentSize[0];
+    var domHeight = contentSize[1];
+    var gap = 5;
+    var x = 0;
+    var y = 0;
+    var rectWidth = rect.width;
+    var rectHeight = rect.height;
+    switch (position) {
+        case 'inside':
+            x = rect.x + rectWidth / 2 - domWidth / 2;
+            y = rect.y + rectHeight / 2 - domHeight / 2;
+            break;
+        case 'top':
+            x = rect.x + rectWidth / 2 - domWidth / 2;
+            y = rect.y - domHeight - gap;
+            break;
+        case 'bottom':
+            x = rect.x + rectWidth / 2 - domWidth / 2;
+            y = rect.y + rectHeight + gap;
+            break;
+        case 'left':
+            x = rect.x - domWidth - gap;
+            y = rect.y + rectHeight / 2 - domHeight / 2;
+            break;
+        case 'right':
+            x = rect.x + rectWidth + gap;
+            y = rect.y + rectHeight / 2 - domHeight / 2;
+    }
+    return [x, y];
+}
+
+function isCenterAlign(align) {
+    return align === 'center' || align === 'middle';
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// FIXME Better way to pack data in graphic element
+
+/**
+ * @action
+ * @property {string} type
+ * @property {number} seriesIndex
+ * @property {number} dataIndex
+ * @property {number} [x]
+ * @property {number} [y]
+ */
+registerAction(
+    {
+        type: 'showTip',
+        event: 'showTip',
+        update: 'tooltip:manuallyShowTip'
+    },
+    // noop
+    function () {}
+);
+
+registerAction(
+    {
+        type: 'hideTip',
+        event: 'hideTip',
+        update: 'tooltip:manuallyHideTip'
+    },
+    // noop
+    function () {}
+);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
