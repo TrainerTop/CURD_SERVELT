@@ -76363,3 +76363,257 @@ AxisView.extend({
 
     render: function (radiusAxisModel, ecModel) {
         this.group.removeAll();
+        if (!radiusAxisModel.get('show')) {
+            return;
+        }
+        var radiusAxis = radiusAxisModel.axis;
+        var polar = radiusAxis.polar;
+        var angleAxis = polar.getAngleAxis();
+        var ticksCoords = radiusAxis.getTicksCoords();
+        var axisAngle = angleAxis.getExtent()[0];
+        var radiusExtent = radiusAxis.getExtent();
+
+        var layout = layoutAxis(polar, radiusAxisModel, axisAngle);
+        var axisBuilder = new AxisBuilder(radiusAxisModel, layout);
+        each$1(axisBuilderAttrs$3, axisBuilder.add, axisBuilder);
+        this.group.add(axisBuilder.getGroup());
+
+        each$1(selfBuilderAttrs$1, function (name) {
+            if (radiusAxisModel.get(name + '.show') && !radiusAxis.scale.isBlank()) {
+                this['_' + name](radiusAxisModel, polar, axisAngle, radiusExtent, ticksCoords);
+            }
+        }, this);
+    },
+
+    /**
+     * @private
+     */
+    _splitLine: function (radiusAxisModel, polar, axisAngle, radiusExtent, ticksCoords) {
+        var splitLineModel = radiusAxisModel.getModel('splitLine');
+        var lineStyleModel = splitLineModel.getModel('lineStyle');
+        var lineColors = lineStyleModel.get('color');
+        var lineCount = 0;
+
+        lineColors = lineColors instanceof Array ? lineColors : [lineColors];
+
+        var splitLines = [];
+
+        for (var i = 0; i < ticksCoords.length; i++) {
+            var colorIndex = (lineCount++) % lineColors.length;
+            splitLines[colorIndex] = splitLines[colorIndex] || [];
+            splitLines[colorIndex].push(new Circle({
+                shape: {
+                    cx: polar.cx,
+                    cy: polar.cy,
+                    r: ticksCoords[i].coord
+                },
+                silent: true
+            }));
+        }
+
+        // Simple optimization
+        // Batching the lines if color are the same
+        for (var i = 0; i < splitLines.length; i++) {
+            this.group.add(mergePath(splitLines[i], {
+                style: defaults({
+                    stroke: lineColors[i % lineColors.length],
+                    fill: null
+                }, lineStyleModel.getLineStyle()),
+                silent: true
+            }));
+        }
+    },
+
+    /**
+     * @private
+     */
+    _splitArea: function (radiusAxisModel, polar, axisAngle, radiusExtent, ticksCoords) {
+        if (!ticksCoords.length) {
+            return;
+        }
+
+        var splitAreaModel = radiusAxisModel.getModel('splitArea');
+        var areaStyleModel = splitAreaModel.getModel('areaStyle');
+        var areaColors = areaStyleModel.get('color');
+        var lineCount = 0;
+
+        areaColors = areaColors instanceof Array ? areaColors : [areaColors];
+
+        var splitAreas = [];
+
+        var prevRadius = ticksCoords[0].coord;
+        for (var i = 1; i < ticksCoords.length; i++) {
+            var colorIndex = (lineCount++) % areaColors.length;
+            splitAreas[colorIndex] = splitAreas[colorIndex] || [];
+            splitAreas[colorIndex].push(new Sector({
+                shape: {
+                    cx: polar.cx,
+                    cy: polar.cy,
+                    r0: prevRadius,
+                    r: ticksCoords[i].coord,
+                    startAngle: 0,
+                    endAngle: Math.PI * 2
+                },
+                silent: true
+            }));
+            prevRadius = ticksCoords[i].coord;
+        }
+
+        // Simple optimization
+        // Batching the lines if color are the same
+        for (var i = 0; i < splitAreas.length; i++) {
+            this.group.add(mergePath(splitAreas[i], {
+                style: defaults({
+                    fill: areaColors[i % areaColors.length]
+                }, areaStyleModel.getAreaStyle()),
+                silent: true
+            }));
+        }
+    }
+});
+
+/**
+ * @inner
+ */
+function layoutAxis(polar, radiusAxisModel, axisAngle) {
+    return {
+        position: [polar.cx, polar.cy],
+        rotation: axisAngle / 180 * Math.PI,
+        labelDirection: -1,
+        tickDirection: -1,
+        nameDirection: 1,
+        labelRotate: radiusAxisModel.getModel('axisLabel').get('rotate'),
+        // Over splitLine and splitArea
+        z2: 1
+    };
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var PolarAxisPointer = BaseAxisPointer.extend({
+
+    /**
+     * @override
+     */
+    makeElOption: function (elOption, value, axisModel, axisPointerModel, api) {
+        var axis = axisModel.axis;
+
+        if (axis.dim === 'angle') {
+            this.animationThreshold = Math.PI / 18;
+        }
+
+        var polar = axis.polar;
+        var otherAxis = polar.getOtherAxis(axis);
+        var otherExtent = otherAxis.getExtent();
+
+        var coordValue;
+        coordValue = axis['dataTo' + capitalFirst(axis.dim)](value);
+
+        var axisPointerType = axisPointerModel.get('type');
+        if (axisPointerType && axisPointerType !== 'none') {
+            var elStyle = buildElStyle(axisPointerModel);
+            var pointerOption = pointerShapeBuilder$2[axisPointerType](
+                axis, polar, coordValue, otherExtent, elStyle
+            );
+            pointerOption.style = elStyle;
+            elOption.graphicKey = pointerOption.type;
+            elOption.pointer = pointerOption;
+        }
+
+        var labelMargin = axisPointerModel.get('label.margin');
+        var labelPos = getLabelPosition(value, axisModel, axisPointerModel, polar, labelMargin);
+        buildLabelElOption(elOption, axisModel, axisPointerModel, api, labelPos);
+    }
+
+    // Do not support handle, utill any user requires it.
+
+});
+
+function getLabelPosition(value, axisModel, axisPointerModel, polar, labelMargin) {
+    var axis = axisModel.axis;
+    var coord = axis.dataToCoord(value);
+    var axisAngle = polar.getAngleAxis().getExtent()[0];
+    axisAngle = axisAngle / 180 * Math.PI;
+    var radiusExtent = polar.getRadiusAxis().getExtent();
+    var position;
+    var align;
+    var verticalAlign;
+
+    if (axis.dim === 'radius') {
+        var transform = create$1();
+        rotate(transform, transform, axisAngle);
+        translate(transform, transform, [polar.cx, polar.cy]);
+        position = applyTransform$1([coord, -labelMargin], transform);
+
+        var labelRotation = axisModel.getModel('axisLabel').get('rotate') || 0;
+        var labelLayout = AxisBuilder.innerTextLayout(
+            axisAngle, labelRotation * Math.PI / 180, -1
+        );
+        align = labelLayout.textAlign;
+        verticalAlign = labelLayout.textVerticalAlign;
+    }
+    else { // angle axis
+        var r = radiusExtent[1];
+        position = polar.coordToPoint([r + labelMargin, coord]);
+        var cx = polar.cx;
+        var cy = polar.cy;
+        align = Math.abs(position[0] - cx) / r < 0.3
+            ? 'center' : (position[0] > cx ? 'left' : 'right');
+        verticalAlign = Math.abs(position[1] - cy) / r < 0.3
+            ? 'middle' : (position[1] > cy ? 'top' : 'bottom');
+    }
+
+    return {
+        position: position,
+        align: align,
+        verticalAlign: verticalAlign
+    };
+}
+
+
+var pointerShapeBuilder$2 = {
+
+    line: function (axis, polar, coordValue, otherExtent, elStyle) {
+        return axis.dim === 'angle'
+            ? {
+                type: 'Line',
+                shape: makeLineShape(
+                    polar.coordToPoint([otherExtent[0], coordValue]),
+                    polar.coordToPoint([otherExtent[1], coordValue])
+                )
