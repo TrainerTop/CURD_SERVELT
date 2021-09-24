@@ -76875,3 +76875,266 @@ extendComponentView({
     type: 'geo',
 
     init: function (ecModel, api) {
+        var mapDraw = new MapDraw(api, true);
+        this._mapDraw = mapDraw;
+
+        this.group.add(mapDraw.group);
+    },
+
+    render: function (geoModel, ecModel, api, payload) {
+        // Not render if it is an toggleSelect action from self
+        if (payload && payload.type === 'geoToggleSelect'
+            && payload.from === this.uid
+        ) {
+            return;
+        }
+
+        var mapDraw = this._mapDraw;
+        if (geoModel.get('show')) {
+            mapDraw.draw(geoModel, ecModel, api, this, payload);
+        }
+        else {
+            this._mapDraw.group.removeAll();
+        }
+
+        this.group.silent = geoModel.get('silent');
+    },
+
+    dispose: function () {
+        this._mapDraw && this._mapDraw.remove();
+    }
+
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+function makeAction(method, actionInfo) {
+    actionInfo.update = 'updateView';
+    registerAction(actionInfo, function (payload, ecModel) {
+        var selected = {};
+
+        ecModel.eachComponent(
+            { mainType: 'geo', query: payload},
+            function (geoModel) {
+                geoModel[method](payload.name);
+                var geo = geoModel.coordinateSystem;
+                each$1(geo.regions, function (region) {
+                    selected[region.name] = geoModel.isSelected(region.name) || false;
+                });
+            }
+        );
+
+        return {
+            selected: selected,
+            name: payload.name
+        };
+    });
+}
+
+makeAction('toggleSelected', {
+    type: 'geoToggleSelect',
+    event: 'geoselectchanged'
+});
+makeAction('select', {
+    type: 'geoSelect',
+    event: 'geoselected'
+});
+makeAction('unSelect', {
+    type: 'geoUnSelect',
+    event: 'geounselected'
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var DEFAULT_TOOLBOX_BTNS = ['rect', 'polygon', 'keep', 'clear'];
+
+var preprocessor$1 = function (option, isNew) {
+    var brushComponents = option && option.brush;
+    if (!isArray(brushComponents)) {
+        brushComponents = brushComponents ? [brushComponents] : [];
+    }
+
+    if (!brushComponents.length) {
+        return;
+    }
+
+    var brushComponentSpecifiedBtns = [];
+
+    each$1(brushComponents, function (brushOpt) {
+        var tbs = brushOpt.hasOwnProperty('toolbox')
+            ? brushOpt.toolbox : [];
+
+        if (tbs instanceof Array) {
+            brushComponentSpecifiedBtns = brushComponentSpecifiedBtns.concat(tbs);
+        }
+    });
+
+    var toolbox = option && option.toolbox;
+
+    if (isArray(toolbox)) {
+        toolbox = toolbox[0];
+    }
+    if (!toolbox) {
+        toolbox = {feature: {}};
+        option.toolbox = [toolbox];
+    }
+
+    var toolboxFeature = (toolbox.feature || (toolbox.feature = {}));
+    var toolboxBrush = toolboxFeature.brush || (toolboxFeature.brush = {});
+    var brushTypes = toolboxBrush.type || (toolboxBrush.type = []);
+
+    brushTypes.push.apply(brushTypes, brushComponentSpecifiedBtns);
+
+    removeDuplicate(brushTypes);
+
+    if (isNew && !brushTypes.length) {
+        brushTypes.push.apply(brushTypes, DEFAULT_TOOLBOX_BTNS);
+    }
+};
+
+function removeDuplicate(arr) {
+    var map$$1 = {};
+    each$1(arr, function (val) {
+        map$$1[val] = 1;
+    });
+    arr.length = 0;
+    each$1(map$$1, function (flag, val) {
+        arr.push(val);
+    });
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file Visual solution, for consistent option specification.
+ */
+
+var each$19 = each$1;
+
+function hasKeys(obj) {
+    if (obj) {
+        for (var name in obj) {
+            if (obj.hasOwnProperty(name)) {
+                return true;
+            }
+        }
+    }
+}
+
+/**
+ * @param {Object} option
+ * @param {Array.<string>} stateList
+ * @param {Function} [supplementVisualOption]
+ * @return {Object} visualMappings <state, <visualType, module:echarts/visual/VisualMapping>>
+ */
+function createVisualMappings(option, stateList, supplementVisualOption) {
+    var visualMappings = {};
+
+    each$19(stateList, function (state) {
+        var mappings = visualMappings[state] = createMappings();
+
+        each$19(option[state], function (visualData, visualType) {
+            if (!VisualMapping.isValidType(visualType)) {
+                return;
+            }
+            var mappingOption = {
+                type: visualType,
+                visual: visualData
+            };
+            supplementVisualOption && supplementVisualOption(mappingOption, state);
+            mappings[visualType] = new VisualMapping(mappingOption);
+
+            // Prepare a alpha for opacity, for some case that opacity
+            // is not supported, such as rendering using gradient color.
+            if (visualType === 'opacity') {
+                mappingOption = clone(mappingOption);
+                mappingOption.type = 'colorAlpha';
+                mappings.__hidden.__alphaForOpacity = new VisualMapping(mappingOption);
+            }
+        });
+    });
+
+    return visualMappings;
+
+    function createMappings() {
+        var Creater = function () {};
+        // Make sure hidden fields will not be visited by
+        // object iteration (with hasOwnProperty checking).
+        Creater.prototype.__hidden = Creater.prototype;
+        var obj = new Creater();
+        return obj;
+    }
+}
+
+/**
+ * @param {Object} thisOption
+ * @param {Object} newOption
+ * @param {Array.<string>} keys
+ */
+function replaceVisualOption(thisOption, newOption, keys) {
+    // Visual attributes merge is not supported, otherwise it
+    // brings overcomplicated merge logic. See #2853. So if
+    // newOption has anyone of these keys, all of these keys
+    // will be reset. Otherwise, all keys remain.
+    var has;
+    each$1(keys, function (key) {
+        if (newOption.hasOwnProperty(key) && hasKeys(newOption[key])) {
+            has = true;
+        }
+    });
+    has && each$1(keys, function (key) {
+        if (newOption.hasOwnProperty(key) && hasKeys(newOption[key])) {
+            thisOption[key] = clone(newOption[key]);
+        }
+        else {
