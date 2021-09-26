@@ -77720,3 +77720,283 @@ var targetInfoBuilders = {
 var targetInfoMatchers = [
 
     // grid
+    function (foundCpts, targetInfo) {
+        var xAxisModel = foundCpts.xAxisModel;
+        var yAxisModel = foundCpts.yAxisModel;
+        var gridModel = foundCpts.gridModel;
+
+        !gridModel && xAxisModel && (gridModel = xAxisModel.axis.grid.model);
+        !gridModel && yAxisModel && (gridModel = yAxisModel.axis.grid.model);
+
+        return gridModel && gridModel === targetInfo.gridModel;
+    },
+
+    // geo
+    function (foundCpts, targetInfo) {
+        var geoModel = foundCpts.geoModel;
+        return geoModel && geoModel === targetInfo.geoModel;
+    }
+];
+
+var panelRectBuilder = {
+
+    grid: function () {
+        // grid is not Transformable.
+        return this.coordSys.grid.getRect().clone();
+    },
+
+    geo: function () {
+        var coordSys = this.coordSys;
+        var rect = coordSys.getBoundingRect().clone();
+        // geo roam and zoom transform
+        rect.applyTransform(getTransform(coordSys));
+        return rect;
+    }
+};
+
+var coordConvert = {
+
+    lineX: curry$5(axisConvert, 0),
+
+    lineY: curry$5(axisConvert, 1),
+
+    rect: function (to, coordSys, rangeOrCoordRange) {
+        var xminymin = coordSys[COORD_CONVERTS[to]]([rangeOrCoordRange[0][0], rangeOrCoordRange[1][0]]);
+        var xmaxymax = coordSys[COORD_CONVERTS[to]]([rangeOrCoordRange[0][1], rangeOrCoordRange[1][1]]);
+        var values = [
+            formatMinMax([xminymin[0], xmaxymax[0]]),
+            formatMinMax([xminymin[1], xmaxymax[1]])
+        ];
+        return {values: values, xyMinMax: values};
+    },
+
+    polygon: function (to, coordSys, rangeOrCoordRange) {
+        var xyMinMax = [[Infinity, -Infinity], [Infinity, -Infinity]];
+        var values = map(rangeOrCoordRange, function (item) {
+            var p = coordSys[COORD_CONVERTS[to]](item);
+            xyMinMax[0][0] = Math.min(xyMinMax[0][0], p[0]);
+            xyMinMax[1][0] = Math.min(xyMinMax[1][0], p[1]);
+            xyMinMax[0][1] = Math.max(xyMinMax[0][1], p[0]);
+            xyMinMax[1][1] = Math.max(xyMinMax[1][1], p[1]);
+            return p;
+        });
+        return {values: values, xyMinMax: xyMinMax};
+    }
+};
+
+function axisConvert(axisNameIndex, to, coordSys, rangeOrCoordRange) {
+    if (__DEV__) {
+        assert$1(
+            coordSys.type === 'cartesian2d',
+            'lineX/lineY brush is available only in cartesian2d.'
+        );
+    }
+
+    var axis = coordSys.getAxis(['x', 'y'][axisNameIndex]);
+    var values = formatMinMax(map([0, 1], function (i) {
+        return to
+            ? axis.coordToData(axis.toLocalCoord(rangeOrCoordRange[i]))
+            : axis.toGlobalCoord(axis.dataToCoord(rangeOrCoordRange[i]));
+    }));
+    var xyMinMax = [];
+    xyMinMax[axisNameIndex] = values;
+    xyMinMax[1 - axisNameIndex] = [NaN, NaN];
+
+    return {values: values, xyMinMax: xyMinMax};
+}
+
+var diffProcessor = {
+    lineX: curry$5(axisDiffProcessor, 0),
+
+    lineY: curry$5(axisDiffProcessor, 1),
+
+    rect: function (values, refer, scales) {
+        return [
+            [values[0][0] - scales[0] * refer[0][0], values[0][1] - scales[0] * refer[0][1]],
+            [values[1][0] - scales[1] * refer[1][0], values[1][1] - scales[1] * refer[1][1]]
+        ];
+    },
+
+    polygon: function (values, refer, scales) {
+        return map(values, function (item, idx) {
+            return [item[0] - scales[0] * refer[idx][0], item[1] - scales[1] * refer[idx][1]];
+        });
+    }
+};
+
+function axisDiffProcessor(axisNameIndex, values, refer, scales) {
+    return [
+        values[0] - scales[axisNameIndex] * refer[0],
+        values[1] - scales[axisNameIndex] * refer[1]
+    ];
+}
+
+// We have to process scale caused by dataZoom manually,
+// although it might be not accurate.
+function getScales(xyMinMaxCurr, xyMinMaxOrigin) {
+    var sizeCurr = getSize(xyMinMaxCurr);
+    var sizeOrigin = getSize(xyMinMaxOrigin);
+    var scales = [sizeCurr[0] / sizeOrigin[0], sizeCurr[1] / sizeOrigin[1]];
+    isNaN(scales[0]) && (scales[0] = 1);
+    isNaN(scales[1]) && (scales[1] = 1);
+    return scales;
+}
+
+function getSize(xyMinMax) {
+    return xyMinMax
+        ? [xyMinMax[0][1] - xyMinMax[0][0], xyMinMax[1][1] - xyMinMax[1][0]]
+        : [NaN, NaN];
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var STATE_LIST = ['inBrush', 'outOfBrush'];
+var DISPATCH_METHOD = '__ecBrushSelect';
+var DISPATCH_FLAG = '__ecInBrushSelectEvent';
+var PRIORITY_BRUSH = PRIORITY.VISUAL.BRUSH;
+
+/**
+ * Layout for visual, the priority higher than other layout, and before brush visual.
+ */
+registerLayout(PRIORITY_BRUSH, function (ecModel, api, payload) {
+    ecModel.eachComponent({mainType: 'brush'}, function (brushModel) {
+
+        payload && payload.type === 'takeGlobalCursor' && brushModel.setBrushOption(
+            payload.key === 'brush' ? payload.brushOption : {brushType: false}
+        );
+
+        var brushTargetManager = brushModel.brushTargetManager = new BrushTargetManager(brushModel.option, ecModel);
+
+        brushTargetManager.setInputRanges(brushModel.areas, ecModel);
+    });
+});
+
+/**
+ * Register the visual encoding if this modules required.
+ */
+registerVisual(PRIORITY_BRUSH, function (ecModel, api, payload) {
+
+    var brushSelected = [];
+    var throttleType;
+    var throttleDelay;
+
+    ecModel.eachComponent({mainType: 'brush'}, function (brushModel, brushIndex) {
+
+        var thisBrushSelected = {
+            brushId: brushModel.id,
+            brushIndex: brushIndex,
+            brushName: brushModel.name,
+            areas: clone(brushModel.areas),
+            selected: []
+        };
+        // Every brush component exists in event params, convenient
+        // for user to find by index.
+        brushSelected.push(thisBrushSelected);
+
+        var brushOption = brushModel.option;
+        var brushLink = brushOption.brushLink;
+        var linkedSeriesMap = [];
+        var selectedDataIndexForLink = [];
+        var rangeInfoBySeries = [];
+        var hasBrushExists = 0;
+
+        if (!brushIndex) { // Only the first throttle setting works.
+            throttleType = brushOption.throttleType;
+            throttleDelay = brushOption.throttleDelay;
+        }
+
+        // Add boundingRect and selectors to range.
+        var areas = map(brushModel.areas, function (area) {
+            return bindSelector(
+                defaults(
+                    {boundingRect: boundingRectBuilders[area.brushType](area)},
+                    area
+                )
+            );
+        });
+
+        var visualMappings = createVisualMappings(
+            brushModel.option, STATE_LIST, function (mappingOption) {
+                mappingOption.mappingMethod = 'fixed';
+            }
+        );
+
+        isArray(brushLink) && each$1(brushLink, function (seriesIndex) {
+            linkedSeriesMap[seriesIndex] = 1;
+        });
+
+        function linkOthers(seriesIndex) {
+            return brushLink === 'all' || linkedSeriesMap[seriesIndex];
+        }
+
+        // If no supported brush or no brush on the series,
+        // all visuals should be in original state.
+        function brushed(rangeInfoList) {
+            return !!rangeInfoList.length;
+        }
+
+        /**
+         * Logic for each series: (If the logic has to be modified one day, do it carefully!)
+         *
+         * ( brushed ┬ && ┬hasBrushExist ┬ && linkOthers  ) => StepA: ┬record, ┬ StepB: ┬visualByRecord.
+         *   !brushed┘    ├hasBrushExist ┤                            └nothing,┘        ├visualByRecord.
+         *                └!hasBrushExist┘                                              └nothing.
+         * ( !brushed  && ┬hasBrushExist ┬ && linkOthers  ) => StepA:  nothing,  StepB: ┬visualByRecord.
+         *                └!hasBrushExist┘                                              └nothing.
+         * ( brushed ┬ &&                     !linkOthers ) => StepA:  nothing,  StepB: ┬visualByCheck.
+         *   !brushed┘                                                                  └nothing.
+         * ( !brushed  &&                     !linkOthers ) => StepA:  nothing,  StepB:  nothing.
+         */
+
+        // Step A
+        ecModel.eachSeries(function (seriesModel, seriesIndex) {
+            var rangeInfoList = rangeInfoBySeries[seriesIndex] = [];
+
+            seriesModel.subType === 'parallel'
+                ? stepAParallel(seriesModel, seriesIndex, rangeInfoList)
+                : stepAOthers(seriesModel, seriesIndex, rangeInfoList);
+        });
+
+        function stepAParallel(seriesModel, seriesIndex) {
+            var coordSys = seriesModel.coordinateSystem;
+            hasBrushExists |= coordSys.hasAxisBrushed();
+
+            linkOthers(seriesIndex) && coordSys.eachActiveState(
+                seriesModel.getData(),
+                function (activeState, dataIndex) {
+                    activeState === 'active' && (selectedDataIndexForLink[dataIndex] = 1);
+                }
+            );
+        }
+
+        function stepAOthers(seriesModel, seriesIndex, rangeInfoList) {
+            var selectorsByBrushType = getSelectorsByBrushType(seriesModel);
+            if (!selectorsByBrushType || brushModelNotControll(brushModel, seriesIndex)) {
+                return;
+            }
+
+            each$1(areas, function (area) {
+                selectorsByBrushType[area.brushType]
+                    && brushModel.brushTargetManager.controlSeries(area, seriesModel, ecModel)
+                    && rangeInfoList.push(area);
+                hasBrushExists |= brushed(rangeInfoList);
+            });
+
+            if (linkOthers(seriesIndex) && brushed(rangeInfoList)) {
