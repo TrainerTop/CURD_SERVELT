@@ -78000,3 +78000,274 @@ registerVisual(PRIORITY_BRUSH, function (ecModel, api, payload) {
             });
 
             if (linkOthers(seriesIndex) && brushed(rangeInfoList)) {
+                var data = seriesModel.getData();
+                data.each(function (dataIndex) {
+                    if (checkInRange(selectorsByBrushType, rangeInfoList, data, dataIndex)) {
+                        selectedDataIndexForLink[dataIndex] = 1;
+                    }
+                });
+            }
+        }
+
+        // Step B
+        ecModel.eachSeries(function (seriesModel, seriesIndex) {
+            var seriesBrushSelected = {
+                seriesId: seriesModel.id,
+                seriesIndex: seriesIndex,
+                seriesName: seriesModel.name,
+                dataIndex: []
+            };
+            // Every series exists in event params, convenient
+            // for user to find series by seriesIndex.
+            thisBrushSelected.selected.push(seriesBrushSelected);
+
+            var selectorsByBrushType = getSelectorsByBrushType(seriesModel);
+            var rangeInfoList = rangeInfoBySeries[seriesIndex];
+
+            var data = seriesModel.getData();
+            var getValueState = linkOthers(seriesIndex)
+                ? function (dataIndex) {
+                    return selectedDataIndexForLink[dataIndex]
+                        ? (seriesBrushSelected.dataIndex.push(data.getRawIndex(dataIndex)), 'inBrush')
+                        : 'outOfBrush';
+                }
+                : function (dataIndex) {
+                    return checkInRange(selectorsByBrushType, rangeInfoList, data, dataIndex)
+                        ? (seriesBrushSelected.dataIndex.push(data.getRawIndex(dataIndex)), 'inBrush')
+                        : 'outOfBrush';
+                };
+
+            // If no supported brush or no brush, all visuals are in original state.
+            (linkOthers(seriesIndex) ? hasBrushExists : brushed(rangeInfoList))
+                && applyVisual(
+                    STATE_LIST, visualMappings, data, getValueState
+                );
+        });
+
+    });
+
+    dispatchAction(api, throttleType, throttleDelay, brushSelected, payload);
+});
+
+function dispatchAction(api, throttleType, throttleDelay, brushSelected, payload) {
+    // This event will not be triggered when `setOpion`, otherwise dead lock may
+    // triggered when do `setOption` in event listener, which we do not find
+    // satisfactory way to solve yet. Some considered resolutions:
+    // (a) Diff with prevoius selected data ant only trigger event when changed.
+    // But store previous data and diff precisely (i.e., not only by dataIndex, but
+    // also detect value changes in selected data) might bring complexity or fragility.
+    // (b) Use spectial param like `silent` to suppress event triggering.
+    // But such kind of volatile param may be weird in `setOption`.
+    if (!payload) {
+        return;
+    }
+
+    var zr = api.getZr();
+    if (zr[DISPATCH_FLAG]) {
+        return;
+    }
+
+    if (!zr[DISPATCH_METHOD]) {
+        zr[DISPATCH_METHOD] = doDispatch;
+    }
+
+    var fn = createOrUpdate(zr, DISPATCH_METHOD, throttleDelay, throttleType);
+
+    fn(api, brushSelected);
+}
+
+function doDispatch(api, brushSelected) {
+    if (!api.isDisposed()) {
+        var zr = api.getZr();
+        zr[DISPATCH_FLAG] = true;
+        api.dispatchAction({
+            type: 'brushSelect',
+            batch: brushSelected
+        });
+        zr[DISPATCH_FLAG] = false;
+    }
+}
+
+function checkInRange(selectorsByBrushType, rangeInfoList, data, dataIndex) {
+    for (var i = 0, len = rangeInfoList.length; i < len; i++) {
+        var area = rangeInfoList[i];
+        if (selectorsByBrushType[area.brushType](
+            dataIndex, data, area.selectors, area
+        )) {
+            return true;
+        }
+    }
+}
+
+function getSelectorsByBrushType(seriesModel) {
+    var brushSelector = seriesModel.brushSelector;
+    if (isString(brushSelector)) {
+        var sels = [];
+        each$1(selector, function (selectorsByElementType, brushType) {
+            sels[brushType] = function (dataIndex, data, selectors, area) {
+                var itemLayout = data.getItemLayout(dataIndex);
+                return selectorsByElementType[brushSelector](itemLayout, selectors, area);
+            };
+        });
+        return sels;
+    }
+    else if (isFunction$1(brushSelector)) {
+        var bSelector = {};
+        each$1(selector, function (sel, brushType) {
+            bSelector[brushType] = brushSelector;
+        });
+        return bSelector;
+    }
+    return brushSelector;
+}
+
+function brushModelNotControll(brushModel, seriesIndex) {
+    var seriesIndices = brushModel.option.seriesIndex;
+    return seriesIndices != null
+        && seriesIndices !== 'all'
+        && (
+            isArray(seriesIndices)
+            ? indexOf(seriesIndices, seriesIndex) < 0
+            : seriesIndex !== seriesIndices
+        );
+}
+
+function bindSelector(area) {
+    var selectors = area.selectors = {};
+    each$1(selector[area.brushType], function (selFn, elType) {
+        // Do not use function binding or curry for performance.
+        selectors[elType] = function (itemLayout) {
+            return selFn(itemLayout, selectors, area);
+        };
+    });
+    return area;
+}
+
+var boundingRectBuilders = {
+
+    lineX: noop,
+
+    lineY: noop,
+
+    rect: function (area) {
+        return getBoundingRectFromMinMax(area.range);
+    },
+
+    polygon: function (area) {
+        var minMax;
+        var range = area.range;
+
+        for (var i = 0, len = range.length; i < len; i++) {
+            minMax = minMax || [[Infinity, -Infinity], [Infinity, -Infinity]];
+            var rg = range[i];
+            rg[0] < minMax[0][0] && (minMax[0][0] = rg[0]);
+            rg[0] > minMax[0][1] && (minMax[0][1] = rg[0]);
+            rg[1] < minMax[1][0] && (minMax[1][0] = rg[1]);
+            rg[1] > minMax[1][1] && (minMax[1][1] = rg[1]);
+        }
+
+        return minMax && getBoundingRectFromMinMax(minMax);
+    }
+};
+
+function getBoundingRectFromMinMax(minMax) {
+    return new BoundingRect(
+        minMax[0][0],
+        minMax[1][0],
+        minMax[0][1] - minMax[0][0],
+        minMax[1][1] - minMax[1][0]
+    );
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var DEFAULT_OUT_OF_BRUSH_COLOR = ['#ddd'];
+
+var BrushModel = extendComponentModel({
+
+    type: 'brush',
+
+    dependencies: ['geo', 'grid', 'xAxis', 'yAxis', 'parallel', 'series'],
+
+    /**
+     * @protected
+     */
+    defaultOption: {
+        // inBrush: null,
+        // outOfBrush: null,
+        toolbox: null,          // Default value see preprocessor.
+        brushLink: null,        // Series indices array, broadcast using dataIndex.
+                                // or 'all', which means all series. 'none' or null means no series.
+        seriesIndex: 'all',     // seriesIndex array, specify series controlled by this brush component.
+        geoIndex: null,         //
+        xAxisIndex: null,
+        yAxisIndex: null,
+
+        brushType: 'rect',      // Default brushType, see BrushController.
+        brushMode: 'single',    // Default brushMode, 'single' or 'multiple'
+        transformable: true,    // Default transformable.
+        brushStyle: {           // Default brushStyle
+            borderWidth: 1,
+            color: 'rgba(120,140,180,0.3)',
+            borderColor: 'rgba(120,140,180,0.8)'
+        },
+
+        throttleType: 'fixRate', // Throttle in brushSelected event. 'fixRate' or 'debounce'.
+                                 // If null, no throttle. Valid only in the first brush component
+        throttleDelay: 0,        // Unit: ms, 0 means every event will be triggered.
+
+        // FIXME
+        // 试验效果
+        removeOnClick: true,
+
+        z: 10000
+    },
+
+    /**
+     * @readOnly
+     * @type {Array.<Object>}
+     */
+    areas: [],
+
+    /**
+     * Current activated brush type.
+     * If null, brush is inactived.
+     * see module:echarts/component/helper/BrushController
+     * @readOnly
+     * @type {string}
+     */
+    brushType: null,
+
+    /**
+     * Current brush opt.
+     * see module:echarts/component/helper/BrushController
+     * @readOnly
+     * @type {Object}
+     */
+    brushOption: {},
+
+    /**
+     * @readOnly
+     * @type {Array.<Object>}
+     */
+    coordInfoList: [],
+
+    optionUpdated: function (newOption, isInit) {
+        var thisOption = this.option;
