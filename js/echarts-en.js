@@ -78271,3 +78271,278 @@ var BrushModel = extendComponentModel({
 
     optionUpdated: function (newOption, isInit) {
         var thisOption = this.option;
+
+        !isInit && replaceVisualOption(
+            thisOption, newOption, ['inBrush', 'outOfBrush']
+        );
+
+        var inBrush = thisOption.inBrush = thisOption.inBrush || {};
+        // Always give default visual, consider setOption at the second time.
+        thisOption.outOfBrush = thisOption.outOfBrush || {color: DEFAULT_OUT_OF_BRUSH_COLOR};
+
+        if (!inBrush.hasOwnProperty('liftZ')) {
+            // Bigger than the highlight z lift, otherwise it will
+            // be effected by the highlight z when brush.
+            inBrush.liftZ = 5;
+        }
+    },
+
+    /**
+     * If ranges is null/undefined, range state remain.
+     *
+     * @param {Array.<Object>} [ranges]
+     */
+    setAreas: function (areas) {
+        if (__DEV__) {
+            assert$1(isArray(areas));
+            each$1(areas, function (area) {
+                assert$1(area.brushType, 'Illegal areas');
+            });
+        }
+
+        // If ranges is null/undefined, range state remain.
+        // This helps user to dispatchAction({type: 'brush'}) with no areas
+        // set but just want to get the current brush select info from a `brush` event.
+        if (!areas) {
+            return;
+        }
+
+        this.areas = map(areas, function (area) {
+            return generateBrushOption(this.option, area);
+        }, this);
+    },
+
+    /**
+     * see module:echarts/component/helper/BrushController
+     * @param {Object} brushOption
+     */
+    setBrushOption: function (brushOption) {
+        this.brushOption = generateBrushOption(this.option, brushOption);
+        this.brushType = this.brushOption.brushType;
+    }
+
+});
+
+function generateBrushOption(option, brushOption) {
+    return merge(
+        {
+            brushType: option.brushType,
+            brushMode: option.brushMode,
+            transformable: option.transformable,
+            brushStyle: new Model(option.brushStyle).getItemStyle(),
+            removeOnClick: option.removeOnClick,
+            z: option.z
+        },
+        brushOption,
+        true
+    );
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+extendComponentView({
+
+    type: 'brush',
+
+    init: function (ecModel, api) {
+
+        /**
+         * @readOnly
+         * @type {module:echarts/model/Global}
+         */
+        this.ecModel = ecModel;
+
+        /**
+         * @readOnly
+         * @type {module:echarts/ExtensionAPI}
+         */
+        this.api = api;
+
+        /**
+         * @readOnly
+         * @type {module:echarts/component/brush/BrushModel}
+         */
+        this.model;
+
+        /**
+         * @private
+         * @type {module:echarts/component/helper/BrushController}
+         */
+        (this._brushController = new BrushController(api.getZr()))
+            .on('brush', bind(this._onBrush, this))
+            .mount();
+    },
+
+    /**
+     * @override
+     */
+    render: function (brushModel) {
+        this.model = brushModel;
+        return updateController.apply(this, arguments);
+    },
+
+    /**
+     * @override
+     */
+    updateTransform: updateController,
+
+    /**
+     * @override
+     */
+    updateView: updateController,
+
+    // /**
+    //  * @override
+    //  */
+    // updateLayout: updateController,
+
+    // /**
+    //  * @override
+    //  */
+    // updateVisual: updateController,
+
+    /**
+     * @override
+     */
+    dispose: function () {
+        this._brushController.dispose();
+    },
+
+    /**
+     * @private
+     */
+    _onBrush: function (areas, opt) {
+        var modelId = this.model.id;
+
+        this.model.brushTargetManager.setOutputRanges(areas, this.ecModel);
+
+        // Action is not dispatched on drag end, because the drag end
+        // emits the same params with the last drag move event, and
+        // may have some delay when using touch pad, which makes
+        // animation not smooth (when using debounce).
+        (!opt.isEnd || opt.removeOnClick) && this.api.dispatchAction({
+            type: 'brush',
+            brushId: modelId,
+            areas: clone(areas),
+            $from: modelId
+        });
+    }
+
+});
+
+function updateController(brushModel, ecModel, api, payload) {
+    // Do not update controller when drawing.
+    (!payload || payload.$from !== brushModel.id) && this._brushController
+        .setPanels(brushModel.brushTargetManager.makePanelOpts(api))
+        .enableBrush(brushModel.brushOption)
+        .updateCovers(brushModel.areas.slice());
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * payload: {
+ *      brushIndex: number, or,
+ *      brushId: string, or,
+ *      brushName: string,
+ *      globalRanges: Array
+ * }
+ */
+registerAction(
+        {type: 'brush', event: 'brush' /*, update: 'updateView' */},
+    function (payload, ecModel) {
+        ecModel.eachComponent({mainType: 'brush', query: payload}, function (brushModel) {
+            brushModel.setAreas(payload.areas);
+        });
+    }
+);
+
+/**
+ * payload: {
+ *      brushComponents: [
+ *          {
+ *              brushId,
+ *              brushIndex,
+ *              brushName,
+ *              series: [
+ *                  {
+ *                      seriesId,
+ *                      seriesIndex,
+ *                      seriesName,
+ *                      rawIndices: [21, 34, ...]
+ *                  },
+ *                  ...
+ *              ]
+ *          },
+ *          ...
+ *      ]
+ * }
+ */
+registerAction(
+    {type: 'brushSelect', event: 'brushSelected', update: 'none'},
+    function () {}
+);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+var features = {};
+
+function register$1(name, ctor) {
+    features[name] = ctor;
+}
+
+function get$1(name) {
+    return features[name];
+}
