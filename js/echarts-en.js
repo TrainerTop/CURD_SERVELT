@@ -79093,3 +79093,271 @@ Calendar.prototype = {
         var startDateNum = date.getDate();
         var endDateNum = range[1].date.getDate();
         date.setDate(startDateNum + allDay - 1);
+        // The bias can not over a month, so just compare date.
+        if (date.getDate() !== endDateNum) {
+            var sign = date.getTime() - range[1].time > 0 ? 1 : -1;
+            while (date.getDate() !== endDateNum && (date.getTime() - range[1].time) * sign > 0) {
+                allDay -= sign;
+                date.setDate(startDateNum + allDay - 1);
+            }
+        }
+
+        var weeks = Math.floor((allDay + range[0].day + 6) / 7);
+        var nthWeek = reversed ? -weeks + 1 : weeks - 1;
+
+        reversed && range.reverse();
+
+        return {
+            range: [range[0].formatedDate, range[1].formatedDate],
+            start: range[0],
+            end: range[1],
+            allDay: allDay,
+            weeks: weeks,
+            // From 0.
+            nthWeek: nthWeek,
+            fweek: range[0].day,
+            lweek: range[1].day
+        };
+    },
+
+    /**
+     * get date by nthWeeks and week day in range
+     *
+     * @private
+     * @param  {number} nthWeek the week
+     * @param  {number} day   the week day
+     * @param  {Array} range [d1, d2]
+     * @return {Object}
+     */
+    _getDateByWeeksAndDay: function (nthWeek, day, range) {
+        var rangeInfo = this._getRangeInfo(range);
+
+        if (nthWeek > rangeInfo.weeks
+            || (nthWeek === 0 && day < rangeInfo.fweek)
+            || (nthWeek === rangeInfo.weeks && day > rangeInfo.lweek)
+        ) {
+            return false;
+        }
+
+        var nthDay = (nthWeek - 1) * 7 - rangeInfo.fweek + day;
+        var date = new Date(rangeInfo.start.time);
+        date.setDate(rangeInfo.start.d + nthDay);
+
+        return this.getDateInfo(date);
+    }
+};
+
+Calendar.dimensions = Calendar.prototype.dimensions;
+
+Calendar.getDimensionsInfo = Calendar.prototype.getDimensionsInfo;
+
+Calendar.create = function (ecModel, api) {
+    var calendarList = [];
+
+    ecModel.eachComponent('calendar', function (calendarModel) {
+        var calendar = new Calendar(calendarModel, ecModel, api);
+        calendarList.push(calendar);
+        calendarModel.coordinateSystem = calendar;
+    });
+
+    ecModel.eachSeries(function (calendarSeries) {
+        if (calendarSeries.get('coordinateSystem') === 'calendar') {
+            // Inject coordinate system
+            calendarSeries.coordinateSystem = calendarList[calendarSeries.get('calendarIndex') || 0];
+        }
+    });
+    return calendarList;
+};
+
+function doConvert$2(methodName, ecModel, finder, value) {
+    var calendarModel = finder.calendarModel;
+    var seriesModel = finder.seriesModel;
+
+    var coordSys = calendarModel
+        ? calendarModel.coordinateSystem
+        : seriesModel
+        ? seriesModel.coordinateSystem
+        : null;
+
+    return coordSys === this ? coordSys[methodName](value) : null;
+}
+
+CoordinateSystemManager.register('calendar', Calendar);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var CalendarModel = ComponentModel.extend({
+
+    type: 'calendar',
+
+    /**
+     * @type {module:echarts/coord/calendar/Calendar}
+     */
+    coordinateSystem: null,
+
+    defaultOption: {
+        zlevel: 0,
+        z: 2,
+        left: 80,
+        top: 60,
+
+        cellSize: 20,
+
+        // horizontal vertical
+        orient: 'horizontal',
+
+        // month separate line style
+        splitLine: {
+            show: true,
+            lineStyle: {
+                color: '#000',
+                width: 1,
+                type: 'solid'
+            }
+        },
+
+        // rect style  temporarily unused emphasis
+        itemStyle: {
+            color: '#fff',
+            borderWidth: 1,
+            borderColor: '#ccc'
+        },
+
+        // week text style
+        dayLabel: {
+            show: true,
+
+            // a week first day
+            firstDay: 0,
+
+            // start end
+            position: 'start',
+            margin: '50%', // 50% of cellSize
+            nameMap: 'en',
+            color: '#000'
+        },
+
+        // month text style
+        monthLabel: {
+            show: true,
+
+            // start end
+            position: 'start',
+            margin: 5,
+
+            // center or left
+            align: 'center',
+
+            // cn en []
+            nameMap: 'en',
+            formatter: null,
+            color: '#000'
+        },
+
+        // year text style
+        yearLabel: {
+            show: true,
+
+            // top bottom left right
+            position: null,
+            margin: 30,
+            formatter: null,
+            color: '#ccc',
+            fontFamily: 'sans-serif',
+            fontWeight: 'bolder',
+            fontSize: 20
+        }
+    },
+
+    /**
+     * @override
+     */
+    init: function (option, parentModel, ecModel, extraOpt) {
+        var inputPositionParams = getLayoutParams(option);
+
+        CalendarModel.superApply(this, 'init', arguments);
+
+        mergeAndNormalizeLayoutParams$1(option, inputPositionParams);
+    },
+
+    /**
+     * @override
+     */
+    mergeOption: function (option, extraOpt) {
+        CalendarModel.superApply(this, 'mergeOption', arguments);
+
+        mergeAndNormalizeLayoutParams$1(this.option, option);
+    }
+});
+
+function mergeAndNormalizeLayoutParams$1(target, raw) {
+    // Normalize cellSize
+    var cellSize = target.cellSize;
+
+    if (!isArray(cellSize)) {
+        cellSize = target.cellSize = [cellSize, cellSize];
+    }
+    else if (cellSize.length === 1) {
+        cellSize[1] = cellSize[0];
+    }
+
+    var ignoreSize = map([0, 1], function (hvIdx) {
+        // If user have set `width` or both `left` and `right`, cellSize
+        // will be automatically set to 'auto', otherwise the default
+        // setting of cellSize will make `width` setting not work.
+        if (sizeCalculable(raw, hvIdx)) {
+            cellSize[hvIdx] = 'auto';
+        }
+        return cellSize[hvIdx] != null && cellSize[hvIdx] !== 'auto';
+    });
+
+    mergeLayoutParam(target, raw, {
+        type: 'box', ignoreSize: ignoreSize
+    });
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var MONTH_TEXT = {
+    EN: [
+        'Jan', 'Feb', 'Mar',
+        'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep',
+        'Oct', 'Nov', 'Dec'
+    ],
+    CN: [
+        '一月', '二月', '三月',
