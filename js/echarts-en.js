@@ -79361,3 +79361,272 @@ var MONTH_TEXT = {
     ],
     CN: [
         '一月', '二月', '三月',
+        '四月', '五月', '六月',
+        '七月', '八月', '九月',
+        '十月', '十一月', '十二月'
+    ]
+};
+
+var WEEK_TEXT = {
+    EN: ['S', 'M', 'T', 'W', 'T', 'F', 'S'],
+    CN: ['日', '一', '二', '三', '四', '五', '六']
+};
+
+extendComponentView({
+
+    type: 'calendar',
+
+    /**
+     * top/left line points
+     *  @private
+     */
+    _tlpoints: null,
+
+    /**
+     * bottom/right line points
+     *  @private
+     */
+    _blpoints: null,
+
+    /**
+     * first day of month
+     *  @private
+     */
+    _firstDayOfMonth: null,
+
+    /**
+     * first day point of month
+     *  @private
+     */
+    _firstDayPoints: null,
+
+    render: function (calendarModel, ecModel, api) {
+
+        var group = this.group;
+
+        group.removeAll();
+
+        var coordSys = calendarModel.coordinateSystem;
+
+        // range info
+        var rangeData = coordSys.getRangeInfo();
+        var orient = coordSys.getOrient();
+
+        this._renderDayRect(calendarModel, rangeData, group);
+
+        // _renderLines must be called prior to following function
+        this._renderLines(calendarModel, rangeData, orient, group);
+
+        this._renderYearText(calendarModel, rangeData, orient, group);
+
+        this._renderMonthText(calendarModel, orient, group);
+
+        this._renderWeekText(calendarModel, rangeData, orient, group);
+    },
+
+    // render day rect
+    _renderDayRect: function (calendarModel, rangeData, group) {
+        var coordSys = calendarModel.coordinateSystem;
+        var itemRectStyleModel = calendarModel.getModel('itemStyle').getItemStyle();
+        var sw = coordSys.getCellWidth();
+        var sh = coordSys.getCellHeight();
+
+        for (var i = rangeData.start.time;
+            i <= rangeData.end.time;
+            i = coordSys.getNextNDay(i, 1).time
+        ) {
+
+            var point = coordSys.dataToRect([i], false).tl;
+
+            // every rect
+            var rect = new Rect({
+                shape: {
+                    x: point[0],
+                    y: point[1],
+                    width: sw,
+                    height: sh
+                },
+                cursor: 'default',
+                style: itemRectStyleModel
+            });
+
+            group.add(rect);
+        }
+
+    },
+
+    // render separate line
+    _renderLines: function (calendarModel, rangeData, orient, group) {
+
+        var self = this;
+
+        var coordSys = calendarModel.coordinateSystem;
+
+        var lineStyleModel = calendarModel.getModel('splitLine.lineStyle').getLineStyle();
+        var show = calendarModel.get('splitLine.show');
+
+        var lineWidth = lineStyleModel.lineWidth;
+
+        this._tlpoints = [];
+        this._blpoints = [];
+        this._firstDayOfMonth = [];
+        this._firstDayPoints = [];
+
+
+        var firstDay = rangeData.start;
+
+        for (var i = 0; firstDay.time <= rangeData.end.time; i++) {
+            addPoints(firstDay.formatedDate);
+
+            if (i === 0) {
+                firstDay = coordSys.getDateInfo(rangeData.start.y + '-' + rangeData.start.m);
+            }
+
+            var date = firstDay.date;
+            date.setMonth(date.getMonth() + 1);
+            firstDay = coordSys.getDateInfo(date);
+        }
+
+        addPoints(coordSys.getNextNDay(rangeData.end.time, 1).formatedDate);
+
+        function addPoints(date) {
+
+            self._firstDayOfMonth.push(coordSys.getDateInfo(date));
+            self._firstDayPoints.push(coordSys.dataToRect([date], false).tl);
+
+            var points = self._getLinePointsOfOneWeek(calendarModel, date, orient);
+
+            self._tlpoints.push(points[0]);
+            self._blpoints.push(points[points.length - 1]);
+
+            show && self._drawSplitline(points, lineStyleModel, group);
+        }
+
+
+        // render top/left line
+        show && this._drawSplitline(self._getEdgesPoints(self._tlpoints, lineWidth, orient), lineStyleModel, group);
+
+        // render bottom/right line
+        show && this._drawSplitline(self._getEdgesPoints(self._blpoints, lineWidth, orient), lineStyleModel, group);
+
+    },
+
+    // get points at both ends
+    _getEdgesPoints: function (points, lineWidth, orient) {
+        var rs = [points[0].slice(), points[points.length - 1].slice()];
+        var idx = orient === 'horizontal' ? 0 : 1;
+
+        // both ends of the line are extend half lineWidth
+        rs[0][idx] = rs[0][idx] - lineWidth / 2;
+        rs[1][idx] = rs[1][idx] + lineWidth / 2;
+
+        return rs;
+    },
+
+    // render split line
+    _drawSplitline: function (points, lineStyleModel, group) {
+
+        var poyline = new Polyline({
+            z2: 20,
+            shape: {
+                points: points
+            },
+            style: lineStyleModel
+        });
+
+        group.add(poyline);
+    },
+
+    // render month line of one week points
+    _getLinePointsOfOneWeek: function (calendarModel, date, orient) {
+
+        var coordSys = calendarModel.coordinateSystem;
+        date = coordSys.getDateInfo(date);
+
+        var points = [];
+
+        for (var i = 0; i < 7; i++) {
+
+            var tmpD = coordSys.getNextNDay(date.time, i);
+            var point = coordSys.dataToRect([tmpD.time], false);
+
+            points[2 * tmpD.day] = point.tl;
+            points[2 * tmpD.day + 1] = point[orient === 'horizontal' ? 'bl' : 'tr'];
+        }
+
+        return points;
+
+    },
+
+    _formatterLabel: function (formatter, params) {
+
+        if (typeof formatter === 'string' && formatter) {
+            return formatTplSimple(formatter, params);
+        }
+
+        if (typeof formatter === 'function') {
+            return formatter(params);
+        }
+
+        return params.nameMap;
+
+    },
+
+    _yearTextPositionControl: function (textEl, point, orient, position, margin) {
+
+        point = point.slice();
+        var aligns = ['center', 'bottom'];
+
+        if (position === 'bottom') {
+            point[1] += margin;
+            aligns = ['center', 'top'];
+        }
+        else if (position === 'left') {
+            point[0] -= margin;
+        }
+        else if (position === 'right') {
+            point[0] += margin;
+            aligns = ['center', 'top'];
+        }
+        else { // top
+            point[1] -= margin;
+        }
+
+        var rotate = 0;
+        if (position === 'left' || position === 'right') {
+            rotate = Math.PI / 2;
+        }
+
+        return {
+            rotation: rotate,
+            position: point,
+            style: {
+                textAlign: aligns[0],
+                textVerticalAlign: aligns[1]
+            }
+        };
+    },
+
+    // render year
+    _renderYearText: function (calendarModel, rangeData, orient, group) {
+        var yearLabel = calendarModel.getModel('yearLabel');
+
+        if (!yearLabel.get('show')) {
+            return;
+        }
+
+        var margin = yearLabel.get('margin');
+        var pos = yearLabel.get('position');
+
+        if (!pos) {
+            pos = orient !== 'horizontal' ? 'top' : 'left';
+        }
+
+        var points = [this._tlpoints[this._tlpoints.length - 1], this._blpoints[0]];
+        var xc = (points[0][0] + points[1][0]) / 2;
+        var yc = (points[0][1] + points[1][1]) / 2;
+
+        var idx = orient === 'horizontal' ? 0 : 1;
+
+        var posPoints = {
+            top: [xc, points[idx][1]],
