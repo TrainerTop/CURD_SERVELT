@@ -79630,3 +79630,255 @@ extendComponentView({
 
         var posPoints = {
             top: [xc, points[idx][1]],
+            bottom: [xc, points[1 - idx][1]],
+            left: [points[1 - idx][0], yc],
+            right: [points[idx][0], yc]
+        };
+
+        var name = rangeData.start.y;
+
+        if (+rangeData.end.y > +rangeData.start.y) {
+            name = name + '-' + rangeData.end.y;
+        }
+
+        var formatter = yearLabel.get('formatter');
+
+        var params = {
+            start: rangeData.start.y,
+            end: rangeData.end.y,
+            nameMap: name
+        };
+
+        var content = this._formatterLabel(formatter, params);
+
+        var yearText = new Text({z2: 30});
+        setTextStyle(yearText.style, yearLabel, {text: content}),
+        yearText.attr(this._yearTextPositionControl(yearText, posPoints[pos], orient, pos, margin));
+
+        group.add(yearText);
+    },
+
+    _monthTextPositionControl: function (point, isCenter, orient, position, margin) {
+        var align = 'left';
+        var vAlign = 'top';
+        var x = point[0];
+        var y = point[1];
+
+        if (orient === 'horizontal') {
+            y = y + margin;
+
+            if (isCenter) {
+                align = 'center';
+            }
+
+            if (position === 'start') {
+                vAlign = 'bottom';
+            }
+        }
+        else {
+            x = x + margin;
+
+            if (isCenter) {
+                vAlign = 'middle';
+            }
+
+            if (position === 'start') {
+                align = 'right';
+            }
+        }
+
+        return {
+            x: x,
+            y: y,
+            textAlign: align,
+            textVerticalAlign: vAlign
+        };
+    },
+
+    // render month and year text
+    _renderMonthText: function (calendarModel, orient, group) {
+        var monthLabel = calendarModel.getModel('monthLabel');
+
+        if (!monthLabel.get('show')) {
+            return;
+        }
+
+        var nameMap = monthLabel.get('nameMap');
+        var margin = monthLabel.get('margin');
+        var pos = monthLabel.get('position');
+        var align = monthLabel.get('align');
+
+        var termPoints = [this._tlpoints, this._blpoints];
+
+        if (isString(nameMap)) {
+            nameMap = MONTH_TEXT[nameMap.toUpperCase()] || [];
+        }
+
+        var idx = pos === 'start' ? 0 : 1;
+        var axis = orient === 'horizontal' ? 0 : 1;
+        margin = pos === 'start' ? -margin : margin;
+        var isCenter = (align === 'center');
+
+        for (var i = 0; i < termPoints[idx].length - 1; i++) {
+
+            var tmp = termPoints[idx][i].slice();
+            var firstDay = this._firstDayOfMonth[i];
+
+            if (isCenter) {
+                var firstDayPoints = this._firstDayPoints[i];
+                tmp[axis] = (firstDayPoints[axis] + termPoints[0][i + 1][axis]) / 2;
+            }
+
+            var formatter = monthLabel.get('formatter');
+            var name = nameMap[+firstDay.m - 1];
+            var params = {
+                yyyy: firstDay.y,
+                yy: (firstDay.y + '').slice(2),
+                MM: firstDay.m,
+                M: +firstDay.m,
+                nameMap: name
+            };
+
+            var content = this._formatterLabel(formatter, params);
+
+            var monthText = new Text({z2: 30});
+            extend(
+                setTextStyle(monthText.style, monthLabel, {text: content}),
+                this._monthTextPositionControl(tmp, isCenter, orient, pos, margin)
+            );
+
+            group.add(monthText);
+        }
+    },
+
+    _weekTextPositionControl: function (point, orient, position, margin, cellSize) {
+        var align = 'center';
+        var vAlign = 'middle';
+        var x = point[0];
+        var y = point[1];
+        var isStart = position === 'start';
+
+        if (orient === 'horizontal') {
+            x = x + margin + (isStart ? 1 : -1) * cellSize[0] / 2;
+            align = isStart ? 'right' : 'left';
+        }
+        else {
+            y = y + margin + (isStart ? 1 : -1) * cellSize[1] / 2;
+            vAlign = isStart ? 'bottom' : 'top';
+        }
+
+        return {
+            x: x,
+            y: y,
+            textAlign: align,
+            textVerticalAlign: vAlign
+        };
+    },
+
+    // render weeks
+    _renderWeekText: function (calendarModel, rangeData, orient, group) {
+        var dayLabel = calendarModel.getModel('dayLabel');
+
+        if (!dayLabel.get('show')) {
+            return;
+        }
+
+        var coordSys = calendarModel.coordinateSystem;
+        var pos = dayLabel.get('position');
+        var nameMap = dayLabel.get('nameMap');
+        var margin = dayLabel.get('margin');
+        var firstDayOfWeek = coordSys.getFirstDayOfWeek();
+
+        if (isString(nameMap)) {
+            nameMap = WEEK_TEXT[nameMap.toUpperCase()] || [];
+        }
+
+        var start = coordSys.getNextNDay(
+            rangeData.end.time, (7 - rangeData.lweek)
+        ).time;
+
+        var cellSize = [coordSys.getCellWidth(), coordSys.getCellHeight()];
+        margin = parsePercent$1(margin, cellSize[orient === 'horizontal' ? 0 : 1]);
+
+        if (pos === 'start') {
+            start = coordSys.getNextNDay(
+                rangeData.start.time, -(7 + rangeData.fweek)
+            ).time;
+            margin = -margin;
+        }
+
+        for (var i = 0; i < 7; i++) {
+
+            var tmpD = coordSys.getNextNDay(start, i);
+            var point = coordSys.dataToRect([tmpD.time], false).center;
+            var day = i;
+            day = Math.abs((i + firstDayOfWeek) % 7);
+            var weekText = new Text({z2: 30});
+
+            extend(
+                setTextStyle(weekText.style, dayLabel, {text: nameMap[day]}),
+                this._weekTextPositionControl(point, orient, pos, margin, cellSize)
+            );
+            group.add(weekText);
+        }
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file calendar.js
+ * @author dxh
+ */
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Model
+extendComponentModel({
+
+    type: 'title',
+
+    layoutMode: {type: 'box', ignoreSize: true},
+
+    defaultOption: {
+        // 一级层叠
+        zlevel: 0,
+        // 二级层叠
+        z: 6,
+        show: true,
+
+        text: '',
