@@ -80170,3 +80170,273 @@ function createNameEach(names, attrs) {
  *                                axisIndex: 'angleAixs',
  *                                index: 'angleIndex'
  *                            }
+ * @param {Object} context
+ */
+var eachAxisDim$1 = createNameEach(AXIS_DIMS, ['axisIndex', 'axis', 'index', 'id']);
+
+/**
+ * If tow dataZoomModels has the same axis controlled, we say that they are 'linked'.
+ * dataZoomModels and 'links' make up one or more graphics.
+ * This function finds the graphic where the source dataZoomModel is in.
+ *
+ * @public
+ * @param {Function} forEachNode Node iterator.
+ * @param {Function} forEachEdgeType edgeType iterator
+ * @param {Function} edgeIdGetter Giving node and edgeType, return an array of edge id.
+ * @return {Function} Input: sourceNode, Output: Like {nodes: [], dims: {}}
+ */
+function createLinkedNodesFinder(forEachNode, forEachEdgeType, edgeIdGetter) {
+
+    return function (sourceNode) {
+        var result = {
+            nodes: [],
+            records: {} // key: edgeType.name, value: Object (key: edge id, value: boolean).
+        };
+
+        forEachEdgeType(function (edgeType) {
+            result.records[edgeType.name] = {};
+        });
+
+        if (!sourceNode) {
+            return result;
+        }
+
+        absorb(sourceNode, result);
+
+        var existsLink;
+        do {
+            existsLink = false;
+            forEachNode(processSingleNode);
+        }
+        while (existsLink);
+
+        function processSingleNode(node) {
+            if (!isNodeAbsorded(node, result) && isLinked(node, result)) {
+                absorb(node, result);
+                existsLink = true;
+            }
+        }
+
+        return result;
+    };
+
+    function isNodeAbsorded(node, result) {
+        return indexOf(result.nodes, node) >= 0;
+    }
+
+    function isLinked(node, result) {
+        var hasLink = false;
+        forEachEdgeType(function (edgeType) {
+            each$1(edgeIdGetter(node, edgeType) || [], function (edgeId) {
+                result.records[edgeType.name][edgeId] && (hasLink = true);
+            });
+        });
+        return hasLink;
+    }
+
+    function absorb(node, result) {
+        result.nodes.push(node);
+        forEachEdgeType(function (edgeType) {
+            each$1(edgeIdGetter(node, edgeType) || [], function (edgeId) {
+                result.records[edgeType.name][edgeId] = true;
+            });
+        });
+    }
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var each$22 = each$1;
+var asc$1 = asc;
+
+/**
+ * Operate single axis.
+ * One axis can only operated by one axis operator.
+ * Different dataZoomModels may be defined to operate the same axis.
+ * (i.e. 'inside' data zoom and 'slider' data zoom components)
+ * So dataZoomModels share one axisProxy in that case.
+ *
+ * @class
+ */
+var AxisProxy = function (dimName, axisIndex, dataZoomModel, ecModel) {
+
+    /**
+     * @private
+     * @type {string}
+     */
+    this._dimName = dimName;
+
+    /**
+     * @private
+     */
+    this._axisIndex = axisIndex;
+
+    /**
+     * @private
+     * @type {Array.<number>}
+     */
+    this._valueWindow;
+
+    /**
+     * @private
+     * @type {Array.<number>}
+     */
+    this._percentWindow;
+
+    /**
+     * @private
+     * @type {Array.<number>}
+     */
+    this._dataExtent;
+
+    /**
+     * {minSpan, maxSpan, minValueSpan, maxValueSpan}
+     * @private
+     * @type {Object}
+     */
+    this._minMaxSpan;
+
+    /**
+     * @readOnly
+     * @type {module: echarts/model/Global}
+     */
+    this.ecModel = ecModel;
+
+    /**
+     * @private
+     * @type {module: echarts/component/dataZoom/DataZoomModel}
+     */
+    this._dataZoomModel = dataZoomModel;
+
+    // /**
+    //  * @readOnly
+    //  * @private
+    //  */
+    // this.hasSeriesStacked;
+};
+
+AxisProxy.prototype = {
+
+    constructor: AxisProxy,
+
+    /**
+     * Whether the axisProxy is hosted by dataZoomModel.
+     *
+     * @public
+     * @param {module: echarts/component/dataZoom/DataZoomModel} dataZoomModel
+     * @return {boolean}
+     */
+    hostedBy: function (dataZoomModel) {
+        return this._dataZoomModel === dataZoomModel;
+    },
+
+    /**
+     * @return {Array.<number>} Value can only be NaN or finite value.
+     */
+    getDataValueWindow: function () {
+        return this._valueWindow.slice();
+    },
+
+    /**
+     * @return {Array.<number>}
+     */
+    getDataPercentWindow: function () {
+        return this._percentWindow.slice();
+    },
+
+    /**
+     * @public
+     * @param {number} axisIndex
+     * @return {Array} seriesModels
+     */
+    getTargetSeriesModels: function () {
+        var seriesModels = [];
+        var ecModel = this.ecModel;
+
+        ecModel.eachSeries(function (seriesModel) {
+            if (isCoordSupported(seriesModel.get('coordinateSystem'))) {
+                var dimName = this._dimName;
+                var axisModel = ecModel.queryComponents({
+                    mainType: dimName + 'Axis',
+                    index: seriesModel.get(dimName + 'AxisIndex'),
+                    id: seriesModel.get(dimName + 'AxisId')
+                })[0];
+                if (this._axisIndex === (axisModel && axisModel.componentIndex)) {
+                    seriesModels.push(seriesModel);
+                }
+            }
+        }, this);
+
+        return seriesModels;
+    },
+
+    getAxisModel: function () {
+        return this.ecModel.getComponent(this._dimName + 'Axis', this._axisIndex);
+    },
+
+    getOtherAxisModel: function () {
+        var axisDim = this._dimName;
+        var ecModel = this.ecModel;
+        var axisModel = this.getAxisModel();
+        var isCartesian = axisDim === 'x' || axisDim === 'y';
+        var otherAxisDim;
+        var coordSysIndexName;
+        if (isCartesian) {
+            coordSysIndexName = 'gridIndex';
+            otherAxisDim = axisDim === 'x' ? 'y' : 'x';
+        }
+        else {
+            coordSysIndexName = 'polarIndex';
+            otherAxisDim = axisDim === 'angle' ? 'radius' : 'angle';
+        }
+        var foundOtherAxisModel;
+        ecModel.eachComponent(otherAxisDim + 'Axis', function (otherAxisModel) {
+            if ((otherAxisModel.get(coordSysIndexName) || 0)
+                === (axisModel.get(coordSysIndexName) || 0)
+            ) {
+                foundOtherAxisModel = otherAxisModel;
+            }
+        });
+        return foundOtherAxisModel;
+    },
+
+    getMinMaxSpan: function () {
+        return clone(this._minMaxSpan);
+    },
+
+    /**
+     * Only calculate by given range and this._dataExtent, do not change anything.
+     *
+     * @param {Object} opt
+     * @param {number} [opt.start]
+     * @param {number} [opt.end]
+     * @param {number} [opt.startValue]
+     * @param {number} [opt.endValue]
+     */
+    calculateDataWindow: function (opt) {
+        var dataExtent = this._dataExtent;
+        var axisModel = this.getAxisModel();
+        var scale = axisModel.axis.scale;
+        var rangePropMode = this._dataZoomModel.getRangePropMode();
+        var percentExtent = [0, 100];
+        var percentWindow = [
+            opt.start,
+            opt.end
+        ];
