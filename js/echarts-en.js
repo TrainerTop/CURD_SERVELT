@@ -81014,3 +81014,283 @@ var DataZoomModel = extendComponentModel({
             else {
                 each$21(dependentModels.singleAxis, function (singleAxisModel) {
                     if (autoAxisIndex && singleAxisModel.get('orient', true) === orient) {
+                        thisOption.singleAxisIndex = [singleAxisModel.componentIndex];
+                        autoAxisIndex = false;
+                    }
+                });
+            }
+        }
+
+        if (autoAxisIndex) {
+            // Find the first category axis as default. (consider polar)
+            eachAxisDim(function (dimNames) {
+                if (!autoAxisIndex) {
+                    return;
+                }
+                var axisIndices = [];
+                var axisModels = this.dependentModels[dimNames.axis];
+                if (axisModels.length && !axisIndices.length) {
+                    for (var i = 0, len = axisModels.length; i < len; i++) {
+                        if (axisModels[i].get('type') === 'category') {
+                            axisIndices.push(i);
+                        }
+                    }
+                }
+                thisOption[dimNames.axisIndex] = axisIndices;
+                if (axisIndices.length) {
+                    autoAxisIndex = false;
+                }
+            }, this);
+        }
+
+        if (autoAxisIndex) {
+            // FIXME
+            // 这里是兼容ec2的写法（没指定xAxisIndex和yAxisIndex时把scatter和双数值轴折柱纳入dataZoom控制），
+            // 但是实际是否需要Grid.js#getScaleByOption来判断（考虑time，log等axis type）？
+
+            // If both dataZoom.xAxisIndex and dataZoom.yAxisIndex is not specified,
+            // dataZoom component auto adopts series that reference to
+            // both xAxis and yAxis which type is 'value'.
+            this.ecModel.eachSeries(function (seriesModel) {
+                if (this._isSeriesHasAllAxesTypeOf(seriesModel, 'value')) {
+                    eachAxisDim(function (dimNames) {
+                        var axisIndices = thisOption[dimNames.axisIndex];
+
+                        var axisIndex = seriesModel.get(dimNames.axisIndex);
+                        var axisId = seriesModel.get(dimNames.axisId);
+
+                        var axisModel = seriesModel.ecModel.queryComponents({
+                            mainType: dimNames.axis,
+                            index: axisIndex,
+                            id: axisId
+                        })[0];
+
+                        if (__DEV__) {
+                            if (!axisModel) {
+                                throw new Error(
+                                    dimNames.axis + ' "' + retrieve(
+                                        axisIndex,
+                                        axisId,
+                                        0
+                                    ) + '" not found'
+                                );
+                            }
+                        }
+                        axisIndex = axisModel.componentIndex;
+
+                        if (indexOf(axisIndices, axisIndex) < 0) {
+                            axisIndices.push(axisIndex);
+                        }
+                    });
+                }
+            }, this);
+        }
+    },
+
+    /**
+     * @private
+     */
+    _autoSetOrient: function () {
+        var dim;
+
+        // Find the first axis
+        this.eachTargetAxis(function (dimNames) {
+            !dim && (dim = dimNames.name);
+        }, this);
+
+        this.option.orient = dim === 'y' ? 'vertical' : 'horizontal';
+    },
+
+    /**
+     * @private
+     */
+    _isSeriesHasAllAxesTypeOf: function (seriesModel, axisType) {
+        // FIXME
+        // 需要series的xAxisIndex和yAxisIndex都首先自动设置上。
+        // 例如series.type === scatter时。
+
+        var is = true;
+        eachAxisDim(function (dimNames) {
+            var seriesAxisIndex = seriesModel.get(dimNames.axisIndex);
+            var axisModel = this.dependentModels[dimNames.axis][seriesAxisIndex];
+
+            if (!axisModel || axisModel.get('type') !== axisType) {
+                is = false;
+            }
+        }, this);
+        return is;
+    },
+
+    /**
+     * @private
+     */
+    _setDefaultThrottle: function (rawOption) {
+        // When first time user set throttle, auto throttle ends.
+        if (rawOption.hasOwnProperty('throttle')) {
+            this._autoThrottle = false;
+        }
+        if (this._autoThrottle) {
+            var globalOption = this.ecModel.option;
+            this.option.throttle
+                = (globalOption.animation && globalOption.animationDurationUpdate > 0)
+                ? 100 : 20;
+        }
+    },
+
+    /**
+     * @public
+     */
+    getFirstTargetAxisModel: function () {
+        var firstAxisModel;
+        eachAxisDim(function (dimNames) {
+            if (firstAxisModel == null) {
+                var indices = this.get(dimNames.axisIndex);
+                if (indices.length) {
+                    firstAxisModel = this.dependentModels[dimNames.axis][indices[0]];
+                }
+            }
+        }, this);
+
+        return firstAxisModel;
+    },
+
+    /**
+     * @public
+     * @param {Function} callback param: axisModel, dimNames, axisIndex, dataZoomModel, ecModel
+     */
+    eachTargetAxis: function (callback, context) {
+        var ecModel = this.ecModel;
+        eachAxisDim(function (dimNames) {
+            each$21(
+                this.get(dimNames.axisIndex),
+                function (axisIndex) {
+                    callback.call(context, dimNames, axisIndex, this, ecModel);
+                },
+                this
+            );
+        }, this);
+    },
+
+    /**
+     * @param {string} dimName
+     * @param {number} axisIndex
+     * @return {module:echarts/component/dataZoom/AxisProxy} If not found, return null/undefined.
+     */
+    getAxisProxy: function (dimName, axisIndex) {
+        return this._axisProxies[dimName + '_' + axisIndex];
+    },
+
+    /**
+     * @param {string} dimName
+     * @param {number} axisIndex
+     * @return {module:echarts/model/Model} If not found, return null/undefined.
+     */
+    getAxisModel: function (dimName, axisIndex) {
+        var axisProxy = this.getAxisProxy(dimName, axisIndex);
+        return axisProxy && axisProxy.getAxisModel();
+    },
+
+    /**
+     * If not specified, set to undefined.
+     *
+     * @public
+     * @param {Object} opt
+     * @param {number} [opt.start]
+     * @param {number} [opt.end]
+     * @param {number} [opt.startValue]
+     * @param {number} [opt.endValue]
+     * @param {boolean} [ignoreUpdateRangeUsg=false]
+     */
+    setRawRange: function (opt, ignoreUpdateRangeUsg) {
+        var option = this.option;
+        each$21([['start', 'startValue'], ['end', 'endValue']], function (names) {
+            // If only one of 'start' and 'startValue' is not null/undefined, the other
+            // should be cleared, which enable clear the option.
+            // If both of them are not set, keep option with the original value, which
+            // enable use only set start but not set end when calling `dispatchAction`.
+            // The same as 'end' and 'endValue'.
+            if (opt[names[0]] != null || opt[names[1]] != null) {
+                option[names[0]] = opt[names[0]];
+                option[names[1]] = opt[names[1]];
+            }
+        }, this);
+
+        !ignoreUpdateRangeUsg && updateRangeUse(this, opt);
+    },
+
+    /**
+     * @public
+     * @return {Array.<number>} [startPercent, endPercent]
+     */
+    getPercentRange: function () {
+        var axisProxy = this.findRepresentativeAxisProxy();
+        if (axisProxy) {
+            return axisProxy.getDataPercentWindow();
+        }
+    },
+
+    /**
+     * @public
+     * For example, chart.getModel().getComponent('dataZoom').getValueRange('y', 0);
+     *
+     * @param {string} [axisDimName]
+     * @param {number} [axisIndex]
+     * @return {Array.<number>} [startValue, endValue] value can only be '-' or finite number.
+     */
+    getValueRange: function (axisDimName, axisIndex) {
+        if (axisDimName == null && axisIndex == null) {
+            var axisProxy = this.findRepresentativeAxisProxy();
+            if (axisProxy) {
+                return axisProxy.getDataValueWindow();
+            }
+        }
+        else {
+            return this.getAxisProxy(axisDimName, axisIndex).getDataValueWindow();
+        }
+    },
+
+    /**
+     * @public
+     * @param {module:echarts/model/Model} [axisModel] If axisModel given, find axisProxy
+     *      corresponding to the axisModel
+     * @return {module:echarts/component/dataZoom/AxisProxy}
+     */
+    findRepresentativeAxisProxy: function (axisModel) {
+        if (axisModel) {
+            return axisModel.__dzAxisProxy;
+        }
+
+        // Find the first hosted axisProxy
+        var axisProxies = this._axisProxies;
+        for (var key in axisProxies) {
+            if (axisProxies.hasOwnProperty(key) && axisProxies[key].hostedBy(this)) {
+                return axisProxies[key];
+            }
+        }
+
+        // If no hosted axis find not hosted axisProxy.
+        // Consider this case: dataZoomModel1 and dataZoomModel2 control the same axis,
+        // and the option.start or option.end settings are different. The percentRange
+        // should follow axisProxy.
+        // (We encounter this problem in toolbox data zoom.)
+        for (var key in axisProxies) {
+            if (axisProxies.hasOwnProperty(key) && !axisProxies[key].hostedBy(this)) {
+                return axisProxies[key];
+            }
+        }
+    },
+
+    /**
+     * @return {Array.<string>}
+     */
+    getRangePropMode: function () {
+        return this._rangePropMode.slice();
+    }
+
+});
+
+function retrieveRaw(option) {
+    var ret = {};
+    each$21(
+        ['start', 'end', 'startValue', 'endValue', 'throttle'],
+        function (name) {
