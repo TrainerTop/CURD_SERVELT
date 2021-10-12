@@ -81569,3 +81569,280 @@ var SliderZoomView = DataZoomView.extend({
          * @private
          * @type {number}
          */
+        this._handleWidth;
+
+        /**
+         * @private
+         * @type {number}
+         */
+        this._handleHeight;
+
+        /**
+         * @private
+         */
+        this._location;
+
+        /**
+         * @private
+         */
+        this._dragging;
+
+        /**
+         * @private
+         */
+        this._dataShadowInfo;
+
+        this.api = api;
+    },
+
+    /**
+     * @override
+     */
+    render: function (dataZoomModel, ecModel, api, payload) {
+        SliderZoomView.superApply(this, 'render', arguments);
+
+        createOrUpdate(
+            this,
+            '_dispatchZoomAction',
+            this.dataZoomModel.get('throttle'),
+            'fixRate'
+        );
+
+        this._orient = dataZoomModel.get('orient');
+
+        if (this.dataZoomModel.get('show') === false) {
+            this.group.removeAll();
+            return;
+        }
+
+        // Notice: this._resetInterval() should not be executed when payload.type
+        // is 'dataZoom', origin this._range should be maintained, otherwise 'pan'
+        // or 'zoom' info will be missed because of 'throttle' of this.dispatchAction,
+        if (!payload || payload.type !== 'dataZoom' || payload.from !== this.uid) {
+            this._buildView();
+        }
+
+        this._updateView();
+    },
+
+    /**
+     * @override
+     */
+    remove: function () {
+        SliderZoomView.superApply(this, 'remove', arguments);
+        clear(this, '_dispatchZoomAction');
+    },
+
+    /**
+     * @override
+     */
+    dispose: function () {
+        SliderZoomView.superApply(this, 'dispose', arguments);
+        clear(this, '_dispatchZoomAction');
+    },
+
+    _buildView: function () {
+        var thisGroup = this.group;
+
+        thisGroup.removeAll();
+
+        this._resetLocation();
+        this._resetInterval();
+
+        var barGroup = this._displayables.barGroup = new Group();
+
+        this._renderBackground();
+
+        this._renderHandle();
+
+        this._renderDataShadow();
+
+        thisGroup.add(barGroup);
+
+        this._positionGroup();
+    },
+
+    /**
+     * @private
+     */
+    _resetLocation: function () {
+        var dataZoomModel = this.dataZoomModel;
+        var api = this.api;
+
+        // If some of x/y/width/height are not specified,
+        // auto-adapt according to target grid.
+        var coordRect = this._findCoordRect();
+        var ecSize = {width: api.getWidth(), height: api.getHeight()};
+        // Default align by coordinate system rect.
+        var positionInfo = this._orient === HORIZONTAL
+            ? {
+                // Why using 'right', because right should be used in vertical,
+                // and it is better to be consistent for dealing with position param merge.
+                right: ecSize.width - coordRect.x - coordRect.width,
+                top: (ecSize.height - DEFAULT_FILLER_SIZE - DEFAULT_LOCATION_EDGE_GAP),
+                width: coordRect.width,
+                height: DEFAULT_FILLER_SIZE
+            }
+            : { // vertical
+                right: DEFAULT_LOCATION_EDGE_GAP,
+                top: coordRect.y,
+                width: DEFAULT_FILLER_SIZE,
+                height: coordRect.height
+            };
+
+        // Do not write back to option and replace value 'ph', because
+        // the 'ph' value should be recalculated when resize.
+        var layoutParams = getLayoutParams(dataZoomModel.option);
+
+        // Replace the placeholder value.
+        each$1(['right', 'top', 'width', 'height'], function (name) {
+            if (layoutParams[name] === 'ph') {
+                layoutParams[name] = positionInfo[name];
+            }
+        });
+
+        var layoutRect = getLayoutRect(
+            layoutParams,
+            ecSize,
+            dataZoomModel.padding
+        );
+
+        this._location = {x: layoutRect.x, y: layoutRect.y};
+        this._size = [layoutRect.width, layoutRect.height];
+        this._orient === VERTICAL && this._size.reverse();
+    },
+
+    /**
+     * @private
+     */
+    _positionGroup: function () {
+        var thisGroup = this.group;
+        var location = this._location;
+        var orient = this._orient;
+
+        // Just use the first axis to determine mapping.
+        var targetAxisModel = this.dataZoomModel.getFirstTargetAxisModel();
+        var inverse = targetAxisModel && targetAxisModel.get('inverse');
+
+        var barGroup = this._displayables.barGroup;
+        var otherAxisInverse = (this._dataShadowInfo || {}).otherAxisInverse;
+
+        // Transform barGroup.
+        barGroup.attr(
+            (orient === HORIZONTAL && !inverse)
+            ? {scale: otherAxisInverse ? [1, 1] : [1, -1]}
+            : (orient === HORIZONTAL && inverse)
+            ? {scale: otherAxisInverse ? [-1, 1] : [-1, -1]}
+            : (orient === VERTICAL && !inverse)
+            ? {scale: otherAxisInverse ? [1, -1] : [1, 1], rotation: Math.PI / 2}
+            // Dont use Math.PI, considering shadow direction.
+            : {scale: otherAxisInverse ? [-1, -1] : [-1, 1], rotation: Math.PI / 2}
+        );
+
+        // Position barGroup
+        var rect = thisGroup.getBoundingRect([barGroup]);
+        thisGroup.attr('position', [location.x - rect.x, location.y - rect.y]);
+    },
+
+    /**
+     * @private
+     */
+    _getViewExtent: function () {
+        return [0, this._size[0]];
+    },
+
+    _renderBackground: function () {
+        var dataZoomModel = this.dataZoomModel;
+        var size = this._size;
+        var barGroup = this._displayables.barGroup;
+
+        barGroup.add(new Rect$2({
+            silent: true,
+            shape: {
+                x: 0, y: 0, width: size[0], height: size[1]
+            },
+            style: {
+                fill: dataZoomModel.get('backgroundColor')
+            },
+            z2: -40
+        }));
+
+        // Click panel, over shadow, below handles.
+        barGroup.add(new Rect$2({
+            shape: {
+                x: 0, y: 0, width: size[0], height: size[1]
+            },
+            style: {
+                fill: 'transparent'
+            },
+            z2: 0,
+            onclick: bind(this._onClickPanelClick, this)
+        }));
+    },
+
+    _renderDataShadow: function () {
+        var info = this._dataShadowInfo = this._prepareDataShadowInfo();
+
+        if (!info) {
+            return;
+        }
+
+        var size = this._size;
+        var seriesModel = info.series;
+        var data = seriesModel.getRawData();
+
+        var otherDim = seriesModel.getShadowDim
+            ? seriesModel.getShadowDim() // @see candlestick
+            : info.otherDim;
+
+        if (otherDim == null) {
+            return;
+        }
+
+        var otherDataExtent = data.getDataExtent(otherDim);
+        // Nice extent.
+        var otherOffset = (otherDataExtent[1] - otherDataExtent[0]) * 0.3;
+        otherDataExtent = [
+            otherDataExtent[0] - otherOffset,
+            otherDataExtent[1] + otherOffset
+        ];
+        var otherShadowExtent = [0, size[1]];
+
+        var thisShadowExtent = [0, size[0]];
+
+        var areaPoints = [[size[0], 0], [0, 0]];
+        var linePoints = [];
+        var step = thisShadowExtent[1] / (data.count() - 1);
+        var thisCoord = 0;
+
+        // Optimize for large data shadow
+        var stride = Math.round(data.count() / size[0]);
+        var lastIsEmpty;
+        data.each([otherDim], function (value, index) {
+            if (stride > 0 && (index % stride)) {
+                thisCoord += step;
+                return;
+            }
+
+            // FIXME
+            // Should consider axis.min/axis.max when drawing dataShadow.
+
+            // FIXME
+            // 应该使用统一的空判断？还是在list里进行空判断？
+            var isEmpty = value == null || isNaN(value) || value === '';
+            // See #4235.
+            var otherCoord = isEmpty
+                ? 0 : linearMap$1(value, otherDataExtent, otherShadowExtent, true);
+
+            // Attempt to draw data shadow precisely when there are empty value.
+            if (isEmpty && !lastIsEmpty && index) {
+                areaPoints.push([areaPoints[areaPoints.length - 1][0], 0]);
+                linePoints.push([linePoints[linePoints.length - 1][0], 0]);
+            }
+            else if (!isEmpty && lastIsEmpty) {
+                areaPoints.push([thisCoord, 0]);
+                linePoints.push([thisCoord, 0]);
+            }
+
+            areaPoints.push([thisCoord, otherCoord]);
+            linePoints.push([thisCoord, otherCoord]);
