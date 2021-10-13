@@ -81846,3 +81846,276 @@ var SliderZoomView = DataZoomView.extend({
 
             areaPoints.push([thisCoord, otherCoord]);
             linePoints.push([thisCoord, otherCoord]);
+
+            thisCoord += step;
+            lastIsEmpty = isEmpty;
+        });
+
+        var dataZoomModel = this.dataZoomModel;
+        // var dataBackgroundModel = dataZoomModel.getModel('dataBackground');
+        this._displayables.barGroup.add(new Polygon({
+            shape: {points: areaPoints},
+            style: defaults(
+                {fill: dataZoomModel.get('dataBackgroundColor')},
+                dataZoomModel.getModel('dataBackground.areaStyle').getAreaStyle()
+            ),
+            silent: true,
+            z2: -20
+        }));
+        this._displayables.barGroup.add(new Polyline({
+            shape: {points: linePoints},
+            style: dataZoomModel.getModel('dataBackground.lineStyle').getLineStyle(),
+            silent: true,
+            z2: -19
+        }));
+    },
+
+    _prepareDataShadowInfo: function () {
+        var dataZoomModel = this.dataZoomModel;
+        var showDataShadow = dataZoomModel.get('showDataShadow');
+
+        if (showDataShadow === false) {
+            return;
+        }
+
+        // Find a representative series.
+        var result;
+        var ecModel = this.ecModel;
+
+        dataZoomModel.eachTargetAxis(function (dimNames, axisIndex) {
+            var seriesModels = dataZoomModel
+                .getAxisProxy(dimNames.name, axisIndex)
+                .getTargetSeriesModels();
+
+            each$1(seriesModels, function (seriesModel) {
+                if (result) {
+                    return;
+                }
+
+                if (showDataShadow !== true && indexOf(
+                        SHOW_DATA_SHADOW_SERIES_TYPE, seriesModel.get('type')
+                    ) < 0
+                ) {
+                    return;
+                }
+
+                var thisAxis = ecModel.getComponent(dimNames.axis, axisIndex).axis;
+                var otherDim = getOtherDim(dimNames.name);
+                var otherAxisInverse;
+                var coordSys = seriesModel.coordinateSystem;
+
+                if (otherDim != null && coordSys.getOtherAxis) {
+                    otherAxisInverse = coordSys.getOtherAxis(thisAxis).inverse;
+                }
+
+                otherDim = seriesModel.getData().mapDimension(otherDim);
+
+                result = {
+                    thisAxis: thisAxis,
+                    series: seriesModel,
+                    thisDim: dimNames.name,
+                    otherDim: otherDim,
+                    otherAxisInverse: otherAxisInverse
+                };
+
+            }, this);
+
+        }, this);
+
+        return result;
+    },
+
+    _renderHandle: function () {
+        var displaybles = this._displayables;
+        var handles = displaybles.handles = [];
+        var handleLabels = displaybles.handleLabels = [];
+        var barGroup = this._displayables.barGroup;
+        var size = this._size;
+        var dataZoomModel = this.dataZoomModel;
+
+        barGroup.add(displaybles.filler = new Rect$2({
+            draggable: true,
+            cursor: getCursor(this._orient),
+            drift: bind$4(this._onDragMove, this, 'all'),
+            onmousemove: function (e) {
+                // Fot mobile devicem, prevent screen slider on the button.
+                stop(e.event);
+            },
+            ondragstart: bind$4(this._showDataInfo, this, true),
+            ondragend: bind$4(this._onDragEnd, this),
+            onmouseover: bind$4(this._showDataInfo, this, true),
+            onmouseout: bind$4(this._showDataInfo, this, false),
+            style: {
+                fill: dataZoomModel.get('fillerColor'),
+                textPosition: 'inside'
+            }
+        }));
+
+        // Frame border.
+        barGroup.add(new Rect$2(subPixelOptimizeRect({
+            silent: true,
+            shape: {
+                x: 0,
+                y: 0,
+                width: size[0],
+                height: size[1]
+            },
+            style: {
+                stroke: dataZoomModel.get('dataBackgroundColor')
+                    || dataZoomModel.get('borderColor'),
+                lineWidth: DEFAULT_FRAME_BORDER_WIDTH,
+                fill: 'rgba(0,0,0,0)'
+            }
+        })));
+
+        each$23([0, 1], function (handleIndex) {
+            var path = createIcon(
+                dataZoomModel.get('handleIcon'),
+                {
+                    cursor: getCursor(this._orient),
+                    draggable: true,
+                    drift: bind$4(this._onDragMove, this, handleIndex),
+                    onmousemove: function (e) {
+                        // Fot mobile devicem, prevent screen slider on the button.
+                        stop(e.event);
+                    },
+                    ondragend: bind$4(this._onDragEnd, this),
+                    onmouseover: bind$4(this._showDataInfo, this, true),
+                    onmouseout: bind$4(this._showDataInfo, this, false)
+                },
+                {x: -1, y: 0, width: 2, height: 2}
+            );
+
+            var bRect = path.getBoundingRect();
+            this._handleHeight = parsePercent$1(dataZoomModel.get('handleSize'), this._size[1]);
+            this._handleWidth = bRect.width / bRect.height * this._handleHeight;
+
+            path.setStyle(dataZoomModel.getModel('handleStyle').getItemStyle());
+            var handleColor = dataZoomModel.get('handleColor');
+            // Compatitable with previous version
+            if (handleColor != null) {
+                path.style.fill = handleColor;
+            }
+
+            barGroup.add(handles[handleIndex] = path);
+
+            var textStyleModel = dataZoomModel.textStyleModel;
+
+            this.group.add(
+                handleLabels[handleIndex] = new Text({
+                silent: true,
+                invisible: true,
+                style: {
+                    x: 0, y: 0, text: '',
+                    textVerticalAlign: 'middle',
+                    textAlign: 'center',
+                    textFill: textStyleModel.getTextColor(),
+                    textFont: textStyleModel.getFont()
+                },
+                z2: 10
+            }));
+
+        }, this);
+    },
+
+    /**
+     * @private
+     */
+    _resetInterval: function () {
+        var range = this._range = this.dataZoomModel.getPercentRange();
+        var viewExtent = this._getViewExtent();
+
+        this._handleEnds = [
+            linearMap$1(range[0], [0, 100], viewExtent, true),
+            linearMap$1(range[1], [0, 100], viewExtent, true)
+        ];
+    },
+
+    /**
+     * @private
+     * @param {(number|string)} handleIndex 0 or 1 or 'all'
+     * @param {number} delta
+     * @return {boolean} changed
+     */
+    _updateInterval: function (handleIndex, delta) {
+        var dataZoomModel = this.dataZoomModel;
+        var handleEnds = this._handleEnds;
+        var viewExtend = this._getViewExtent();
+        var minMaxSpan = dataZoomModel.findRepresentativeAxisProxy().getMinMaxSpan();
+        var percentExtent = [0, 100];
+
+        sliderMove(
+            delta,
+            handleEnds,
+            viewExtend,
+            dataZoomModel.get('zoomLock') ? 'all' : handleIndex,
+            minMaxSpan.minSpan != null
+                ? linearMap$1(minMaxSpan.minSpan, percentExtent, viewExtend, true) : null,
+            minMaxSpan.maxSpan != null
+                ? linearMap$1(minMaxSpan.maxSpan, percentExtent, viewExtend, true) : null
+        );
+
+        var lastRange = this._range;
+        var range = this._range = asc$2([
+            linearMap$1(handleEnds[0], viewExtend, percentExtent, true),
+            linearMap$1(handleEnds[1], viewExtend, percentExtent, true)
+        ]);
+
+        return !lastRange || lastRange[0] !== range[0] || lastRange[1] !== range[1];
+    },
+
+    /**
+     * @private
+     */
+    _updateView: function (nonRealtime) {
+        var displaybles = this._displayables;
+        var handleEnds = this._handleEnds;
+        var handleInterval = asc$2(handleEnds.slice());
+        var size = this._size;
+
+        each$23([0, 1], function (handleIndex) {
+            // Handles
+            var handle = displaybles.handles[handleIndex];
+            var handleHeight = this._handleHeight;
+            handle.attr({
+                scale: [handleHeight / 2, handleHeight / 2],
+                position: [handleEnds[handleIndex], size[1] / 2 - handleHeight / 2]
+            });
+        }, this);
+
+        // Filler
+        displaybles.filler.setShape({
+            x: handleInterval[0],
+            y: 0,
+            width: handleInterval[1] - handleInterval[0],
+            height: size[1]
+        });
+
+        this._updateDataInfo(nonRealtime);
+    },
+
+    /**
+     * @private
+     */
+    _updateDataInfo: function (nonRealtime) {
+        var dataZoomModel = this.dataZoomModel;
+        var displaybles = this._displayables;
+        var handleLabels = displaybles.handleLabels;
+        var orient = this._orient;
+        var labelTexts = ['', ''];
+
+        // FIXME
+        // date型，支持formatter，autoformatter（ec2 date.getAutoFormatter）
+        if (dataZoomModel.get('showDetail')) {
+            var axisProxy = dataZoomModel.findRepresentativeAxisProxy();
+
+            if (axisProxy) {
+                var axis = axisProxy.getAxisModel().axis;
+                var range = this._range;
+
+                var dataInterval = nonRealtime
+                    // See #4434, data and axis are not processed and reset yet in non-realtime mode.
+                    ? axisProxy.calculateDataWindow({
+                        start: range[0], end: range[1]
+                    }).valueWindow
+                    : axisProxy.getDataValueWindow();
