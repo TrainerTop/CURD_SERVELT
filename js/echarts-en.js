@@ -82119,3 +82119,253 @@ var SliderZoomView = DataZoomView.extend({
                         start: range[0], end: range[1]
                     }).valueWindow
                     : axisProxy.getDataValueWindow();
+
+                labelTexts = [
+                    this._formatLabel(dataInterval[0], axis),
+                    this._formatLabel(dataInterval[1], axis)
+                ];
+            }
+        }
+
+        var orderedHandleEnds = asc$2(this._handleEnds.slice());
+
+        setLabel.call(this, 0);
+        setLabel.call(this, 1);
+
+        function setLabel(handleIndex) {
+            // Label
+            // Text should not transform by barGroup.
+            // Ignore handlers transform
+            var barTransform = getTransform(
+                displaybles.handles[handleIndex].parent, this.group
+            );
+            var direction = transformDirection(
+                handleIndex === 0 ? 'right' : 'left', barTransform
+            );
+            var offset = this._handleWidth / 2 + LABEL_GAP;
+            var textPoint = applyTransform$1(
+                [
+                    orderedHandleEnds[handleIndex] + (handleIndex === 0 ? -offset : offset),
+                    this._size[1] / 2
+                ],
+                barTransform
+            );
+            handleLabels[handleIndex].setStyle({
+                x: textPoint[0],
+                y: textPoint[1],
+                textVerticalAlign: orient === HORIZONTAL ? 'middle' : direction,
+                textAlign: orient === HORIZONTAL ? direction : 'center',
+                text: labelTexts[handleIndex]
+            });
+        }
+    },
+
+    /**
+     * @private
+     */
+    _formatLabel: function (value, axis) {
+        var dataZoomModel = this.dataZoomModel;
+        var labelFormatter = dataZoomModel.get('labelFormatter');
+
+        var labelPrecision = dataZoomModel.get('labelPrecision');
+        if (labelPrecision == null || labelPrecision === 'auto') {
+            labelPrecision = axis.getPixelPrecision();
+        }
+
+        var valueStr = (value == null || isNaN(value))
+            ? ''
+            // FIXME Glue code
+            : (axis.type === 'category' || axis.type === 'time')
+                ? axis.scale.getLabel(Math.round(value))
+                // param of toFixed should less then 20.
+                : value.toFixed(Math.min(labelPrecision, 20));
+
+        return isFunction$1(labelFormatter)
+            ? labelFormatter(value, valueStr)
+            : isString(labelFormatter)
+            ? labelFormatter.replace('{value}', valueStr)
+            : valueStr;
+    },
+
+    /**
+     * @private
+     * @param {boolean} showOrHide true: show, false: hide
+     */
+    _showDataInfo: function (showOrHide) {
+        // Always show when drgging.
+        showOrHide = this._dragging || showOrHide;
+
+        var handleLabels = this._displayables.handleLabels;
+        handleLabels[0].attr('invisible', !showOrHide);
+        handleLabels[1].attr('invisible', !showOrHide);
+    },
+
+    _onDragMove: function (handleIndex, dx, dy) {
+        this._dragging = true;
+
+        // Transform dx, dy to bar coordination.
+        var barTransform = this._displayables.barGroup.getLocalTransform();
+        var vertex = applyTransform$1([dx, dy], barTransform, true);
+
+        var changed = this._updateInterval(handleIndex, vertex[0]);
+
+        var realtime = this.dataZoomModel.get('realtime');
+
+        this._updateView(!realtime);
+
+        // Avoid dispatch dataZoom repeatly but range not changed,
+        // which cause bad visual effect when progressive enabled.
+        changed && realtime && this._dispatchZoomAction();
+    },
+
+    _onDragEnd: function () {
+        this._dragging = false;
+        this._showDataInfo(false);
+
+        // While in realtime mode and stream mode, dispatch action when
+        // drag end will cause the whole view rerender, which is unnecessary.
+        var realtime = this.dataZoomModel.get('realtime');
+        !realtime && this._dispatchZoomAction();
+    },
+
+    _onClickPanelClick: function (e) {
+        var size = this._size;
+        var localPoint = this._displayables.barGroup.transformCoordToLocal(e.offsetX, e.offsetY);
+
+        if (localPoint[0] < 0 || localPoint[0] > size[0]
+            || localPoint[1] < 0 || localPoint[1] > size[1]
+        ) {
+            return;
+        }
+
+        var handleEnds = this._handleEnds;
+        var center = (handleEnds[0] + handleEnds[1]) / 2;
+
+        var changed = this._updateInterval('all', localPoint[0] - center);
+        this._updateView();
+        changed && this._dispatchZoomAction();
+    },
+
+    /**
+     * This action will be throttled.
+     * @private
+     */
+    _dispatchZoomAction: function () {
+        var range = this._range;
+
+        this.api.dispatchAction({
+            type: 'dataZoom',
+            from: this.uid,
+            dataZoomId: this.dataZoomModel.id,
+            start: range[0],
+            end: range[1]
+        });
+    },
+
+    /**
+     * @private
+     */
+    _findCoordRect: function () {
+        // Find the grid coresponding to the first axis referred by dataZoom.
+        var rect;
+        each$23(this.getTargetCoordInfo(), function (coordInfoList) {
+            if (!rect && coordInfoList.length) {
+                var coordSys = coordInfoList[0].model.coordinateSystem;
+                rect = coordSys.getRect && coordSys.getRect();
+            }
+        });
+        if (!rect) {
+            var width = this.api.getWidth();
+            var height = this.api.getHeight();
+            rect = {
+                x: width * 0.2,
+                y: height * 0.2,
+                width: width * 0.6,
+                height: height * 0.6
+            };
+        }
+
+        return rect;
+    }
+
+});
+
+function getOtherDim(thisDim) {
+    // FIXME
+    // 这个逻辑和getOtherAxis里一致，但是写在这里是否不好
+    var map$$1 = {x: 'y', y: 'x', radius: 'angle', angle: 'radius'};
+    return map$$1[thisDim];
+}
+
+function getCursor(orient) {
+    return orient === 'vertical' ? 'ns-resize' : 'ew-resize';
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+DataZoomModel.extend({
+
+    type: 'dataZoom.inside',
+
+    /**
+     * @protected
+     */
+    defaultOption: {
+        disabled: false,   // Whether disable this inside zoom.
+        zoomLock: false,   // Whether disable zoom but only pan.
+        zoomOnMouseWheel: true, // Can be: true / false / 'shift' / 'ctrl' / 'alt'.
+        moveOnMouseMove: true,   // Can be: true / false / 'shift' / 'ctrl' / 'alt'.
+        moveOnMouseWheel: false, // Can be: true / false / 'shift' / 'ctrl' / 'alt'.
+        preventDefaultMouseMove: true
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Only create one roam controller for each coordinate system.
+// one roam controller might be refered by two inside data zoom
+// components (for example, one for x and one for y). When user
+// pan or zoom, only dispatch one action for those data zoom
+// components.
+
+var ATTR$1 = '\0_ec_dataZoom_roams';
+
+
+/**
+ * @public
+ * @param {module:echarts/ExtensionAPI} api
+ * @param {Object} dataZoomInfo
