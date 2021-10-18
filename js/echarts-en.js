@@ -82636,3 +82636,241 @@ var InsideZoomView = DataZoomView.extend({
                             return coordModel.coordinateSystem.containPoint([x, y]);
                         },
                         dataZoomId: dataZoomModel.id,
+                        dataZoomModel: dataZoomModel,
+                        getRange: getRange
+                    }
+                );
+            }, this);
+
+        }, this);
+    },
+
+    /**
+     * @override
+     */
+    dispose: function () {
+        unregister$1(this.api, this.dataZoomModel.id);
+        InsideZoomView.superApply(this, 'dispose', arguments);
+        this._range = null;
+    }
+
+});
+
+var roamHandlers = {
+
+    /**
+     * @this {module:echarts/component/dataZoom/InsideZoomView}
+     */
+    zoom: function (coordInfo, coordSysName, controller, e) {
+        var lastRange = this._range;
+        var range = lastRange.slice();
+
+        // Calculate transform by the first axis.
+        var axisModel = coordInfo.axisModels[0];
+        if (!axisModel) {
+            return;
+        }
+
+        var directionInfo = getDirectionInfo[coordSysName](
+            null, [e.originX, e.originY], axisModel, controller, coordInfo
+        );
+        var percentPoint = (
+            directionInfo.signal > 0
+                ? (directionInfo.pixelStart + directionInfo.pixelLength - directionInfo.pixel)
+                : (directionInfo.pixel - directionInfo.pixelStart)
+            ) / directionInfo.pixelLength * (range[1] - range[0]) + range[0];
+
+        var scale = Math.max(1 / e.scale, 0);
+        range[0] = (range[0] - percentPoint) * scale + percentPoint;
+        range[1] = (range[1] - percentPoint) * scale + percentPoint;
+
+        // Restrict range.
+        var minMaxSpan = this.dataZoomModel.findRepresentativeAxisProxy().getMinMaxSpan();
+
+        sliderMove(0, range, [0, 100], 0, minMaxSpan.minSpan, minMaxSpan.maxSpan);
+
+        this._range = range;
+
+        if (lastRange[0] !== range[0] || lastRange[1] !== range[1]) {
+            return range;
+        }
+    },
+
+    /**
+     * @this {module:echarts/component/dataZoom/InsideZoomView}
+     */
+    pan: makeMover(function (range, axisModel, coordInfo, coordSysName, controller, e) {
+        var directionInfo = getDirectionInfo[coordSysName](
+            [e.oldX, e.oldY], [e.newX, e.newY], axisModel, controller, coordInfo
+        );
+
+        return directionInfo.signal
+            * (range[1] - range[0])
+            * directionInfo.pixel / directionInfo.pixelLength;
+    }),
+
+    /**
+     * @this {module:echarts/component/dataZoom/InsideZoomView}
+     */
+    scrollMove: makeMover(function (range, axisModel, coordInfo, coordSysName, controller, e) {
+        var directionInfo = getDirectionInfo[coordSysName](
+            [0, 0], [e.scrollDelta, e.scrollDelta], axisModel, controller, coordInfo
+        );
+        return directionInfo.signal * (range[1] - range[0]) * e.scrollDelta;
+    })
+};
+
+function makeMover(getPercentDelta) {
+    return function (coordInfo, coordSysName, controller, e) {
+        var lastRange = this._range;
+        var range = lastRange.slice();
+
+        // Calculate transform by the first axis.
+        var axisModel = coordInfo.axisModels[0];
+        if (!axisModel) {
+            return;
+        }
+
+        var percentDelta = getPercentDelta(
+            range, axisModel, coordInfo, coordSysName, controller, e
+        );
+
+        sliderMove(percentDelta, range, [0, 100], 'all');
+
+        this._range = range;
+
+        if (lastRange[0] !== range[0] || lastRange[1] !== range[1]) {
+            return range;
+        }
+    };
+}
+
+var getDirectionInfo = {
+
+    grid: function (oldPoint, newPoint, axisModel, controller, coordInfo) {
+        var axis = axisModel.axis;
+        var ret = {};
+        var rect = coordInfo.model.coordinateSystem.getRect();
+        oldPoint = oldPoint || [0, 0];
+
+        if (axis.dim === 'x') {
+            ret.pixel = newPoint[0] - oldPoint[0];
+            ret.pixelLength = rect.width;
+            ret.pixelStart = rect.x;
+            ret.signal = axis.inverse ? 1 : -1;
+        }
+        else { // axis.dim === 'y'
+            ret.pixel = newPoint[1] - oldPoint[1];
+            ret.pixelLength = rect.height;
+            ret.pixelStart = rect.y;
+            ret.signal = axis.inverse ? -1 : 1;
+        }
+
+        return ret;
+    },
+
+    polar: function (oldPoint, newPoint, axisModel, controller, coordInfo) {
+        var axis = axisModel.axis;
+        var ret = {};
+        var polar = coordInfo.model.coordinateSystem;
+        var radiusExtent = polar.getRadiusAxis().getExtent();
+        var angleExtent = polar.getAngleAxis().getExtent();
+
+        oldPoint = oldPoint ? polar.pointToCoord(oldPoint) : [0, 0];
+        newPoint = polar.pointToCoord(newPoint);
+
+        if (axisModel.mainType === 'radiusAxis') {
+            ret.pixel = newPoint[0] - oldPoint[0];
+            // ret.pixelLength = Math.abs(radiusExtent[1] - radiusExtent[0]);
+            // ret.pixelStart = Math.min(radiusExtent[0], radiusExtent[1]);
+            ret.pixelLength = radiusExtent[1] - radiusExtent[0];
+            ret.pixelStart = radiusExtent[0];
+            ret.signal = axis.inverse ? 1 : -1;
+        }
+        else { // 'angleAxis'
+            ret.pixel = newPoint[1] - oldPoint[1];
+            // ret.pixelLength = Math.abs(angleExtent[1] - angleExtent[0]);
+            // ret.pixelStart = Math.min(angleExtent[0], angleExtent[1]);
+            ret.pixelLength = angleExtent[1] - angleExtent[0];
+            ret.pixelStart = angleExtent[0];
+            ret.signal = axis.inverse ? -1 : 1;
+        }
+
+        return ret;
+    },
+
+    singleAxis: function (oldPoint, newPoint, axisModel, controller, coordInfo) {
+        var axis = axisModel.axis;
+        var rect = coordInfo.model.coordinateSystem.getRect();
+        var ret = {};
+
+        oldPoint = oldPoint || [0, 0];
+
+        if (axis.orient === 'horizontal') {
+            ret.pixel = newPoint[0] - oldPoint[0];
+            ret.pixelLength = rect.width;
+            ret.pixelStart = rect.x;
+            ret.signal = axis.inverse ? 1 : -1;
+        }
+        else { // 'vertical'
+            ret.pixel = newPoint[1] - oldPoint[1];
+            ret.pixelLength = rect.height;
+            ret.pixelStart = rect.y;
+            ret.signal = axis.inverse ? -1 : 1;
+        }
+
+        return ret;
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+registerProcessor({
+
+    // `dataZoomProcessor` will only be performed in needed series. Consider if
+    // there is a line series and a pie series, it is better not to update the
+    // line series if only pie series is needed to be updated.
+    getTargetSeries: function (ecModel) {
+        var seriesModelMap = createHashMap();
+
+        ecModel.eachComponent('dataZoom', function (dataZoomModel) {
+            dataZoomModel.eachTargetAxis(function (dimNames, axisIndex, dataZoomModel) {
+                var axisProxy = dataZoomModel.getAxisProxy(dimNames.name, axisIndex);
+                each$1(axisProxy.getTargetSeriesModels(), function (seriesModel) {
+                    seriesModelMap.set(seriesModel.uid, seriesModel);
+                });
+            });
+        });
+
+        return seriesModelMap;
+    },
+
+    modifyOutputEnd: true,
+
+    // Consider appendData, where filter should be performed. Because data process is
+    // in block mode currently, it is not need to worry about that the overallProgress
+    // execute every frame.
+    overallReset: function (ecModel, api) {
+
+        ecModel.eachComponent('dataZoom', function (dataZoomModel) {
+            // We calculate window and reset axis here but not in model
+            // init stage and not after action dispatch handler, because
+            // reset should be called after seriesData.restoreData.
+            dataZoomModel.eachTargetAxis(function (dimNames, axisIndex, dataZoomModel) {
