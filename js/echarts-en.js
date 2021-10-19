@@ -82874,3 +82874,279 @@ registerProcessor({
             // init stage and not after action dispatch handler, because
             // reset should be called after seriesData.restoreData.
             dataZoomModel.eachTargetAxis(function (dimNames, axisIndex, dataZoomModel) {
+                dataZoomModel.getAxisProxy(dimNames.name, axisIndex).reset(dataZoomModel, api);
+            });
+
+            // Caution: data zoom filtering is order sensitive when using
+            // percent range and no min/max/scale set on axis.
+            // For example, we have dataZoom definition:
+            // [
+            //      {xAxisIndex: 0, start: 30, end: 70},
+            //      {yAxisIndex: 0, start: 20, end: 80}
+            // ]
+            // In this case, [20, 80] of y-dataZoom should be based on data
+            // that have filtered by x-dataZoom using range of [30, 70],
+            // but should not be based on full raw data. Thus sliding
+            // x-dataZoom will change both ranges of xAxis and yAxis,
+            // while sliding y-dataZoom will only change the range of yAxis.
+            // So we should filter x-axis after reset x-axis immediately,
+            // and then reset y-axis and filter y-axis.
+            dataZoomModel.eachTargetAxis(function (dimNames, axisIndex, dataZoomModel) {
+                dataZoomModel.getAxisProxy(dimNames.name, axisIndex).filterData(dataZoomModel, api);
+            });
+        });
+
+        ecModel.eachComponent('dataZoom', function (dataZoomModel) {
+            // Fullfill all of the range props so that user
+            // is able to get them from chart.getOption().
+            var axisProxy = dataZoomModel.findRepresentativeAxisProxy();
+            var percentRange = axisProxy.getDataPercentWindow();
+            var valueRange = axisProxy.getDataValueWindow();
+
+            dataZoomModel.setRawRange({
+                start: percentRange[0],
+                end: percentRange[1],
+                startValue: valueRange[0],
+                endValue: valueRange[1]
+            }, true);
+        });
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+registerAction('dataZoom', function (payload, ecModel) {
+
+    var linkedNodesFinder = createLinkedNodesFinder(
+        bind(ecModel.eachComponent, ecModel, 'dataZoom'),
+        eachAxisDim$1,
+        function (model, dimNames) {
+            return model.get(dimNames.axisIndex);
+        }
+    );
+
+    var effectedModels = [];
+
+    ecModel.eachComponent(
+        {mainType: 'dataZoom', query: payload},
+        function (model, index) {
+            effectedModels.push.apply(
+                effectedModels, linkedNodesFinder(model).nodes
+            );
+        }
+    );
+
+    each$1(effectedModels, function (dataZoomModel, index) {
+        dataZoomModel.setRawRange({
+            start: payload.start,
+            end: payload.end,
+            startValue: payload.startValue,
+            endValue: payload.endValue
+        });
+    });
+
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * DataZoom component entry
+ */
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var each$24 = each$1;
+
+var preprocessor$2 = function (option) {
+    var visualMap = option && option.visualMap;
+
+    if (!isArray(visualMap)) {
+        visualMap = visualMap ? [visualMap] : [];
+    }
+
+    each$24(visualMap, function (opt) {
+        if (!opt) {
+            return;
+        }
+
+        // rename splitList to pieces
+        if (has$1(opt, 'splitList') && !has$1(opt, 'pieces')) {
+            opt.pieces = opt.splitList;
+            delete opt.splitList;
+        }
+
+        var pieces = opt.pieces;
+        if (pieces && isArray(pieces)) {
+            each$24(pieces, function (piece) {
+                if (isObject$1(piece)) {
+                    if (has$1(piece, 'start') && !has$1(piece, 'min')) {
+                        piece.min = piece.start;
+                    }
+                    if (has$1(piece, 'end') && !has$1(piece, 'max')) {
+                        piece.max = piece.end;
+                    }
+                }
+            });
+        }
+    });
+};
+
+function has$1(obj, name) {
+    return obj && obj.hasOwnProperty && obj.hasOwnProperty(name);
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+ComponentModel.registerSubTypeDefaulter('visualMap', function (option) {
+    // Compatible with ec2, when splitNumber === 0, continuous visualMap will be used.
+    return (
+            !option.categories
+            && (
+                !(
+                    option.pieces
+                        ? option.pieces.length > 0
+                        : option.splitNumber > 0
+                )
+                || option.calculable
+            )
+        )
+        ? 'continuous' : 'piecewise';
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var VISUAL_PRIORITY = PRIORITY.VISUAL.COMPONENT;
+
+registerVisual(VISUAL_PRIORITY, {
+    createOnAllSeries: true,
+    reset: function (seriesModel, ecModel) {
+        var resetDefines = [];
+        ecModel.eachComponent('visualMap', function (visualMapModel) {
+            var pipelineContext = seriesModel.pipelineContext;
+            if (!visualMapModel.isTargetSeries(seriesModel)
+                || (pipelineContext && pipelineContext.large)
+            ) {
+                return;
+            }
+
+            resetDefines.push(incrementalApplyVisual(
+                visualMapModel.stateList,
+                visualMapModel.targetVisuals,
+                bind(visualMapModel.getValueState, visualMapModel),
+                visualMapModel.getDataDimension(seriesModel.getData())
+            ));
+        });
+
+        return resetDefines;
+    }
+});
+
+// Only support color.
+registerVisual(VISUAL_PRIORITY, {
+    createOnAllSeries: true,
+    reset: function (seriesModel, ecModel) {
+        var data = seriesModel.getData();
+        var visualMetaList = [];
+
+        ecModel.eachComponent('visualMap', function (visualMapModel) {
+            if (visualMapModel.isTargetSeries(seriesModel)) {
+                var visualMeta = visualMapModel.getVisualMeta(
+                    bind(getColorVisual, null, seriesModel, visualMapModel)
+                ) || {stops: [], outerColors: []};
+
+                var concreteDim = visualMapModel.getDataDimension(data);
+                var dimInfo = data.getDimensionInfo(concreteDim);
+                if (dimInfo != null) {
+                    // visualMeta.dimension should be dimension index, but not concrete dimension.
+                    visualMeta.dimension = dimInfo.index;
+                    visualMetaList.push(visualMeta);
+                }
+            }
+        });
+
+        // console.log(JSON.stringify(visualMetaList.map(a => a.stops)));
