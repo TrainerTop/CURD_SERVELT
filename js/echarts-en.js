@@ -83150,3 +83150,295 @@ registerVisual(VISUAL_PRIORITY, {
         });
 
         // console.log(JSON.stringify(visualMetaList.map(a => a.stops)));
+        seriesModel.getData().setVisual('visualMeta', visualMetaList);
+    }
+});
+
+// FIXME
+// performance and export for heatmap?
+// value can be Infinity or -Infinity
+function getColorVisual(seriesModel, visualMapModel, value, valueState) {
+    var mappings = visualMapModel.targetVisuals[valueState];
+    var visualTypes = VisualMapping.prepareVisualTypes(mappings);
+    var resultVisual = {
+        color: seriesModel.getData().getVisual('color') // default color.
+    };
+
+    for (var i = 0, len = visualTypes.length; i < len; i++) {
+        var type = visualTypes[i];
+        var mapping = mappings[
+            type === 'opacity' ? '__alphaForOpacity' : type
+        ];
+        mapping && mapping.applyVisual(value, getVisual, setVisual);
+    }
+
+    return resultVisual.color;
+
+    function getVisual(key) {
+        return resultVisual[key];
+    }
+
+    function setVisual(key, value) {
+        resultVisual[key] = value;
+    }
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @file Visual mapping.
+ */
+
+var visualDefault = {
+
+    /**
+     * @public
+     */
+    get: function (visualType, key, isCategory) {
+        var value = clone(
+            (defaultOption$3[visualType] || {})[key]
+        );
+
+        return isCategory
+            ? (isArray(value) ? value[value.length - 1] : value)
+            : value;
+    }
+
+};
+
+var defaultOption$3 = {
+
+    color: {
+        active: ['#006edd', '#e0ffff'],
+        inactive: ['rgba(0,0,0,0)']
+    },
+
+    colorHue: {
+        active: [0, 360],
+        inactive: [0, 0]
+    },
+
+    colorSaturation: {
+        active: [0.3, 1],
+        inactive: [0, 0]
+    },
+
+    colorLightness: {
+        active: [0.9, 0.5],
+        inactive: [0, 0]
+    },
+
+    colorAlpha: {
+        active: [0.3, 1],
+        inactive: [0, 0]
+    },
+
+    opacity: {
+        active: [0.3, 1],
+        inactive: [0, 0]
+    },
+
+    symbol: {
+        active: ['circle', 'roundRect', 'diamond'],
+        inactive: ['none']
+    },
+
+    symbolSize: {
+        active: [10, 50],
+        inactive: [0, 0]
+    }
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var mapVisual$2 = VisualMapping.mapVisual;
+var eachVisual = VisualMapping.eachVisual;
+var isArray$3 = isArray;
+var each$25 = each$1;
+var asc$3 = asc;
+var linearMap$2 = linearMap;
+var noop$2 = noop;
+
+var VisualMapModel = extendComponentModel({
+
+    type: 'visualMap',
+
+    dependencies: ['series'],
+
+    /**
+     * @readOnly
+     * @type {Array.<string>}
+     */
+    stateList: ['inRange', 'outOfRange'],
+
+    /**
+     * @readOnly
+     * @type {Array.<string>}
+     */
+    replacableOptionKeys: [
+        'inRange', 'outOfRange', 'target', 'controller', 'color'
+    ],
+
+    /**
+     * [lowerBound, upperBound]
+     *
+     * @readOnly
+     * @type {Array.<number>}
+     */
+    dataBound: [-Infinity, Infinity],
+
+    /**
+     * @readOnly
+     * @type {string|Object}
+     */
+    layoutMode: {type: 'box', ignoreSize: true},
+
+    /**
+     * @protected
+     */
+    defaultOption: {
+        show: true,
+
+        zlevel: 0,
+        z: 4,
+
+        seriesIndex: 'all',     // 'all' or null/undefined: all series.
+                                // A number or an array of number: the specified series.
+
+                                // set min: 0, max: 200, only for campatible with ec2.
+                                // In fact min max should not have default value.
+        min: 0,                 // min value, must specified if pieces is not specified.
+        max: 200,               // max value, must specified if pieces is not specified.
+
+        dimension: null,
+        inRange: null,          // 'color', 'colorHue', 'colorSaturation', 'colorLightness', 'colorAlpha',
+                                // 'symbol', 'symbolSize'
+        outOfRange: null,       // 'color', 'colorHue', 'colorSaturation',
+                                // 'colorLightness', 'colorAlpha',
+                                // 'symbol', 'symbolSize'
+
+        left: 0,                // 'center' ¦ 'left' ¦ 'right' ¦ {number} (px)
+        right: null,            // The same as left.
+        top: null,              // 'top' ¦ 'bottom' ¦ 'center' ¦ {number} (px)
+        bottom: 0,              // The same as top.
+
+        itemWidth: null,
+        itemHeight: null,
+        inverse: false,
+        orient: 'vertical',        // 'horizontal' ¦ 'vertical'
+
+        backgroundColor: 'rgba(0,0,0,0)',
+        borderColor: '#ccc',       // 值域边框颜色
+        contentColor: '#5793f3',
+        inactiveColor: '#aaa',
+        borderWidth: 0,            // 值域边框线宽，单位px，默认为0（无边框）
+        padding: 5,                // 值域内边距，单位px，默认各方向内边距为5，
+                                    // 接受数组分别设定上右下左边距，同css
+        textGap: 10,               //
+        precision: 0,              // 小数精度，默认为0，无小数点
+        color: null,               //颜色（deprecated，兼容ec2，顺序同pieces，不同于inRange/outOfRange）
+
+        formatter: null,
+        text: null,                // 文本，如['高', '低']，兼容ec2，text[0]对应高值，text[1]对应低值
+        textStyle: {
+            color: '#333'          // 值域文字颜色
+        }
+    },
+
+    /**
+     * @protected
+     */
+    init: function (option, parentModel, ecModel) {
+
+        /**
+         * @private
+         * @type {Array.<number>}
+         */
+        this._dataExtent;
+
+        /**
+         * @readOnly
+         */
+        this.targetVisuals = {};
+
+        /**
+         * @readOnly
+         */
+        this.controllerVisuals = {};
+
+        /**
+         * @readOnly
+         */
+        this.textStyleModel;
+
+        /**
+         * [width, height]
+         * @readOnly
+         * @type {Array.<number>}
+         */
+        this.itemSize;
+
+        this.mergeDefaultAndTheme(option, ecModel);
+    },
+
+    /**
+     * @protected
+     */
+    optionUpdated: function (newOption, isInit) {
+        var thisOption = this.option;
+
+        // FIXME
+        // necessary?
+        // Disable realtime view update if canvas is not supported.
+        if (!env$1.canvasSupported) {
+            thisOption.realtime = false;
+        }
+
+        !isInit && replaceVisualOption(
+            thisOption, newOption, this.replacableOptionKeys
+        );
+
+        this.textStyleModel = this.getModel('textStyle');
+
+        this.resetItemSize();
+
+        this.completeVisualOption();
+    },
+
+    /**
+     * @protected
+     */
