@@ -83996,3 +83996,266 @@ var ContinuousModel = VisualMapModel.extend({
         var stops = [];
 
         function setStop(value, valueState) {
+            stops.push({
+                value: value,
+                color: getColorVisual(value, valueState)
+            });
+        }
+
+        // Format to: outOfRange -- inRange -- outOfRange.
+        var iIdx = 0;
+        var oIdx = 0;
+        var iLen = iVals.length;
+        var oLen = oVals.length;
+
+        for (; oIdx < oLen && (!iVals.length || oVals[oIdx] <= iVals[0]); oIdx++) {
+            // If oVal[oIdx] === iVals[iIdx], oVal[oIdx] should be ignored.
+            if (oVals[oIdx] < iVals[iIdx]) {
+                setStop(oVals[oIdx], 'outOfRange');
+            }
+        }
+        for (var first = 1; iIdx < iLen; iIdx++, first = 0) {
+            // If range is full, value beyond min, max will be clamped.
+            // make a singularity
+            first && stops.length && setStop(iVals[iIdx], 'outOfRange');
+            setStop(iVals[iIdx], 'inRange');
+        }
+        for (var first = 1; oIdx < oLen; oIdx++) {
+            if (!iVals.length || iVals[iVals.length - 1] < oVals[oIdx]) {
+                // make a singularity
+                if (first) {
+                    stops.length && setStop(stops[stops.length - 1].value, 'outOfRange');
+                    first = 0;
+                }
+                setStop(oVals[oIdx], 'outOfRange');
+            }
+        }
+
+        var stopsLen = stops.length;
+
+        return {
+            stops: stops,
+            outerColors: [
+                stopsLen ? stops[0].color : 'transparent',
+                stopsLen ? stops[stopsLen - 1].color : 'transparent'
+            ]
+        };
+    }
+
+});
+
+function getColorStopValues(visualMapModel, valueState, dataExtent) {
+    if (dataExtent[0] === dataExtent[1]) {
+        return dataExtent.slice();
+    }
+
+    // When using colorHue mapping, it is not linear color any more.
+    // Moreover, canvas gradient seems not to be accurate linear.
+    // FIXME
+    // Should be arbitrary value 100? or based on pixel size?
+    var count = 200;
+    var step = (dataExtent[1] - dataExtent[0]) / count;
+
+    var value = dataExtent[0];
+    var stopValues = [];
+    for (var i = 0; i <= count && value < dataExtent[1]; i++) {
+        stopValues.push(value);
+        value += step;
+    }
+    stopValues.push(dataExtent[1]);
+
+    return stopValues;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var VisualMapView = extendComponentView({
+
+    type: 'visualMap',
+
+    /**
+     * @readOnly
+     * @type {Object}
+     */
+    autoPositionValues: {left: 1, right: 1, top: 1, bottom: 1},
+
+    init: function (ecModel, api) {
+        /**
+         * @readOnly
+         * @type {module:echarts/model/Global}
+         */
+        this.ecModel = ecModel;
+
+        /**
+         * @readOnly
+         * @type {module:echarts/ExtensionAPI}
+         */
+        this.api = api;
+
+        /**
+         * @readOnly
+         * @type {module:echarts/component/visualMap/visualMapModel}
+         */
+        this.visualMapModel;
+    },
+
+    /**
+     * @protected
+     */
+    render: function (visualMapModel, ecModel, api, payload) {
+        this.visualMapModel = visualMapModel;
+
+        if (visualMapModel.get('show') === false) {
+            this.group.removeAll();
+            return;
+        }
+
+        this.doRender.apply(this, arguments);
+    },
+
+    /**
+     * @protected
+     */
+    renderBackground: function (group) {
+        var visualMapModel = this.visualMapModel;
+        var padding = normalizeCssArray$1(visualMapModel.get('padding') || 0);
+        var rect = group.getBoundingRect();
+
+        group.add(new Rect({
+            z2: -1, // Lay background rect on the lowest layer.
+            silent: true,
+            shape: {
+                x: rect.x - padding[3],
+                y: rect.y - padding[0],
+                width: rect.width + padding[3] + padding[1],
+                height: rect.height + padding[0] + padding[2]
+            },
+            style: {
+                fill: visualMapModel.get('backgroundColor'),
+                stroke: visualMapModel.get('borderColor'),
+                lineWidth: visualMapModel.get('borderWidth')
+            }
+        }));
+    },
+
+    /**
+     * @protected
+     * @param {number} targetValue can be Infinity or -Infinity
+     * @param {string=} visualCluster Only can be 'color' 'opacity' 'symbol' 'symbolSize'
+     * @param {Object} [opts]
+     * @param {string=} [opts.forceState] Specify state, instead of using getValueState method.
+     * @param {string=} [opts.convertOpacityToAlpha=false] For color gradient in controller widget.
+     * @return {*} Visual value.
+     */
+    getControllerVisual: function (targetValue, visualCluster, opts) {
+        opts = opts || {};
+
+        var forceState = opts.forceState;
+        var visualMapModel = this.visualMapModel;
+        var visualObj = {};
+
+        // Default values.
+        if (visualCluster === 'symbol') {
+            visualObj.symbol = visualMapModel.get('itemSymbol');
+        }
+        if (visualCluster === 'color') {
+            var defaultColor = visualMapModel.get('contentColor');
+            visualObj.color = defaultColor;
+        }
+
+        function getter(key) {
+            return visualObj[key];
+        }
+
+        function setter(key, value) {
+            visualObj[key] = value;
+        }
+
+        var mappings = visualMapModel.controllerVisuals[
+            forceState || visualMapModel.getValueState(targetValue)
+        ];
+        var visualTypes = VisualMapping.prepareVisualTypes(mappings);
+
+        each$1(visualTypes, function (type) {
+            var visualMapping = mappings[type];
+            if (opts.convertOpacityToAlpha && type === 'opacity') {
+                type = 'colorAlpha';
+                visualMapping = mappings.__alphaForOpacity;
+            }
+            if (VisualMapping.dependsOn(type, visualCluster)) {
+                visualMapping && visualMapping.applyVisual(
+                    targetValue, getter, setter
+                );
+            }
+        });
+
+        return visualObj[visualCluster];
+    },
+
+    /**
+     * @protected
+     */
+    positionGroup: function (group) {
+        var model = this.visualMapModel;
+        var api = this.api;
+
+        positionElement(
+            group,
+            model.getBoxLayoutParams(),
+            {width: api.getWidth(), height: api.getHeight()}
+        );
+    },
+
+    /**
+     * @protected
+     * @abstract
+     */
+    doRender: noop
+
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * @param {module:echarts/component/visualMap/VisualMapModel} visualMapModel\
+ * @param {module:echarts/ExtensionAPI} api
+ * @param {Array.<number>} itemSize always [short, long]
+ * @return {string} 'left' or 'right' or 'top' or 'bottom'
+ */
+function getItemAlign(visualMapModel, api, itemSize) {
+    var modelOption = visualMapModel.option;
+    var itemAlign = modelOption.align;
