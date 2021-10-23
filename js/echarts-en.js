@@ -84259,3 +84259,288 @@ var VisualMapView = extendComponentView({
 function getItemAlign(visualMapModel, api, itemSize) {
     var modelOption = visualMapModel.option;
     var itemAlign = modelOption.align;
+
+    if (itemAlign != null && itemAlign !== 'auto') {
+        return itemAlign;
+    }
+
+    // Auto decision align.
+    var ecSize = {width: api.getWidth(), height: api.getHeight()};
+    var realIndex = modelOption.orient === 'horizontal' ? 1 : 0;
+
+    var paramsSet = [
+        ['left', 'right', 'width'],
+        ['top', 'bottom', 'height']
+    ];
+    var reals = paramsSet[realIndex];
+    var fakeValue = [0, null, 10];
+
+    var layoutInput = {};
+    for (var i = 0; i < 3; i++) {
+        layoutInput[paramsSet[1 - realIndex][i]] = fakeValue[i];
+        layoutInput[reals[i]] = i === 2 ? itemSize[0] : modelOption[reals[i]];
+    }
+
+    var rParam = [['x', 'width', 3], ['y', 'height', 0]][realIndex];
+    var rect = getLayoutRect(layoutInput, ecSize, modelOption.padding);
+
+    return reals[
+        (rect.margin[rParam[2]] || 0) + rect[rParam[0]] + rect[rParam[1]] * 0.5
+            < ecSize[rParam[1]] * 0.5 ? 0 : 1
+    ];
+}
+
+/**
+ * Prepare dataIndex for outside usage, where dataIndex means rawIndex, and
+ * dataIndexInside means filtered index.
+ */
+function convertDataIndex(batch) {
+    each$1(batch || [], function (batchItem) {
+        if (batch.dataIndex != null) {
+            batch.dataIndexInside = batch.dataIndex;
+            batch.dataIndex = null;
+        }
+    });
+    return batch;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var linearMap$3 = linearMap;
+var each$26 = each$1;
+var mathMin$7 = Math.min;
+var mathMax$7 = Math.max;
+
+// Arbitrary value
+var HOVER_LINK_SIZE = 12;
+var HOVER_LINK_OUT = 6;
+
+// Notice:
+// Any "interval" should be by the order of [low, high].
+// "handle0" (handleIndex === 0) maps to
+// low data value: this._dataInterval[0] and has low coord.
+// "handle1" (handleIndex === 1) maps to
+// high data value: this._dataInterval[1] and has high coord.
+// The logic of transform is implemented in this._createBarGroup.
+
+var ContinuousView = VisualMapView.extend({
+
+    type: 'visualMap.continuous',
+
+    /**
+     * @override
+     */
+    init: function () {
+
+        ContinuousView.superApply(this, 'init', arguments);
+
+        /**
+         * @private
+         */
+        this._shapes = {};
+
+        /**
+         * @private
+         */
+        this._dataInterval = [];
+
+        /**
+         * @private
+         */
+        this._handleEnds = [];
+
+        /**
+         * @private
+         */
+        this._orient;
+
+        /**
+         * @private
+         */
+        this._useHandle;
+
+        /**
+         * @private
+         */
+        this._hoverLinkDataIndices = [];
+
+        /**
+         * @private
+         */
+        this._dragging;
+
+        /**
+         * @private
+         */
+        this._hovering;
+    },
+
+    /**
+     * @protected
+     * @override
+     */
+    doRender: function (visualMapModel, ecModel, api, payload) {
+        if (!payload || payload.type !== 'selectDataRange' || payload.from !== this.uid) {
+            this._buildView();
+        }
+    },
+
+    /**
+     * @private
+     */
+    _buildView: function () {
+        this.group.removeAll();
+
+        var visualMapModel = this.visualMapModel;
+        var thisGroup = this.group;
+
+        this._orient = visualMapModel.get('orient');
+        this._useHandle = visualMapModel.get('calculable');
+
+        this._resetInterval();
+
+        this._renderBar(thisGroup);
+
+        var dataRangeText = visualMapModel.get('text');
+        this._renderEndsText(thisGroup, dataRangeText, 0);
+        this._renderEndsText(thisGroup, dataRangeText, 1);
+
+        // Do this for background size calculation.
+        this._updateView(true);
+
+        // After updating view, inner shapes is built completely,
+        // and then background can be rendered.
+        this.renderBackground(thisGroup);
+
+        // Real update view
+        this._updateView();
+
+        this._enableHoverLinkToSeries();
+        this._enableHoverLinkFromSeries();
+
+        this.positionGroup(thisGroup);
+    },
+
+    /**
+     * @private
+     */
+    _renderEndsText: function (group, dataRangeText, endsIndex) {
+        if (!dataRangeText) {
+            return;
+        }
+
+        // Compatible with ec2, text[0] map to high value, text[1] map low value.
+        var text = dataRangeText[1 - endsIndex];
+        text = text != null ? text + '' : '';
+
+        var visualMapModel = this.visualMapModel;
+        var textGap = visualMapModel.get('textGap');
+        var itemSize = visualMapModel.itemSize;
+
+        var barGroup = this._shapes.barGroup;
+        var position = this._applyTransform(
+            [
+                itemSize[0] / 2,
+                endsIndex === 0 ? -textGap : itemSize[1] + textGap
+            ],
+            barGroup
+        );
+        var align = this._applyTransform(
+            endsIndex === 0 ? 'bottom' : 'top',
+            barGroup
+        );
+        var orient = this._orient;
+        var textStyleModel = this.visualMapModel.textStyleModel;
+
+        this.group.add(new Text({
+            style: {
+                x: position[0],
+                y: position[1],
+                textVerticalAlign: orient === 'horizontal' ? 'middle' : align,
+                textAlign: orient === 'horizontal' ? align : 'center',
+                text: text,
+                textFont: textStyleModel.getFont(),
+                textFill: textStyleModel.getTextColor()
+            }
+        }));
+    },
+
+    /**
+     * @private
+     */
+    _renderBar: function (targetGroup) {
+        var visualMapModel = this.visualMapModel;
+        var shapes = this._shapes;
+        var itemSize = visualMapModel.itemSize;
+        var orient = this._orient;
+        var useHandle = this._useHandle;
+        var itemAlign = getItemAlign(visualMapModel, this.api, itemSize);
+        var barGroup = shapes.barGroup = this._createBarGroup(itemAlign);
+
+        // Bar
+        barGroup.add(shapes.outOfRange = createPolygon());
+        barGroup.add(shapes.inRange = createPolygon(
+            null,
+            useHandle ? getCursor$1(this._orient) : null,
+            bind(this._dragHandle, this, 'all', false),
+            bind(this._dragHandle, this, 'all', true)
+        ));
+
+        var textRect = visualMapModel.textStyleModel.getTextRect('国');
+        var textSize = mathMax$7(textRect.width, textRect.height);
+
+        // Handle
+        if (useHandle) {
+            shapes.handleThumbs = [];
+            shapes.handleLabels = [];
+            shapes.handleLabelPoints = [];
+
+            this._createHandle(barGroup, 0, itemSize, textSize, orient, itemAlign);
+            this._createHandle(barGroup, 1, itemSize, textSize, orient, itemAlign);
+        }
+
+        this._createIndicator(barGroup, itemSize, textSize, orient);
+
+        targetGroup.add(barGroup);
+    },
+
+    /**
+     * @private
+     */
+    _createHandle: function (barGroup, handleIndex, itemSize, textSize, orient) {
+        var onDrift = bind(this._dragHandle, this, handleIndex, false);
+        var onDragEnd = bind(this._dragHandle, this, handleIndex, true);
+        var handleThumb = createPolygon(
+            createHandlePoints(handleIndex, textSize),
+            getCursor$1(this._orient),
+            onDrift,
+            onDragEnd
+        );
+        handleThumb.position[0] = itemSize[0];
+        barGroup.add(handleThumb);
+
+        // Text is always horizontal layout but should not be effected by
+        // transform (orient/inverse). So label is built separately but not
+        // use zrender/graphic/helper/RectText, and is located based on view
+        // group (according to handleLabelPoint) but not barGroup.
+        var textStyleModel = this.visualMapModel.textStyleModel;
+        var handleLabel = new Text({
+            draggable: true,
+            drift: onDrift,
