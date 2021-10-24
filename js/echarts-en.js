@@ -84544,3 +84544,330 @@ var ContinuousView = VisualMapView.extend({
         var handleLabel = new Text({
             draggable: true,
             drift: onDrift,
+            onmousemove: function (e) {
+                // Fot mobile devicem, prevent screen slider on the button.
+                stop(e.event);
+            },
+            ondragend: onDragEnd,
+            style: {
+                x: 0, y: 0, text: '',
+                textFont: textStyleModel.getFont(),
+                textFill: textStyleModel.getTextColor()
+            }
+        });
+        this.group.add(handleLabel);
+
+        var handleLabelPoint = [
+            orient === 'horizontal'
+                ? textSize / 2
+                : textSize * 1.5,
+            orient === 'horizontal'
+                ? (handleIndex === 0 ? -(textSize * 1.5) : (textSize * 1.5))
+                : (handleIndex === 0 ? -textSize / 2 : textSize / 2)
+        ];
+
+        var shapes = this._shapes;
+        shapes.handleThumbs[handleIndex] = handleThumb;
+        shapes.handleLabelPoints[handleIndex] = handleLabelPoint;
+        shapes.handleLabels[handleIndex] = handleLabel;
+    },
+
+    /**
+     * @private
+     */
+    _createIndicator: function (barGroup, itemSize, textSize, orient) {
+        var indicator = createPolygon([[0, 0]], 'move');
+        indicator.position[0] = itemSize[0];
+        indicator.attr({invisible: true, silent: true});
+        barGroup.add(indicator);
+
+        var textStyleModel = this.visualMapModel.textStyleModel;
+        var indicatorLabel = new Text({
+            silent: true,
+            invisible: true,
+            style: {
+                x: 0, y: 0, text: '',
+                textFont: textStyleModel.getFont(),
+                textFill: textStyleModel.getTextColor()
+            }
+        });
+        this.group.add(indicatorLabel);
+
+        var indicatorLabelPoint = [
+            orient === 'horizontal' ? textSize / 2 : HOVER_LINK_OUT + 3,
+            0
+        ];
+
+        var shapes = this._shapes;
+        shapes.indicator = indicator;
+        shapes.indicatorLabel = indicatorLabel;
+        shapes.indicatorLabelPoint = indicatorLabelPoint;
+    },
+
+    /**
+     * @private
+     */
+    _dragHandle: function (handleIndex, isEnd, dx, dy) {
+        if (!this._useHandle) {
+            return;
+        }
+
+        this._dragging = !isEnd;
+
+        if (!isEnd) {
+            // Transform dx, dy to bar coordination.
+            var vertex = this._applyTransform([dx, dy], this._shapes.barGroup, true);
+            this._updateInterval(handleIndex, vertex[1]);
+
+            // Considering realtime, update view should be executed
+            // before dispatch action.
+            this._updateView();
+        }
+
+        // dragEnd do not dispatch action when realtime.
+        if (isEnd === !this.visualMapModel.get('realtime')) { // jshint ignore:line
+            this.api.dispatchAction({
+                type: 'selectDataRange',
+                from: this.uid,
+                visualMapId: this.visualMapModel.id,
+                selected: this._dataInterval.slice()
+            });
+        }
+
+        if (isEnd) {
+            !this._hovering && this._clearHoverLinkToSeries();
+        }
+        else if (useHoverLinkOnHandle(this.visualMapModel)) {
+            this._doHoverLinkToSeries(this._handleEnds[handleIndex], false);
+        }
+    },
+
+    /**
+     * @private
+     */
+    _resetInterval: function () {
+        var visualMapModel = this.visualMapModel;
+
+        var dataInterval = this._dataInterval = visualMapModel.getSelected();
+        var dataExtent = visualMapModel.getExtent();
+        var sizeExtent = [0, visualMapModel.itemSize[1]];
+
+        this._handleEnds = [
+            linearMap$3(dataInterval[0], dataExtent, sizeExtent, true),
+            linearMap$3(dataInterval[1], dataExtent, sizeExtent, true)
+        ];
+    },
+
+    /**
+     * @private
+     * @param {(number|string)} handleIndex 0 or 1 or 'all'
+     * @param {number} dx
+     * @param {number} dy
+     */
+    _updateInterval: function (handleIndex, delta) {
+        delta = delta || 0;
+        var visualMapModel = this.visualMapModel;
+        var handleEnds = this._handleEnds;
+        var sizeExtent = [0, visualMapModel.itemSize[1]];
+
+        sliderMove(
+            delta,
+            handleEnds,
+            sizeExtent,
+            handleIndex,
+            // cross is forbiden
+            0
+        );
+
+        var dataExtent = visualMapModel.getExtent();
+        // Update data interval.
+        this._dataInterval = [
+            linearMap$3(handleEnds[0], sizeExtent, dataExtent, true),
+            linearMap$3(handleEnds[1], sizeExtent, dataExtent, true)
+        ];
+    },
+
+    /**
+     * @private
+     */
+    _updateView: function (forSketch) {
+        var visualMapModel = this.visualMapModel;
+        var dataExtent = visualMapModel.getExtent();
+        var shapes = this._shapes;
+
+        var outOfRangeHandleEnds = [0, visualMapModel.itemSize[1]];
+        var inRangeHandleEnds = forSketch ? outOfRangeHandleEnds : this._handleEnds;
+
+        var visualInRange = this._createBarVisual(
+            this._dataInterval, dataExtent, inRangeHandleEnds, 'inRange'
+        );
+        var visualOutOfRange = this._createBarVisual(
+            dataExtent, dataExtent, outOfRangeHandleEnds, 'outOfRange'
+        );
+
+        shapes.inRange
+            .setStyle({
+                fill: visualInRange.barColor,
+                opacity: visualInRange.opacity
+            })
+            .setShape('points', visualInRange.barPoints);
+        shapes.outOfRange
+            .setStyle({
+                fill: visualOutOfRange.barColor,
+                opacity: visualOutOfRange.opacity
+            })
+            .setShape('points', visualOutOfRange.barPoints);
+
+        this._updateHandle(inRangeHandleEnds, visualInRange);
+    },
+
+    /**
+     * @private
+     */
+    _createBarVisual: function (dataInterval, dataExtent, handleEnds, forceState) {
+        var opts = {
+            forceState: forceState,
+            convertOpacityToAlpha: true
+        };
+        var colorStops = this._makeColorGradient(dataInterval, opts);
+
+        var symbolSizes = [
+            this.getControllerVisual(dataInterval[0], 'symbolSize', opts),
+            this.getControllerVisual(dataInterval[1], 'symbolSize', opts)
+        ];
+        var barPoints = this._createBarPoints(handleEnds, symbolSizes);
+
+        return {
+            barColor: new LinearGradient(0, 0, 0, 1, colorStops),
+            barPoints: barPoints,
+            handlesColor: [
+                colorStops[0].color,
+                colorStops[colorStops.length - 1].color
+            ]
+        };
+    },
+
+    /**
+     * @private
+     */
+    _makeColorGradient: function (dataInterval, opts) {
+        // Considering colorHue, which is not linear, so we have to sample
+        // to calculate gradient color stops, but not only caculate head
+        // and tail.
+        var sampleNumber = 100; // Arbitrary value.
+        var colorStops = [];
+        var step = (dataInterval[1] - dataInterval[0]) / sampleNumber;
+
+        colorStops.push({
+            color: this.getControllerVisual(dataInterval[0], 'color', opts),
+            offset: 0
+        });
+
+        for (var i = 1; i < sampleNumber; i++) {
+            var currValue = dataInterval[0] + step * i;
+            if (currValue > dataInterval[1]) {
+                break;
+            }
+            colorStops.push({
+                color: this.getControllerVisual(currValue, 'color', opts),
+                offset: i / sampleNumber
+            });
+        }
+
+        colorStops.push({
+            color: this.getControllerVisual(dataInterval[1], 'color', opts),
+            offset: 1
+        });
+
+        return colorStops;
+    },
+
+    /**
+     * @private
+     */
+    _createBarPoints: function (handleEnds, symbolSizes) {
+        var itemSize = this.visualMapModel.itemSize;
+
+        return [
+            [itemSize[0] - symbolSizes[0], handleEnds[0]],
+            [itemSize[0], handleEnds[0]],
+            [itemSize[0], handleEnds[1]],
+            [itemSize[0] - symbolSizes[1], handleEnds[1]]
+        ];
+    },
+
+    /**
+     * @private
+     */
+    _createBarGroup: function (itemAlign) {
+        var orient = this._orient;
+        var inverse = this.visualMapModel.get('inverse');
+
+        return new Group(
+            (orient === 'horizontal' && !inverse)
+            ? {scale: itemAlign === 'bottom' ? [1, 1] : [-1, 1], rotation: Math.PI / 2}
+            : (orient === 'horizontal' && inverse)
+            ? {scale: itemAlign === 'bottom' ? [-1, 1] : [1, 1], rotation: -Math.PI / 2}
+            : (orient === 'vertical' && !inverse)
+            ? {scale: itemAlign === 'left' ? [1, -1] : [-1, -1]}
+            : {scale: itemAlign === 'left' ? [1, 1] : [-1, 1]}
+        );
+    },
+
+    /**
+     * @private
+     */
+    _updateHandle: function (handleEnds, visualInRange) {
+        if (!this._useHandle) {
+            return;
+        }
+
+        var shapes = this._shapes;
+        var visualMapModel = this.visualMapModel;
+        var handleThumbs = shapes.handleThumbs;
+        var handleLabels = shapes.handleLabels;
+
+        each$26([0, 1], function (handleIndex) {
+            var handleThumb = handleThumbs[handleIndex];
+            handleThumb.setStyle('fill', visualInRange.handlesColor[handleIndex]);
+            handleThumb.position[1] = handleEnds[handleIndex];
+
+            // Update handle label position.
+            var textPoint = applyTransform$1(
+                shapes.handleLabelPoints[handleIndex],
+                getTransform(handleThumb, this.group)
+            );
+            handleLabels[handleIndex].setStyle({
+                x: textPoint[0],
+                y: textPoint[1],
+                text: visualMapModel.formatValueText(this._dataInterval[handleIndex]),
+                textVerticalAlign: 'middle',
+                textAlign: this._applyTransform(
+                    this._orient === 'horizontal'
+                        ? (handleIndex === 0 ? 'bottom' : 'top')
+                        : 'left',
+                    shapes.barGroup
+                )
+            });
+        }, this);
+    },
+
+    /**
+     * @private
+     * @param {number} cursorValue
+     * @param {number} textValue
+     * @param {string} [rangeSymbol]
+     * @param {number} [halfHoverLinkSize]
+     */
+    _showIndicator: function (cursorValue, textValue, rangeSymbol, halfHoverLinkSize) {
+        var visualMapModel = this.visualMapModel;
+        var dataExtent = visualMapModel.getExtent();
+        var itemSize = visualMapModel.itemSize;
+        var sizeExtent = [0, itemSize[1]];
+        var pos = linearMap$3(cursorValue, dataExtent, sizeExtent, true);
+
+        var shapes = this._shapes;
+        var indicator = shapes.indicator;
+        if (!indicator) {
+            return;
+        }
