@@ -84871,3 +84871,296 @@ var ContinuousView = VisualMapView.extend({
         if (!indicator) {
             return;
         }
+
+        indicator.position[1] = pos;
+        indicator.attr('invisible', false);
+        indicator.setShape('points', createIndicatorPoints(
+            !!rangeSymbol, halfHoverLinkSize, pos, itemSize[1]
+        ));
+
+        var opts = {convertOpacityToAlpha: true};
+        var color = this.getControllerVisual(cursorValue, 'color', opts);
+        indicator.setStyle('fill', color);
+
+        // Update handle label position.
+        var textPoint = applyTransform$1(
+            shapes.indicatorLabelPoint,
+            getTransform(indicator, this.group)
+        );
+
+        var indicatorLabel = shapes.indicatorLabel;
+        indicatorLabel.attr('invisible', false);
+        var align = this._applyTransform('left', shapes.barGroup);
+        var orient = this._orient;
+        indicatorLabel.setStyle({
+            text: (rangeSymbol ? rangeSymbol : '') + visualMapModel.formatValueText(textValue),
+            textVerticalAlign: orient === 'horizontal' ? align : 'middle',
+            textAlign: orient === 'horizontal' ? 'center' : align,
+            x: textPoint[0],
+            y: textPoint[1]
+        });
+    },
+
+    /**
+     * @private
+     */
+    _enableHoverLinkToSeries: function () {
+        var self = this;
+        this._shapes.barGroup
+
+            .on('mousemove', function (e) {
+                self._hovering = true;
+
+                if (!self._dragging) {
+                    var itemSize = self.visualMapModel.itemSize;
+                    var pos = self._applyTransform(
+                        [e.offsetX, e.offsetY], self._shapes.barGroup, true, true
+                    );
+                    // For hover link show when hover handle, which might be
+                    // below or upper than sizeExtent.
+                    pos[1] = mathMin$7(mathMax$7(0, pos[1]), itemSize[1]);
+                    self._doHoverLinkToSeries(
+                        pos[1],
+                        0 <= pos[0] && pos[0] <= itemSize[0]
+                    );
+                }
+            })
+
+            .on('mouseout', function () {
+                // When mouse is out of handle, hoverLink still need
+                // to be displayed when realtime is set as false.
+                self._hovering = false;
+                !self._dragging && self._clearHoverLinkToSeries();
+            });
+    },
+
+    /**
+     * @private
+     */
+    _enableHoverLinkFromSeries: function () {
+        var zr = this.api.getZr();
+
+        if (this.visualMapModel.option.hoverLink) {
+            zr.on('mouseover', this._hoverLinkFromSeriesMouseOver, this);
+            zr.on('mouseout', this._hideIndicator, this);
+        }
+        else {
+            this._clearHoverLinkFromSeries();
+        }
+    },
+
+    /**
+     * @private
+     */
+    _doHoverLinkToSeries: function (cursorPos, hoverOnBar) {
+        var visualMapModel = this.visualMapModel;
+        var itemSize = visualMapModel.itemSize;
+
+        if (!visualMapModel.option.hoverLink) {
+            return;
+        }
+
+        var sizeExtent = [0, itemSize[1]];
+        var dataExtent = visualMapModel.getExtent();
+
+        // For hover link show when hover handle, which might be below or upper than sizeExtent.
+        cursorPos = mathMin$7(mathMax$7(sizeExtent[0], cursorPos), sizeExtent[1]);
+
+        var halfHoverLinkSize = getHalfHoverLinkSize(visualMapModel, dataExtent, sizeExtent);
+        var hoverRange = [cursorPos - halfHoverLinkSize, cursorPos + halfHoverLinkSize];
+        var cursorValue = linearMap$3(cursorPos, sizeExtent, dataExtent, true);
+        var valueRange = [
+            linearMap$3(hoverRange[0], sizeExtent, dataExtent, true),
+            linearMap$3(hoverRange[1], sizeExtent, dataExtent, true)
+        ];
+        // Consider data range is out of visualMap range, see test/visualMap-continuous.html,
+        // where china and india has very large population.
+        hoverRange[0] < sizeExtent[0] && (valueRange[0] = -Infinity);
+        hoverRange[1] > sizeExtent[1] && (valueRange[1] = Infinity);
+
+        // Do not show indicator when mouse is over handle,
+        // otherwise labels overlap, especially when dragging.
+        if (hoverOnBar) {
+            if (valueRange[0] === -Infinity) {
+                this._showIndicator(cursorValue, valueRange[1], '< ', halfHoverLinkSize);
+            }
+            else if (valueRange[1] === Infinity) {
+                this._showIndicator(cursorValue, valueRange[0], '> ', halfHoverLinkSize);
+            }
+            else {
+                this._showIndicator(cursorValue, cursorValue, '≈ ', halfHoverLinkSize);
+            }
+        }
+
+        // When realtime is set as false, handles, which are in barGroup,
+        // also trigger hoverLink, which help user to realize where they
+        // focus on when dragging. (see test/heatmap-large.html)
+        // When realtime is set as true, highlight will not show when hover
+        // handle, because the label on handle, which displays a exact value
+        // but not range, might mislead users.
+        var oldBatch = this._hoverLinkDataIndices;
+        var newBatch = [];
+        if (hoverOnBar || useHoverLinkOnHandle(visualMapModel)) {
+            newBatch = this._hoverLinkDataIndices = visualMapModel.findTargetDataIndices(valueRange);
+        }
+
+        var resultBatches = compressBatches(oldBatch, newBatch);
+
+        this._dispatchHighDown('downplay', convertDataIndex(resultBatches[0]));
+        this._dispatchHighDown('highlight', convertDataIndex(resultBatches[1]));
+    },
+
+    /**
+     * @private
+     */
+    _hoverLinkFromSeriesMouseOver: function (e) {
+        var el = e.target;
+        var visualMapModel = this.visualMapModel;
+
+        if (!el || el.dataIndex == null) {
+            return;
+        }
+
+        var dataModel = this.ecModel.getSeriesByIndex(el.seriesIndex);
+
+        if (!visualMapModel.isTargetSeries(dataModel)) {
+            return;
+        }
+
+        var data = dataModel.getData(el.dataType);
+        var value = data.get(visualMapModel.getDataDimension(data), el.dataIndex, true);
+
+        if (!isNaN(value)) {
+            this._showIndicator(value, value);
+        }
+    },
+
+    /**
+     * @private
+     */
+    _hideIndicator: function () {
+        var shapes = this._shapes;
+        shapes.indicator && shapes.indicator.attr('invisible', true);
+        shapes.indicatorLabel && shapes.indicatorLabel.attr('invisible', true);
+    },
+
+    /**
+     * @private
+     */
+    _clearHoverLinkToSeries: function () {
+        this._hideIndicator();
+
+        var indices = this._hoverLinkDataIndices;
+        this._dispatchHighDown('downplay', convertDataIndex(indices));
+
+        indices.length = 0;
+    },
+
+    /**
+     * @private
+     */
+    _clearHoverLinkFromSeries: function () {
+        this._hideIndicator();
+
+        var zr = this.api.getZr();
+        zr.off('mouseover', this._hoverLinkFromSeriesMouseOver);
+        zr.off('mouseout', this._hideIndicator);
+    },
+
+    /**
+     * @private
+     */
+    _applyTransform: function (vertex, element, inverse, global) {
+        var transform = getTransform(element, global ? null : this.group);
+
+        return graphic[
+            isArray(vertex) ? 'applyTransform' : 'transformDirection'
+        ](vertex, transform, inverse);
+    },
+
+    /**
+     * @private
+     */
+    _dispatchHighDown: function (type, batch) {
+        batch && batch.length && this.api.dispatchAction({
+            type: type,
+            batch: batch
+        });
+    },
+
+    /**
+     * @override
+     */
+    dispose: function () {
+        this._clearHoverLinkFromSeries();
+        this._clearHoverLinkToSeries();
+    },
+
+    /**
+     * @override
+     */
+    remove: function () {
+        this._clearHoverLinkFromSeries();
+        this._clearHoverLinkToSeries();
+    }
+
+});
+
+function createPolygon(points, cursor, onDrift, onDragEnd) {
+    return new Polygon({
+        shape: {points: points},
+        draggable: !!onDrift,
+        cursor: cursor,
+        drift: onDrift,
+        onmousemove: function (e) {
+            // Fot mobile devicem, prevent screen slider on the button.
+            stop(e.event);
+        },
+        ondragend: onDragEnd
+    });
+}
+
+function createHandlePoints(handleIndex, textSize) {
+    return handleIndex === 0
+        ? [[0, 0], [textSize, 0], [textSize, -textSize]]
+        : [[0, 0], [textSize, 0], [textSize, textSize]];
+}
+
+function createIndicatorPoints(isRange, halfHoverLinkSize, pos, extentMax) {
+    return isRange
+        ? [ // indicate range
+            [0, -mathMin$7(halfHoverLinkSize, mathMax$7(pos, 0))],
+            [HOVER_LINK_OUT, 0],
+            [0, mathMin$7(halfHoverLinkSize, mathMax$7(extentMax - pos, 0))]
+        ]
+        : [ // indicate single value
+            [0, 0], [5, -5], [5, 5]
+        ];
+}
+
+function getHalfHoverLinkSize(visualMapModel, dataExtent, sizeExtent) {
+    var halfHoverLinkSize = HOVER_LINK_SIZE / 2;
+    var hoverLinkDataSize = visualMapModel.get('hoverLinkDataSize');
+    if (hoverLinkDataSize) {
+        halfHoverLinkSize = linearMap$3(hoverLinkDataSize, dataExtent, sizeExtent, true) / 2;
+    }
+    return halfHoverLinkSize;
+}
+
+function useHoverLinkOnHandle(visualMapModel) {
+    var hoverLinkOnHandle = visualMapModel.get('hoverLinkOnHandle');
+    return !!(hoverLinkOnHandle == null ? visualMapModel.get('realtime') : hoverLinkOnHandle);
+}
+
+function getCursor$1(orient) {
+    return orient === 'vertical' ? 'ns-resize' : 'ew-resize';
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
