@@ -85164,3 +85164,265 @@ function getCursor$1(orient) {
 * to you under the Apache License, Version 2.0 (the
 * "License"); you may not use this file except in compliance
 * with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var actionInfo$2 = {
+    type: 'selectDataRange',
+    event: 'dataRangeSelected',
+    // FIXME use updateView appears wrong
+    update: 'update'
+};
+
+registerAction(actionInfo$2, function (payload, ecModel) {
+
+    ecModel.eachComponent({mainType: 'visualMap', query: payload}, function (model) {
+        model.setSelected(payload.selected);
+    });
+
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * DataZoom component entry
+ */
+
+registerPreprocessor(preprocessor$2);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var PiecewiseModel = VisualMapModel.extend({
+
+    type: 'visualMap.piecewise',
+
+    /**
+     * Order Rule:
+     *
+     * option.categories / option.pieces / option.text / option.selected:
+     *     If !option.inverse,
+     *     Order when vertical: ['top', ..., 'bottom'].
+     *     Order when horizontal: ['left', ..., 'right'].
+     *     If option.inverse, the meaning of
+     *     the order should be reversed.
+     *
+     * this._pieceList:
+     *     The order is always [low, ..., high].
+     *
+     * Mapping from location to low-high:
+     *     If !option.inverse
+     *     When vertical, top is high.
+     *     When horizontal, right is high.
+     *     If option.inverse, reverse.
+     */
+
+    /**
+     * @protected
+     */
+    defaultOption: {
+        selected: null,             // Object. If not specified, means selected.
+                                    // When pieces and splitNumber: {'0': true, '5': true}
+                                    // When categories: {'cate1': false, 'cate3': true}
+                                    // When selected === false, means all unselected.
+
+        minOpen: false,             // Whether include values that smaller than `min`.
+        maxOpen: false,             // Whether include values that bigger than `max`.
+
+        align: 'auto',              // 'auto', 'left', 'right'
+        itemWidth: 20,              // When put the controller vertically, it is the length of
+                                    // horizontal side of each item. Otherwise, vertical side.
+        itemHeight: 14,             // When put the controller vertically, it is the length of
+                                    // vertical side of each item. Otherwise, horizontal side.
+        itemSymbol: 'roundRect',
+        pieceList: null,            // Each item is Object, with some of those attrs:
+                                    // {min, max, lt, gt, lte, gte, value,
+                                    // color, colorSaturation, colorAlpha, opacity,
+                                    // symbol, symbolSize}, which customize the range or visual
+                                    // coding of the certain piece. Besides, see "Order Rule".
+        categories: null,           // category names, like: ['some1', 'some2', 'some3'].
+                                    // Attr min/max are ignored when categories set. See "Order Rule"
+        splitNumber: 5,             // If set to 5, auto split five pieces equally.
+                                    // If set to 0 and component type not set, component type will be
+                                    // determined as "continuous". (It is less reasonable but for ec2
+                                    // compatibility, see echarts/component/visualMap/typeDefaulter)
+        selectedMode: 'multiple',   // Can be 'multiple' or 'single'.
+        itemGap: 10,                // The gap between two items, in px.
+        hoverLink: true,            // Enable hover highlight.
+
+        showLabel: null             // By default, when text is used, label will hide (the logic
+                                    // is remained for compatibility reason)
+    },
+
+    /**
+     * @override
+     */
+    optionUpdated: function (newOption, isInit) {
+        PiecewiseModel.superApply(this, 'optionUpdated', arguments);
+
+        /**
+         * The order is always [low, ..., high].
+         * [{text: string, interval: Array.<number>}, ...]
+         * @private
+         * @type {Array.<Object>}
+         */
+        this._pieceList = [];
+
+        this.resetExtent();
+
+        /**
+         * 'pieces', 'categories', 'splitNumber'
+         * @type {string}
+         */
+        var mode = this._mode = this._determineMode();
+
+        resetMethods[this._mode].call(this);
+
+        this._resetSelected(newOption, isInit);
+
+        var categories = this.option.categories;
+
+        this.resetVisual(function (mappingOption, state) {
+            if (mode === 'categories') {
+                mappingOption.mappingMethod = 'category';
+                mappingOption.categories = clone(categories);
+            }
+            else {
+                mappingOption.dataExtent = this.getExtent();
+                mappingOption.mappingMethod = 'piecewise';
+                mappingOption.pieceList = map(this._pieceList, function (piece) {
+                    var piece = clone(piece);
+                    if (state !== 'inRange') {
+                        // FIXME
+                        // outOfRange do not support special visual in pieces.
+                        piece.visual = null;
+                    }
+                    return piece;
+                });
+            }
+        });
+    },
+
+    /**
+     * @protected
+     * @override
+     */
+    completeVisualOption: function () {
+        // Consider this case:
+        // visualMap: {
+        //      pieces: [{symbol: 'circle', lt: 0}, {symbol: 'rect', gte: 0}]
+        // }
+        // where no inRange/outOfRange set but only pieces. So we should make
+        // default inRange/outOfRange for this case, otherwise visuals that only
+        // appear in `pieces` will not be taken into account in visual encoding.
+
+        var option = this.option;
+        var visualTypesInPieces = {};
+        var visualTypes = VisualMapping.listVisualTypes();
+        var isCategory = this.isCategory();
+
+        each$1(option.pieces, function (piece) {
+            each$1(visualTypes, function (visualType) {
+                if (piece.hasOwnProperty(visualType)) {
+                    visualTypesInPieces[visualType] = 1;
+                }
+            });
+        });
+
+        each$1(visualTypesInPieces, function (v, visualType) {
+            var exists = 0;
+            each$1(this.stateList, function (state) {
+                exists |= has(option, state, visualType)
+                    || has(option.target, state, visualType);
+            }, this);
+
+            !exists && each$1(this.stateList, function (state) {
+                (option[state] || (option[state] = {}))[visualType] = visualDefault.get(
+                    visualType, state === 'inRange' ? 'active' : 'inactive', isCategory
+                );
+            });
+        }, this);
+
+        function has(obj, state, visualType) {
+            return obj && obj[state] && (
+                isObject$1(obj[state])
+                    ? obj[state].hasOwnProperty(visualType)
+                    : obj[state] === visualType // e.g., inRange: 'symbol'
+            );
+        }
+
+        VisualMapModel.prototype.completeVisualOption.apply(this, arguments);
+    },
+
+    _resetSelected: function (newOption, isInit) {
+        var thisOption = this.option;
+        var pieceList = this._pieceList;
+
+        // Selected do not merge but all override.
+        var selected = (isInit ? thisOption : newOption).selected || {};
+        thisOption.selected = selected;
+
+        // Consider 'not specified' means true.
+        each$1(pieceList, function (piece, index) {
+            var key = this.getSelectedMapKey(piece);
+            if (!selected.hasOwnProperty(key)) {
+                selected[key] = true;
+            }
+        }, this);
+
+        if (thisOption.selectedMode === 'single') {
+            // Ensure there is only one selected.
+            var hasSel = false;
+
+            each$1(pieceList, function (piece, index) {
+                var key = this.getSelectedMapKey(piece);
+                if (selected[key]) {
+                    hasSel
+                        ? (selected[key] = false)
+                        : (hasSel = true);
+                }
+            }, this);
+        }
+        // thisOption.selectedMode === 'multiple', default: all selected.
+    },
