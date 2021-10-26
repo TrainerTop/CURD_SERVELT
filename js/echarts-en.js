@@ -85685,3 +85685,270 @@ var resetMethods = {
             }
             else {
                 // `min` `max` is legacy option.
+                // `lt` `gt` `lte` `gte` is recommanded.
+                var interval = item.interval = [];
+                var close = item.close = [0, 0];
+
+                var closeList = [1, 0, 1];
+                var infinityList = [-Infinity, Infinity];
+
+                var useMinMax = [];
+                for (var lg = 0; lg < 2; lg++) {
+                    var names = [['gte', 'gt', 'min'], ['lte', 'lt', 'max']][lg];
+                    for (var i = 0; i < 3 && interval[lg] == null; i++) {
+                        interval[lg] = pieceListItem[names[i]];
+                        close[lg] = closeList[i];
+                        useMinMax[lg] = i === 2;
+                    }
+                    interval[lg] == null && (interval[lg] = infinityList[lg]);
+                }
+                useMinMax[0] && interval[1] === Infinity && (close[0] = 0);
+                useMinMax[1] && interval[0] === -Infinity && (close[1] = 0);
+
+                if (__DEV__) {
+                    if (interval[0] > interval[1]) {
+                        console.warn(
+                            'Piece ' + index + 'is illegal: ' + interval
+                            + ' lower bound should not greater then uppper bound.'
+                        );
+                    }
+                }
+
+                if (interval[0] === interval[1] && close[0] && close[1]) {
+                    // Consider: [{min: 5, max: 5, visual: {...}}, {min: 0, max: 5}],
+                    // we use value to lift the priority when min === max
+                    item.value = interval[0];
+                }
+            }
+
+            item.visual = VisualMapping.retrieveVisuals(pieceListItem);
+
+            pieceList.push(item);
+
+        }, this);
+
+        // See "Order Rule".
+        normalizeReverse(thisOption, pieceList);
+        // Only pieces
+        reformIntervals(pieceList);
+
+        each$1(pieceList, function (piece) {
+            var close = piece.close;
+            var edgeSymbols = [['<', '≤'][close[1]], ['>', '≥'][close[0]]];
+            piece.text = piece.text || this.formatValueText(
+                piece.value != null ? piece.value : piece.interval,
+                false,
+                edgeSymbols
+            );
+        }, this);
+    }
+};
+
+function normalizeReverse(thisOption, pieceList) {
+    var inverse = thisOption.inverse;
+    if (thisOption.orient === 'vertical' ? !inverse : inverse) {
+            pieceList.reverse();
+    }
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var PiecewiseVisualMapView = VisualMapView.extend({
+
+    type: 'visualMap.piecewise',
+
+    /**
+     * @protected
+     * @override
+     */
+    doRender: function () {
+        var thisGroup = this.group;
+
+        thisGroup.removeAll();
+
+        var visualMapModel = this.visualMapModel;
+        var textGap = visualMapModel.get('textGap');
+        var textStyleModel = visualMapModel.textStyleModel;
+        var textFont = textStyleModel.getFont();
+        var textFill = textStyleModel.getTextColor();
+        var itemAlign = this._getItemAlign();
+        var itemSize = visualMapModel.itemSize;
+        var viewData = this._getViewData();
+        var endsText = viewData.endsText;
+        var showLabel = retrieve(visualMapModel.get('showLabel', true), !endsText);
+
+        endsText && this._renderEndsText(
+            thisGroup, endsText[0], itemSize, showLabel, itemAlign
+        );
+
+        each$1(viewData.viewPieceList, renderItem, this);
+
+        endsText && this._renderEndsText(
+            thisGroup, endsText[1], itemSize, showLabel, itemAlign
+        );
+
+        box(
+            visualMapModel.get('orient'), thisGroup, visualMapModel.get('itemGap')
+        );
+
+        this.renderBackground(thisGroup);
+
+        this.positionGroup(thisGroup);
+
+        function renderItem(item) {
+            var piece = item.piece;
+
+            var itemGroup = new Group();
+            itemGroup.onclick = bind(this._onItemClick, this, piece);
+
+            this._enableHoverLink(itemGroup, item.indexInModelPieceList);
+
+            var representValue = visualMapModel.getRepresentValue(piece);
+
+            this._createItemSymbol(
+                itemGroup, representValue, [0, 0, itemSize[0], itemSize[1]]
+            );
+
+            if (showLabel) {
+                var visualState = this.visualMapModel.getValueState(representValue);
+
+                itemGroup.add(new Text({
+                    style: {
+                        x: itemAlign === 'right' ? -textGap : itemSize[0] + textGap,
+                        y: itemSize[1] / 2,
+                        text: piece.text,
+                        textVerticalAlign: 'middle',
+                        textAlign: itemAlign,
+                        textFont: textFont,
+                        textFill: textFill,
+                        opacity: visualState === 'outOfRange' ? 0.5 : 1
+                    }
+                }));
+            }
+
+            thisGroup.add(itemGroup);
+        }
+    },
+
+    /**
+     * @private
+     */
+    _enableHoverLink: function (itemGroup, pieceIndex) {
+        itemGroup
+            .on('mouseover', bind(onHoverLink, this, 'highlight'))
+            .on('mouseout', bind(onHoverLink, this, 'downplay'));
+
+        function onHoverLink(method) {
+            var visualMapModel = this.visualMapModel;
+
+            visualMapModel.option.hoverLink && this.api.dispatchAction({
+                type: method,
+                batch: convertDataIndex(
+                    visualMapModel.findTargetDataIndices(pieceIndex)
+                )
+            });
+        }
+    },
+
+    /**
+     * @private
+     */
+    _getItemAlign: function () {
+        var visualMapModel = this.visualMapModel;
+        var modelOption = visualMapModel.option;
+
+        if (modelOption.orient === 'vertical') {
+            return getItemAlign(
+                visualMapModel, this.api, visualMapModel.itemSize
+            );
+        }
+        else { // horizontal, most case left unless specifying right.
+            var align = modelOption.align;
+            if (!align || align === 'auto') {
+                align = 'left';
+            }
+            return align;
+        }
+    },
+
+    /**
+     * @private
+     */
+    _renderEndsText: function (group, text, itemSize, showLabel, itemAlign) {
+        if (!text) {
+            return;
+        }
+
+        var itemGroup = new Group();
+        var textStyleModel = this.visualMapModel.textStyleModel;
+
+        itemGroup.add(new Text({
+            style: {
+                x: showLabel ? (itemAlign === 'right' ? itemSize[0] : 0) : itemSize[0] / 2,
+                y: itemSize[1] / 2,
+                textVerticalAlign: 'middle',
+                textAlign: showLabel ? itemAlign : 'center',
+                text: text,
+                textFont: textStyleModel.getFont(),
+                textFill: textStyleModel.getTextColor()
+            }
+        }));
+
+        group.add(itemGroup);
+    },
+
+    /**
+     * @private
+     * @return {Object} {peiceList, endsText} The order is the same as screen pixel order.
+     */
+    _getViewData: function () {
+        var visualMapModel = this.visualMapModel;
+
+        var viewPieceList = map(visualMapModel.getPieceList(), function (piece, index) {
+            return {piece: piece, indexInModelPieceList: index};
+        });
+        var endsText = visualMapModel.get('text');
+
+        // Consider orient and inverse.
+        var orient = visualMapModel.get('orient');
+        var inverse = visualMapModel.get('inverse');
+
+        // Order of model pieceList is always [low, ..., high]
+        if (orient === 'horizontal' ? inverse : !inverse) {
+            viewPieceList.reverse();
+        }
+        // Origin order of endsText is [high, low]
+        else if (endsText) {
+            endsText = endsText.slice().reverse();
+        }
+
+        return {viewPieceList: viewPieceList, endsText: endsText};
+    },
+
+    /**
+     * @private
+     */
+    _createItemSymbol: function (group, representValue, shapeParam) {
+        group.add(createSymbol(
+            this.getControllerVisual(representValue, 'symbol'),
+            shapeParam[0], shapeParam[1], shapeParam[2], shapeParam[3],
+            this.getControllerVisual(representValue, 'color')
+        ));
+    },
