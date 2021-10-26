@@ -85426,3 +85426,262 @@ var PiecewiseModel = VisualMapModel.extend({
         }
         // thisOption.selectedMode === 'multiple', default: all selected.
     },
+
+    /**
+     * @public
+     */
+    getSelectedMapKey: function (piece) {
+        return this._mode === 'categories'
+            ? piece.value + '' : piece.index + '';
+    },
+
+    /**
+     * @public
+     */
+    getPieceList: function () {
+        return this._pieceList;
+    },
+
+    /**
+     * @private
+     * @return {string}
+     */
+    _determineMode: function () {
+        var option = this.option;
+
+        return option.pieces && option.pieces.length > 0
+            ? 'pieces'
+            : this.option.categories
+            ? 'categories'
+            : 'splitNumber';
+    },
+
+    /**
+     * @public
+     * @override
+     */
+    setSelected: function (selected) {
+        this.option.selected = clone(selected);
+    },
+
+    /**
+     * @public
+     * @override
+     */
+    getValueState: function (value) {
+        var index = VisualMapping.findPieceIndex(value, this._pieceList);
+
+        return index != null
+            ? (this.option.selected[this.getSelectedMapKey(this._pieceList[index])]
+                ? 'inRange' : 'outOfRange'
+            )
+            : 'outOfRange';
+    },
+
+    /**
+     * @public
+     * @params {number} pieceIndex piece index in visualMapModel.getPieceList()
+     * @return {Array.<Object>} [{seriesId, dataIndices: <Array.<number>>}, ...]
+     */
+    findTargetDataIndices: function (pieceIndex) {
+        var result = [];
+
+        this.eachTargetSeries(function (seriesModel) {
+            var dataIndices = [];
+            var data = seriesModel.getData();
+
+            data.each(this.getDataDimension(data), function (value, dataIndex) {
+                // Should always base on model pieceList, because it is order sensitive.
+                var pIdx = VisualMapping.findPieceIndex(value, this._pieceList);
+                pIdx === pieceIndex && dataIndices.push(dataIndex);
+            }, this);
+
+            result.push({seriesId: seriesModel.id, dataIndex: dataIndices});
+        }, this);
+
+        return result;
+    },
+
+    /**
+     * @private
+     * @param {Object} piece piece.value or piece.interval is required.
+     * @return {number} Can be Infinity or -Infinity
+     */
+    getRepresentValue: function (piece) {
+        var representValue;
+        if (this.isCategory()) {
+            representValue = piece.value;
+        }
+        else {
+            if (piece.value != null) {
+                representValue = piece.value;
+            }
+            else {
+                var pieceInterval = piece.interval || [];
+                representValue = (pieceInterval[0] === -Infinity && pieceInterval[1] === Infinity)
+                    ? 0
+                    : (pieceInterval[0] + pieceInterval[1]) / 2;
+            }
+        }
+        return representValue;
+    },
+
+    getVisualMeta: function (getColorVisual) {
+        // Do not support category. (category axis is ordinal, numerical)
+        if (this.isCategory()) {
+            return;
+        }
+
+        var stops = [];
+        var outerColors = [];
+        var visualMapModel = this;
+
+        function setStop(interval, valueState) {
+            var representValue = visualMapModel.getRepresentValue({interval: interval});
+            if (!valueState) {
+                valueState = visualMapModel.getValueState(representValue);
+            }
+            var color = getColorVisual(representValue, valueState);
+            if (interval[0] === -Infinity) {
+                outerColors[0] = color;
+            }
+            else if (interval[1] === Infinity) {
+                outerColors[1] = color;
+            }
+            else {
+                stops.push(
+                    {value: interval[0], color: color},
+                    {value: interval[1], color: color}
+                );
+            }
+        }
+
+        // Suplement
+        var pieceList = this._pieceList.slice();
+        if (!pieceList.length) {
+            pieceList.push({interval: [-Infinity, Infinity]});
+        }
+        else {
+            var edge = pieceList[0].interval[0];
+            edge !== -Infinity && pieceList.unshift({interval: [-Infinity, edge]});
+            edge = pieceList[pieceList.length - 1].interval[1];
+            edge !== Infinity && pieceList.push({interval: [edge, Infinity]});
+        }
+
+        var curr = -Infinity;
+        each$1(pieceList, function (piece) {
+            var interval = piece.interval;
+            if (interval) {
+                // Fulfill gap.
+                interval[0] > curr && setStop([curr, interval[0]], 'outOfRange');
+                setStop(interval.slice());
+                curr = interval[1];
+            }
+        }, this);
+
+        return {stops: stops, outerColors: outerColors};
+    }
+
+});
+
+/**
+ * Key is this._mode
+ * @type {Object}
+ * @this {module:echarts/component/viusalMap/PiecewiseMode}
+ */
+var resetMethods = {
+
+    splitNumber: function () {
+        var thisOption = this.option;
+        var pieceList = this._pieceList;
+        var precision = Math.min(thisOption.precision, 20);
+        var dataExtent = this.getExtent();
+        var splitNumber = thisOption.splitNumber;
+        splitNumber = Math.max(parseInt(splitNumber, 10), 1);
+        thisOption.splitNumber = splitNumber;
+
+        var splitStep = (dataExtent[1] - dataExtent[0]) / splitNumber;
+        // Precision auto-adaption
+        while (+splitStep.toFixed(precision) !== splitStep && precision < 5) {
+            precision++;
+        }
+        thisOption.precision = precision;
+        splitStep = +splitStep.toFixed(precision);
+
+        var index = 0;
+
+        if (thisOption.minOpen) {
+            pieceList.push({
+                index: index++,
+                interval: [-Infinity, dataExtent[0]],
+                close: [0, 0]
+            });
+        }
+
+        for (
+            var curr = dataExtent[0], len = index + splitNumber;
+            index < len;
+            curr += splitStep
+        ) {
+            var max = index === splitNumber - 1 ? dataExtent[1] : (curr + splitStep);
+
+            pieceList.push({
+                index: index++,
+                interval: [curr, max],
+                close: [1, 1]
+            });
+        }
+
+        if (thisOption.maxOpen) {
+            pieceList.push({
+                index: index++,
+                interval: [dataExtent[1], Infinity],
+                close: [0, 0]
+            });
+        }
+
+        reformIntervals(pieceList);
+
+        each$1(pieceList, function (piece) {
+            piece.text = this.formatValueText(piece.interval);
+        }, this);
+    },
+
+    categories: function () {
+        var thisOption = this.option;
+        each$1(thisOption.categories, function (cate) {
+            // FIXME category模式也使用pieceList，但在visualMapping中不是使用pieceList。
+            // 是否改一致。
+            this._pieceList.push({
+                text: this.formatValueText(cate, true),
+                value: cate
+            });
+        }, this);
+
+        // See "Order Rule".
+        normalizeReverse(thisOption, this._pieceList);
+    },
+
+    pieces: function () {
+        var thisOption = this.option;
+        var pieceList = this._pieceList;
+
+        each$1(thisOption.pieces, function (pieceListItem, index) {
+
+            if (!isObject$1(pieceListItem)) {
+                pieceListItem = {value: pieceListItem};
+            }
+
+            var item = {text: '', index: index};
+
+            if (pieceListItem.label != null) {
+                item.text = pieceListItem.label;
+            }
+
+            if (pieceListItem.hasOwnProperty('value')) {
+                var value = item.value = pieceListItem.value;
+                item.interval = [value, value];
+                item.close = [1, 1];
+            }
+            else {
+                // `min` `max` is legacy option.
