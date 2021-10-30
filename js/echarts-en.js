@@ -85952,3 +85952,270 @@ var PiecewiseVisualMapView = VisualMapView.extend({
             this.getControllerVisual(representValue, 'color')
         ));
     },
+
+    /**
+     * @private
+     */
+    _onItemClick: function (piece) {
+        var visualMapModel = this.visualMapModel;
+        var option = visualMapModel.option;
+        var selected = clone(option.selected);
+        var newKey = visualMapModel.getSelectedMapKey(piece);
+
+        if (option.selectedMode === 'single') {
+            selected[newKey] = true;
+            each$1(selected, function (o, key) {
+                selected[key] = key === newKey;
+            });
+        }
+        else {
+            selected[newKey] = !selected[newKey];
+        }
+
+        this.api.dispatchAction({
+            type: 'selectDataRange',
+            from: this.uid,
+            visualMapId: this.visualMapModel.id,
+            selected: selected
+        });
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * DataZoom component entry
+ */
+
+registerPreprocessor(preprocessor$2);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * visualMap component entry
+ */
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var addCommas$1 = addCommas;
+var encodeHTML$1 = encodeHTML;
+
+function fillLabel(opt) {
+    defaultEmphasis(opt, 'label', ['show']);
+}
+var MarkerModel = extendComponentModel({
+
+    type: 'marker',
+
+    dependencies: ['series', 'grid', 'polar', 'geo'],
+
+    /**
+     * @overrite
+     */
+    init: function (option, parentModel, ecModel, extraOpt) {
+
+        if (__DEV__) {
+            if (this.type === 'marker') {
+                throw new Error('Marker component is abstract component. Use markLine, markPoint, markArea instead.');
+            }
+        }
+        this.mergeDefaultAndTheme(option, ecModel);
+        this.mergeOption(option, ecModel, extraOpt.createdBySelf, true);
+    },
+
+    /**
+     * @return {boolean}
+     */
+    isAnimationEnabled: function () {
+        if (env$1.node) {
+            return false;
+        }
+
+        var hostSeries = this.__hostSeries;
+        return this.getShallow('animation') && hostSeries && hostSeries.isAnimationEnabled();
+    },
+
+    mergeOption: function (newOpt, ecModel, createdBySelf, isInit) {
+        var MarkerModel = this.constructor;
+        var modelPropName = this.mainType + 'Model';
+        if (!createdBySelf) {
+            ecModel.eachSeries(function (seriesModel) {
+
+                var markerOpt = seriesModel.get(this.mainType, true);
+
+                var markerModel = seriesModel[modelPropName];
+                if (!markerOpt || !markerOpt.data) {
+                    seriesModel[modelPropName] = null;
+                    return;
+                }
+                if (!markerModel) {
+                    if (isInit) {
+                        // Default label emphasis `position` and `show`
+                        fillLabel(markerOpt);
+                    }
+                    each$1(markerOpt.data, function (item) {
+                        // FIXME Overwrite fillLabel method ?
+                        if (item instanceof Array) {
+                            fillLabel(item[0]);
+                            fillLabel(item[1]);
+                        }
+                        else {
+                            fillLabel(item);
+                        }
+                    });
+
+                    markerModel = new MarkerModel(
+                        markerOpt, this, ecModel
+                    );
+
+                    extend(markerModel, {
+                        mainType: this.mainType,
+                        // Use the same series index and name
+                        seriesIndex: seriesModel.seriesIndex,
+                        name: seriesModel.name,
+                        createdBySelf: true
+                    });
+
+                    markerModel.__hostSeries = seriesModel;
+                }
+                else {
+                    markerModel.mergeOption(markerOpt, ecModel, true);
+                }
+                seriesModel[modelPropName] = markerModel;
+            }, this);
+        }
+    },
+
+    formatTooltip: function (dataIndex) {
+        var data = this.getData();
+        var value = this.getRawValue(dataIndex);
+        var formattedValue = isArray(value)
+            ? map(value, addCommas$1).join(', ') : addCommas$1(value);
+        var name = data.getName(dataIndex);
+        var html = encodeHTML$1(this.name);
+        if (value != null || name) {
+            html += '<br />';
+        }
+        if (name) {
+            html += encodeHTML$1(name);
+            if (value != null) {
+                html += ' : ';
+            }
+        }
+        if (value != null) {
+            html += encodeHTML$1(formattedValue);
+        }
+        return html;
+    },
+
+    getData: function () {
+        return this._data;
+    },
+
+    setData: function (data) {
+        this._data = data;
+    }
+});
+
+mixin(MarkerModel, dataFormatMixin);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+MarkerModel.extend({
+
+    type: 'markPoint',
+
+    defaultOption: {
+        zlevel: 0,
+        z: 5,
+        symbol: 'pin',
+        symbolSize: 50,
+        //symbolRotate: 0,
+        //symbolOffset: [0, 0]
+        tooltip: {
+            trigger: 'item'
+        },
+        label: {
+            show: true,
+            position: 'inside'
+        },
+        itemStyle: {
+            borderWidth: 2
+        },
+        emphasis: {
+            label: {
+                show: true
+            }
+        }
+    }
+});
+
+/*
