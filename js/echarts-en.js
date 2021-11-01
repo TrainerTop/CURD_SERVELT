@@ -86774,3 +86774,273 @@ MarkerModel.extend({
 *
 * Unless required by applicable law or agreed to in writing,
 * software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var markLineTransform = function (seriesModel, coordSys, mlModel, item) {
+    var data = seriesModel.getData();
+    // Special type markLine like 'min', 'max', 'average', 'median'
+    var mlType = item.type;
+
+    if (!isArray(item)
+        && (
+            mlType === 'min' || mlType === 'max' || mlType === 'average' || mlType === 'median'
+            // In case
+            // data: [{
+            //   yAxis: 10
+            // }]
+            || (item.xAxis != null || item.yAxis != null)
+        )
+    ) {
+        var valueAxis;
+        var valueDataDim;
+        var value;
+
+        if (item.yAxis != null || item.xAxis != null) {
+            valueDataDim = item.yAxis != null ? 'y' : 'x';
+            valueAxis = coordSys.getAxis(valueDataDim);
+
+            value = retrieve(item.yAxis, item.xAxis);
+        }
+        else {
+            var axisInfo = getAxisInfo$1(item, data, coordSys, seriesModel);
+            valueDataDim = axisInfo.valueDataDim;
+            valueAxis = axisInfo.valueAxis;
+            value = numCalculate(data, valueDataDim, mlType);
+        }
+        var valueIndex = valueDataDim === 'x' ? 0 : 1;
+        var baseIndex = 1 - valueIndex;
+
+        var mlFrom = clone(item);
+        var mlTo = {};
+
+        mlFrom.type = null;
+
+        mlFrom.coord = [];
+        mlTo.coord = [];
+        mlFrom.coord[baseIndex] = -Infinity;
+        mlTo.coord[baseIndex] = Infinity;
+
+        var precision = mlModel.get('precision');
+        if (precision >= 0 && typeof value === 'number') {
+            value = +value.toFixed(Math.min(precision, 20));
+        }
+
+        mlFrom.coord[valueIndex] = mlTo.coord[valueIndex] = value;
+
+        item = [mlFrom, mlTo, { // Extra option for tooltip and label
+            type: mlType,
+            valueIndex: item.valueIndex,
+            // Force to use the value of calculated value.
+            value: value
+        }];
+    }
+
+    item = [
+        dataTransform(seriesModel, item[0]),
+        dataTransform(seriesModel, item[1]),
+        extend({}, item[2])
+    ];
+
+    // Avoid line data type is extended by from(to) data type
+    item[2].type = item[2].type || '';
+
+    // Merge from option and to option into line option
+    merge(item[2], item[0]);
+    merge(item[2], item[1]);
+
+    return item;
+};
+
+function isInifinity(val) {
+    return !isNaN(val) && !isFinite(val);
+}
+
+// If a markLine has one dim
+function ifMarkLineHasOnlyDim(dimIndex, fromCoord, toCoord, coordSys) {
+    var otherDimIndex = 1 - dimIndex;
+    var dimName = coordSys.dimensions[dimIndex];
+    return isInifinity(fromCoord[otherDimIndex]) && isInifinity(toCoord[otherDimIndex])
+        && fromCoord[dimIndex] === toCoord[dimIndex] && coordSys.getAxis(dimName).containData(fromCoord[dimIndex]);
+}
+
+function markLineFilter(coordSys, item) {
+    if (coordSys.type === 'cartesian2d') {
+        var fromCoord = item[0].coord;
+        var toCoord = item[1].coord;
+        // In case
+        // {
+        //  markLine: {
+        //    data: [{ yAxis: 2 }]
+        //  }
+        // }
+        if (
+            fromCoord && toCoord
+            && (ifMarkLineHasOnlyDim(1, fromCoord, toCoord, coordSys)
+            || ifMarkLineHasOnlyDim(0, fromCoord, toCoord, coordSys))
+        ) {
+            return true;
+        }
+    }
+    return dataFilter$1(coordSys, item[0])
+        && dataFilter$1(coordSys, item[1]);
+}
+
+function updateSingleMarkerEndLayout(
+    data, idx, isFrom, seriesModel, api
+) {
+    var coordSys = seriesModel.coordinateSystem;
+    var itemModel = data.getItemModel(idx);
+
+    var point;
+    var xPx = parsePercent$1(itemModel.get('x'), api.getWidth());
+    var yPx = parsePercent$1(itemModel.get('y'), api.getHeight());
+    if (!isNaN(xPx) && !isNaN(yPx)) {
+        point = [xPx, yPx];
+    }
+    else {
+        // Chart like bar may have there own marker positioning logic
+        if (seriesModel.getMarkerPosition) {
+            // Use the getMarkerPoisition
+            point = seriesModel.getMarkerPosition(
+                data.getValues(data.dimensions, idx)
+            );
+        }
+        else {
+            var dims = coordSys.dimensions;
+            var x = data.get(dims[0], idx);
+            var y = data.get(dims[1], idx);
+            point = coordSys.dataToPoint([x, y]);
+        }
+        // Expand line to the edge of grid if value on one axis is Inifnity
+        // In case
+        //  markLine: {
+        //    data: [{
+        //      yAxis: 2
+        //      // or
+        //      type: 'average'
+        //    }]
+        //  }
+        if (coordSys.type === 'cartesian2d') {
+            var xAxis = coordSys.getAxis('x');
+            var yAxis = coordSys.getAxis('y');
+            var dims = coordSys.dimensions;
+            if (isInifinity(data.get(dims[0], idx))) {
+                point[0] = xAxis.toGlobalCoord(xAxis.getExtent()[isFrom ? 0 : 1]);
+            }
+            else if (isInifinity(data.get(dims[1], idx))) {
+                point[1] = yAxis.toGlobalCoord(yAxis.getExtent()[isFrom ? 0 : 1]);
+            }
+        }
+
+        // Use x, y if has any
+        if (!isNaN(xPx)) {
+            point[0] = xPx;
+        }
+        if (!isNaN(yPx)) {
+            point[1] = yPx;
+        }
+    }
+
+    data.setItemLayout(idx, point);
+}
+
+MarkerView.extend({
+
+    type: 'markLine',
+
+    // updateLayout: function (markLineModel, ecModel, api) {
+    //     ecModel.eachSeries(function (seriesModel) {
+    //         var mlModel = seriesModel.markLineModel;
+    //         if (mlModel) {
+    //             var mlData = mlModel.getData();
+    //             var fromData = mlModel.__from;
+    //             var toData = mlModel.__to;
+    //             // Update visual and layout of from symbol and to symbol
+    //             fromData.each(function (idx) {
+    //                 updateSingleMarkerEndLayout(fromData, idx, true, seriesModel, api);
+    //                 updateSingleMarkerEndLayout(toData, idx, false, seriesModel, api);
+    //             });
+    //             // Update layout of line
+    //             mlData.each(function (idx) {
+    //                 mlData.setItemLayout(idx, [
+    //                     fromData.getItemLayout(idx),
+    //                     toData.getItemLayout(idx)
+    //                 ]);
+    //             });
+
+    //             this.markerGroupMap.get(seriesModel.id).updateLayout();
+
+    //         }
+    //     }, this);
+    // },
+
+    updateTransform: function (markLineModel, ecModel, api) {
+        ecModel.eachSeries(function (seriesModel) {
+            var mlModel = seriesModel.markLineModel;
+            if (mlModel) {
+                var mlData = mlModel.getData();
+                var fromData = mlModel.__from;
+                var toData = mlModel.__to;
+                // Update visual and layout of from symbol and to symbol
+                fromData.each(function (idx) {
+                    updateSingleMarkerEndLayout(fromData, idx, true, seriesModel, api);
+                    updateSingleMarkerEndLayout(toData, idx, false, seriesModel, api);
+                });
+                // Update layout of line
+                mlData.each(function (idx) {
+                    mlData.setItemLayout(idx, [
+                        fromData.getItemLayout(idx),
+                        toData.getItemLayout(idx)
+                    ]);
+                });
+
+                this.markerGroupMap.get(seriesModel.id).updateLayout();
+
+            }
+        }, this);
+    },
+
+    renderSeries: function (seriesModel, mlModel, ecModel, api) {
+        var coordSys = seriesModel.coordinateSystem;
+        var seriesId = seriesModel.id;
+        var seriesData = seriesModel.getData();
+
+        var lineDrawMap = this.markerGroupMap;
+        var lineDraw = lineDrawMap.get(seriesId)
+            || lineDrawMap.set(seriesId, new LineDraw());
+        this.group.add(lineDraw.group);
+
+        var mlData = createList$2(coordSys, seriesModel, mlModel);
+
+        var fromData = mlData.from;
+        var toData = mlData.to;
+        var lineData = mlData.line;
+
+        mlModel.__from = fromData;
+        mlModel.__to = toData;
+        // Line data for tooltip and formatter
+        mlModel.setData(lineData);
+
+        var symbolType = mlModel.get('symbol');
+        var symbolSize = mlModel.get('symbolSize');
+        if (!isArray(symbolType)) {
+            symbolType = [symbolType, symbolType];
+        }
+        if (typeof symbolSize === 'number') {
+            symbolSize = [symbolSize, symbolSize];
+        }
+
+        // Update visual and layout of from symbol and to symbol
+        mlData.from.each(function (idx) {
+            updateDataVisualAndLayout(fromData, idx, true);
+            updateDataVisualAndLayout(toData, idx, false);
+        });
+
+        // Update visual and layout of line
+        lineData.each(function (idx) {
+            var lineColor = lineData.getItemModel(idx).get('lineStyle.color');
+            lineData.setItemVisual(idx, {
