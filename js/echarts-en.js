@@ -87044,3 +87044,293 @@ MarkerView.extend({
         lineData.each(function (idx) {
             var lineColor = lineData.getItemModel(idx).get('lineStyle.color');
             lineData.setItemVisual(idx, {
+                color: lineColor || fromData.getItemVisual(idx, 'color')
+            });
+            lineData.setItemLayout(idx, [
+                fromData.getItemLayout(idx),
+                toData.getItemLayout(idx)
+            ]);
+
+            lineData.setItemVisual(idx, {
+                'fromSymbolSize': fromData.getItemVisual(idx, 'symbolSize'),
+                'fromSymbol': fromData.getItemVisual(idx, 'symbol'),
+                'toSymbolSize': toData.getItemVisual(idx, 'symbolSize'),
+                'toSymbol': toData.getItemVisual(idx, 'symbol')
+            });
+        });
+
+        lineDraw.updateData(lineData);
+
+        // Set host model for tooltip
+        // FIXME
+        mlData.line.eachItemGraphicEl(function (el, idx) {
+            el.traverse(function (child) {
+                child.dataModel = mlModel;
+            });
+        });
+
+        function updateDataVisualAndLayout(data, idx, isFrom) {
+            var itemModel = data.getItemModel(idx);
+
+            updateSingleMarkerEndLayout(
+                data, idx, isFrom, seriesModel, api
+            );
+
+            data.setItemVisual(idx, {
+                symbolSize: itemModel.get('symbolSize') || symbolSize[isFrom ? 0 : 1],
+                symbol: itemModel.get('symbol', true) || symbolType[isFrom ? 0 : 1],
+                color: itemModel.get('itemStyle.color') || seriesData.getVisual('color')
+            });
+        }
+
+        lineDraw.__keep = true;
+
+        lineDraw.group.silent = mlModel.get('silent') || seriesModel.get('silent');
+    }
+});
+
+/**
+ * @inner
+ * @param {module:echarts/coord/*} coordSys
+ * @param {module:echarts/model/Series} seriesModel
+ * @param {module:echarts/model/Model} mpModel
+ */
+function createList$2(coordSys, seriesModel, mlModel) {
+
+    var coordDimsInfos;
+    if (coordSys) {
+        coordDimsInfos = map(coordSys && coordSys.dimensions, function (coordDim) {
+            var info = seriesModel.getData().getDimensionInfo(
+                seriesModel.getData().mapDimension(coordDim)
+            ) || {};
+            // In map series data don't have lng and lat dimension. Fallback to same with coordSys
+            return defaults({name: coordDim}, info);
+        });
+    }
+    else {
+        coordDimsInfos = [{
+            name: 'value',
+            type: 'float'
+        }];
+    }
+
+    var fromData = new List(coordDimsInfos, mlModel);
+    var toData = new List(coordDimsInfos, mlModel);
+    // No dimensions
+    var lineData = new List([], mlModel);
+
+    var optData = map(mlModel.get('data'), curry(
+        markLineTransform, seriesModel, coordSys, mlModel
+    ));
+    if (coordSys) {
+        optData = filter(
+            optData, curry(markLineFilter, coordSys)
+        );
+    }
+    var dimValueGetter$$1 = coordSys ? dimValueGetter : function (item) {
+        return item.value;
+    };
+    fromData.initData(
+        map(optData, function (item) {
+            return item[0];
+        }),
+        null,
+        dimValueGetter$$1
+    );
+    toData.initData(
+        map(optData, function (item) {
+            return item[1];
+        }),
+        null,
+        dimValueGetter$$1
+    );
+    lineData.initData(
+        map(optData, function (item) {
+            return item[2];
+        })
+    );
+    lineData.hasItemOption = true;
+
+    return {
+        from: fromData,
+        to: toData,
+        line: lineData
+    };
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+registerPreprocessor(function (opt) {
+    // Make sure markLine component is enabled
+    opt.markLine = opt.markLine || {};
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+MarkerModel.extend({
+
+    type: 'markArea',
+
+    defaultOption: {
+        zlevel: 0,
+        // PENDING
+        z: 1,
+        tooltip: {
+            trigger: 'item'
+        },
+        // markArea should fixed on the coordinate system
+        animation: false,
+        label: {
+            show: true,
+            position: 'top'
+        },
+        itemStyle: {
+            // color and borderColor default to use color from series
+            // color: 'auto'
+            // borderColor: 'auto'
+            borderWidth: 0
+        },
+
+        emphasis: {
+            label: {
+                show: true,
+                position: 'top'
+            }
+        }
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// TODO Better on polar
+
+var markAreaTransform = function (seriesModel, coordSys, maModel, item) {
+    var lt = dataTransform(seriesModel, item[0]);
+    var rb = dataTransform(seriesModel, item[1]);
+    var retrieve$$1 = retrieve;
+
+    // FIXME make sure lt is less than rb
+    var ltCoord = lt.coord;
+    var rbCoord = rb.coord;
+    ltCoord[0] = retrieve$$1(ltCoord[0], -Infinity);
+    ltCoord[1] = retrieve$$1(ltCoord[1], -Infinity);
+
+    rbCoord[0] = retrieve$$1(rbCoord[0], Infinity);
+    rbCoord[1] = retrieve$$1(rbCoord[1], Infinity);
+
+    // Merge option into one
+    var result = mergeAll([{}, lt, rb]);
+
+    result.coord = [
+        lt.coord, rb.coord
+    ];
+    result.x0 = lt.x;
+    result.y0 = lt.y;
+    result.x1 = rb.x;
+    result.y1 = rb.y;
+    return result;
+};
+
+function isInifinity$1(val) {
+    return !isNaN(val) && !isFinite(val);
+}
+
+// If a markArea has one dim
+function ifMarkLineHasOnlyDim$1(dimIndex, fromCoord, toCoord, coordSys) {
+    var otherDimIndex = 1 - dimIndex;
+    return isInifinity$1(fromCoord[otherDimIndex]) && isInifinity$1(toCoord[otherDimIndex]);
+}
+
+function markAreaFilter(coordSys, item) {
+    var fromCoord = item.coord[0];
+    var toCoord = item.coord[1];
+    if (coordSys.type === 'cartesian2d') {
+        // In case
+        // {
+        //  markArea: {
+        //    data: [{ yAxis: 2 }]
+        //  }
+        // }
+        if (
+            fromCoord && toCoord
+            && (ifMarkLineHasOnlyDim$1(1, fromCoord, toCoord, coordSys)
+            || ifMarkLineHasOnlyDim$1(0, fromCoord, toCoord, coordSys))
+        ) {
+            return true;
+        }
+    }
+    return dataFilter$1(coordSys, {
+            coord: fromCoord,
+            x: item.x0,
+            y: item.y0
+        })
+        || dataFilter$1(coordSys, {
+            coord: toCoord,
+            x: item.x1,
+            y: item.y1
+        });
+}
+
+// dims can be ['x0', 'y0'], ['x1', 'y1'], ['x0', 'y1'], ['x1', 'y0']
+function getSingleMarkerEndPoint(data, idx, dims, seriesModel, api) {
+    var coordSys = seriesModel.coordinateSystem;
+    var itemModel = data.getItemModel(idx);
+
+    var point;
+    var xPx = parsePercent$1(itemModel.get(dims[0]), api.getWidth());
+    var yPx = parsePercent$1(itemModel.get(dims[1]), api.getHeight());
+    if (!isNaN(xPx) && !isNaN(yPx)) {
+        point = [xPx, yPx];
+    }
+    else {
