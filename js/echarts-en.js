@@ -87334,3 +87334,307 @@ function getSingleMarkerEndPoint(data, idx, dims, seriesModel, api) {
         point = [xPx, yPx];
     }
     else {
+        // Chart like bar may have there own marker positioning logic
+        if (seriesModel.getMarkerPosition) {
+            // Use the getMarkerPoisition
+            point = seriesModel.getMarkerPosition(
+                data.getValues(dims, idx)
+            );
+        }
+        else {
+            var x = data.get(dims[0], idx);
+            var y = data.get(dims[1], idx);
+            var pt = [x, y];
+            coordSys.clampData && coordSys.clampData(pt, pt);
+            point = coordSys.dataToPoint(pt, true);
+        }
+        if (coordSys.type === 'cartesian2d') {
+            var xAxis = coordSys.getAxis('x');
+            var yAxis = coordSys.getAxis('y');
+            var x = data.get(dims[0], idx);
+            var y = data.get(dims[1], idx);
+            if (isInifinity$1(x)) {
+                point[0] = xAxis.toGlobalCoord(xAxis.getExtent()[dims[0] === 'x0' ? 0 : 1]);
+            }
+            else if (isInifinity$1(y)) {
+                point[1] = yAxis.toGlobalCoord(yAxis.getExtent()[dims[1] === 'y0' ? 0 : 1]);
+            }
+        }
+
+        // Use x, y if has any
+        if (!isNaN(xPx)) {
+            point[0] = xPx;
+        }
+        if (!isNaN(yPx)) {
+            point[1] = yPx;
+        }
+    }
+
+    return point;
+}
+
+var dimPermutations = [['x0', 'y0'], ['x1', 'y0'], ['x1', 'y1'], ['x0', 'y1']];
+
+MarkerView.extend({
+
+    type: 'markArea',
+
+    // updateLayout: function (markAreaModel, ecModel, api) {
+    //     ecModel.eachSeries(function (seriesModel) {
+    //         var maModel = seriesModel.markAreaModel;
+    //         if (maModel) {
+    //             var areaData = maModel.getData();
+    //             areaData.each(function (idx) {
+    //                 var points = zrUtil.map(dimPermutations, function (dim) {
+    //                     return getSingleMarkerEndPoint(areaData, idx, dim, seriesModel, api);
+    //                 });
+    //                 // Layout
+    //                 areaData.setItemLayout(idx, points);
+    //                 var el = areaData.getItemGraphicEl(idx);
+    //                 el.setShape('points', points);
+    //             });
+    //         }
+    //     }, this);
+    // },
+
+    updateTransform: function (markAreaModel, ecModel, api) {
+        ecModel.eachSeries(function (seriesModel) {
+            var maModel = seriesModel.markAreaModel;
+            if (maModel) {
+                var areaData = maModel.getData();
+                areaData.each(function (idx) {
+                    var points = map(dimPermutations, function (dim) {
+                        return getSingleMarkerEndPoint(areaData, idx, dim, seriesModel, api);
+                    });
+                    // Layout
+                    areaData.setItemLayout(idx, points);
+                    var el = areaData.getItemGraphicEl(idx);
+                    el.setShape('points', points);
+                });
+            }
+        }, this);
+    },
+
+    renderSeries: function (seriesModel, maModel, ecModel, api) {
+        var coordSys = seriesModel.coordinateSystem;
+        var seriesId = seriesModel.id;
+        var seriesData = seriesModel.getData();
+
+        var areaGroupMap = this.markerGroupMap;
+        var polygonGroup = areaGroupMap.get(seriesId)
+            || areaGroupMap.set(seriesId, {group: new Group()});
+
+        this.group.add(polygonGroup.group);
+        polygonGroup.__keep = true;
+
+        var areaData = createList$3(coordSys, seriesModel, maModel);
+
+        // Line data for tooltip and formatter
+        maModel.setData(areaData);
+
+        // Update visual and layout of line
+        areaData.each(function (idx) {
+            // Layout
+            areaData.setItemLayout(idx, map(dimPermutations, function (dim) {
+                return getSingleMarkerEndPoint(areaData, idx, dim, seriesModel, api);
+            }));
+
+            // Visual
+            areaData.setItemVisual(idx, {
+                color: seriesData.getVisual('color')
+            });
+        });
+
+
+        areaData.diff(polygonGroup.__data)
+            .add(function (idx) {
+                var polygon = new Polygon({
+                    shape: {
+                        points: areaData.getItemLayout(idx)
+                    }
+                });
+                areaData.setItemGraphicEl(idx, polygon);
+                polygonGroup.group.add(polygon);
+            })
+            .update(function (newIdx, oldIdx) {
+                var polygon = polygonGroup.__data.getItemGraphicEl(oldIdx);
+                updateProps(polygon, {
+                    shape: {
+                        points: areaData.getItemLayout(newIdx)
+                    }
+                }, maModel, newIdx);
+                polygonGroup.group.add(polygon);
+                areaData.setItemGraphicEl(newIdx, polygon);
+            })
+            .remove(function (idx) {
+                var polygon = polygonGroup.__data.getItemGraphicEl(idx);
+                polygonGroup.group.remove(polygon);
+            })
+            .execute();
+
+        areaData.eachItemGraphicEl(function (polygon, idx) {
+            var itemModel = areaData.getItemModel(idx);
+            var labelModel = itemModel.getModel('label');
+            var labelHoverModel = itemModel.getModel('emphasis.label');
+            var color = areaData.getItemVisual(idx, 'color');
+            polygon.useStyle(
+                defaults(
+                    itemModel.getModel('itemStyle').getItemStyle(),
+                    {
+                        fill: modifyAlpha(color, 0.4),
+                        stroke: color
+                    }
+                )
+            );
+
+            polygon.hoverStyle = itemModel.getModel('emphasis.itemStyle').getItemStyle();
+
+            setLabelStyle(
+                polygon.style, polygon.hoverStyle, labelModel, labelHoverModel,
+                {
+                    labelFetcher: maModel,
+                    labelDataIndex: idx,
+                    defaultText: areaData.getName(idx) || '',
+                    isRectText: true,
+                    autoColor: color
+                }
+            );
+
+            setHoverStyle(polygon, {});
+
+            polygon.dataModel = maModel;
+        });
+
+        polygonGroup.__data = areaData;
+
+        polygonGroup.group.silent = maModel.get('silent') || seriesModel.get('silent');
+    }
+});
+
+/**
+ * @inner
+ * @param {module:echarts/coord/*} coordSys
+ * @param {module:echarts/model/Series} seriesModel
+ * @param {module:echarts/model/Model} mpModel
+ */
+function createList$3(coordSys, seriesModel, maModel) {
+
+    var coordDimsInfos;
+    var areaData;
+    var dims = ['x0', 'y0', 'x1', 'y1'];
+    if (coordSys) {
+        coordDimsInfos = map(coordSys && coordSys.dimensions, function (coordDim) {
+            var data = seriesModel.getData();
+            var info = data.getDimensionInfo(
+                data.mapDimension(coordDim)
+            ) || {};
+            // In map series data don't have lng and lat dimension. Fallback to same with coordSys
+            return defaults({name: coordDim}, info);
+        });
+        areaData = new List(map(dims, function (dim, idx) {
+            return {
+                name: dim,
+                type: coordDimsInfos[idx % 2].type
+            };
+        }), maModel);
+    }
+    else {
+        coordDimsInfos = [{
+            name: 'value',
+            type: 'float'
+        }];
+        areaData = new List(coordDimsInfos, maModel);
+    }
+
+    var optData = map(maModel.get('data'), curry(
+        markAreaTransform, seriesModel, coordSys, maModel
+    ));
+    if (coordSys) {
+        optData = filter(
+            optData, curry(markAreaFilter, coordSys)
+        );
+    }
+
+    var dimValueGetter$$1 = coordSys ? function (item, dimName, dataIndex, dimIndex) {
+        return item.coord[Math.floor(dimIndex / 2)][dimIndex % 2];
+    } : function (item) {
+        return item.value;
+    };
+    areaData.initData(optData, null, dimValueGetter$$1);
+    areaData.hasItemOption = true;
+    return areaData;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+registerPreprocessor(function (opt) {
+    // Make sure markArea component is enabled
+    opt.markArea = opt.markArea || {};
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var preprocessor$3 = function (option) {
+    var timelineOpt = option && option.timeline;
+
+    if (!isArray(timelineOpt)) {
+        timelineOpt = timelineOpt ? [timelineOpt] : [];
+    }
+
+    each$1(timelineOpt, function (opt) {
+        if (!opt) {
+            return;
+        }
+
+        compatibleEC2(opt);
+    });
+};
+
+function compatibleEC2(opt) {
+    var type = opt.type;
+
+    var ec2Types = {'number': 'value', 'time': 'time'};
+
+    // Compatible with ec2
+    if (ec2Types[type]) {
+        opt.axisType = ec2Types[type];
+        delete opt.type;
+    }
+
+    transferItem(opt);
+
+    if (has$2(opt, 'controlPosition')) {
