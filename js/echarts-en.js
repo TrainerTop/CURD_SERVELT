@@ -87638,3 +87638,276 @@ function compatibleEC2(opt) {
     transferItem(opt);
 
     if (has$2(opt, 'controlPosition')) {
+        var controlStyle = opt.controlStyle || (opt.controlStyle = {});
+        if (!has$2(controlStyle, 'position')) {
+            controlStyle.position = opt.controlPosition;
+        }
+        if (controlStyle.position === 'none' && !has$2(controlStyle, 'show')) {
+            controlStyle.show = false;
+            delete controlStyle.position;
+        }
+        delete opt.controlPosition;
+    }
+
+    each$1(opt.data || [], function (dataItem) {
+        if (isObject$1(dataItem) && !isArray(dataItem)) {
+            if (!has$2(dataItem, 'value') && has$2(dataItem, 'name')) {
+                // In ec2, using name as value.
+                dataItem.value = dataItem.name;
+            }
+            transferItem(dataItem);
+        }
+    });
+}
+
+function transferItem(opt) {
+    var itemStyle = opt.itemStyle || (opt.itemStyle = {});
+
+    var itemStyleEmphasis = itemStyle.emphasis || (itemStyle.emphasis = {});
+
+    // Transfer label out
+    var label = opt.label || (opt.label || {});
+    var labelNormal = label.normal || (label.normal = {});
+    var excludeLabelAttr = {normal: 1, emphasis: 1};
+
+    each$1(label, function (value, name) {
+        if (!excludeLabelAttr[name] && !has$2(labelNormal, name)) {
+            labelNormal[name] = value;
+        }
+    });
+
+    if (itemStyleEmphasis.label && !has$2(label, 'emphasis')) {
+        label.emphasis = itemStyleEmphasis.label;
+        delete itemStyleEmphasis.label;
+    }
+}
+
+function has$2(obj, attr) {
+    return obj.hasOwnProperty(attr);
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+ComponentModel.registerSubTypeDefaulter('timeline', function () {
+    // Only slider now.
+    return 'slider';
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+registerAction(
+
+    {type: 'timelineChange', event: 'timelineChanged', update: 'prepareAndUpdate'},
+
+    function (payload, ecModel) {
+
+        var timelineModel = ecModel.getComponent('timeline');
+        if (timelineModel && payload.currentIndex != null) {
+            timelineModel.setCurrentIndex(payload.currentIndex);
+
+            if (!timelineModel.get('loop', true) && timelineModel.isIndexMax()) {
+                timelineModel.setPlayState(false);
+            }
+        }
+
+        // Set normalized currentIndex to payload.
+        ecModel.resetOption('timeline');
+
+        return defaults({
+            currentIndex: timelineModel.option.currentIndex
+        }, payload);
+    }
+);
+
+registerAction(
+
+    {type: 'timelinePlayChange', event: 'timelinePlayChanged', update: 'update'},
+
+    function (payload, ecModel) {
+        var timelineModel = ecModel.getComponent('timeline');
+        if (timelineModel && payload.playState != null) {
+            timelineModel.setPlayState(payload.playState);
+        }
+    }
+);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var TimelineModel = ComponentModel.extend({
+
+    type: 'timeline',
+
+    layoutMode: 'box',
+
+    /**
+     * @protected
+     */
+    defaultOption: {
+
+        zlevel: 0,                  // 一级层叠
+        z: 4,                       // 二级层叠
+        show: true,
+
+        axisType: 'time',  // 模式是时间类型，支持 value, category
+
+        realtime: true,
+
+        left: '20%',
+        top: null,
+        right: '20%',
+        bottom: 0,
+        width: null,
+        height: 40,
+        padding: 5,
+
+        controlPosition: 'left',           // 'left' 'right' 'top' 'bottom' 'none'
+        autoPlay: false,
+        rewind: false,                     // 反向播放
+        loop: true,
+        playInterval: 2000,                // 播放时间间隔，单位ms
+
+        currentIndex: 0,
+
+        itemStyle: {},
+        label: {
+            color: '#000'
+        },
+
+        data: []
+    },
+
+    /**
+     * @override
+     */
+    init: function (option, parentModel, ecModel) {
+
+        /**
+         * @private
+         * @type {module:echarts/data/List}
+         */
+        this._data;
+
+        /**
+         * @private
+         * @type {Array.<string>}
+         */
+        this._names;
+
+        this.mergeDefaultAndTheme(option, ecModel);
+        this._initData();
+    },
+
+    /**
+     * @override
+     */
+    mergeOption: function (option) {
+        TimelineModel.superApply(this, 'mergeOption', arguments);
+        this._initData();
+    },
+
+    /**
+     * @param {number} [currentIndex]
+     */
+    setCurrentIndex: function (currentIndex) {
+        if (currentIndex == null) {
+            currentIndex = this.option.currentIndex;
+        }
+        var count = this._data.count();
+
+        if (this.option.loop) {
+            currentIndex = (currentIndex % count + count) % count;
+        }
+        else {
+            currentIndex >= count && (currentIndex = count - 1);
+            currentIndex < 0 && (currentIndex = 0);
+        }
+
+        this.option.currentIndex = currentIndex;
+    },
+
+    /**
+     * @return {number} currentIndex
+     */
+    getCurrentIndex: function () {
+        return this.option.currentIndex;
+    },
+
+    /**
+     * @return {boolean}
+     */
+    isIndexMax: function () {
+        return this.getCurrentIndex() >= this._data.count() - 1;
+    },
+
+    /**
+     * @param {boolean} state true: play, false: stop
+     */
+    setPlayState: function (state) {
+        this.option.autoPlay = !!state;
+    },
+
+    /**
+     * @return {boolean} true: play, false: stop
+     */
+    getPlayState: function () {
+        return !!this.option.autoPlay;
+    },
+
+    /**
+     * @private
+     */
+    _initData: function () {
+        var thisOption = this.option;
+        var dataArr = thisOption.data || [];
+        var axisType = thisOption.axisType;
