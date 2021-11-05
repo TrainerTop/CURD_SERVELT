@@ -88460,3 +88460,266 @@ TimelineView.extend({
         }
 
         function toBound(fromPos, from, to, dimIdx, boundIdx) {
+            fromPos[dimIdx] += to[dimIdx][boundIdx] - from[dimIdx][boundIdx];
+        }
+    },
+
+    _createAxis: function (layoutInfo, timelineModel) {
+        var data = timelineModel.getData();
+        var axisType = timelineModel.get('axisType');
+
+        var scale = createScaleByModel(timelineModel, axisType);
+
+        // Customize scale. The `tickValue` is `dataIndex`.
+        scale.getTicks = function () {
+            return data.mapArray(['value'], function (value) {
+                return value;
+            });
+        };
+
+        var dataExtent = data.getDataExtent('value');
+        scale.setExtent(dataExtent[0], dataExtent[1]);
+        scale.niceTicks();
+
+        var axis = new TimelineAxis('value', scale, layoutInfo.axisExtent, axisType);
+        axis.model = timelineModel;
+
+        return axis;
+    },
+
+    _createGroup: function (name) {
+        var newGroup = this['_' + name] = new Group();
+        this.group.add(newGroup);
+        return newGroup;
+    },
+
+    _renderAxisLine: function (layoutInfo, group, axis, timelineModel) {
+        var axisExtent = axis.getExtent();
+
+        if (!timelineModel.get('lineStyle.show')) {
+            return;
+        }
+
+        group.add(new Line({
+            shape: {
+                x1: axisExtent[0], y1: 0,
+                x2: axisExtent[1], y2: 0
+            },
+            style: extend(
+                {lineCap: 'round'},
+                timelineModel.getModel('lineStyle').getLineStyle()
+            ),
+            silent: true,
+            z2: 1
+        }));
+    },
+
+    /**
+     * @private
+     */
+    _renderAxisTick: function (layoutInfo, group, axis, timelineModel) {
+        var data = timelineModel.getData();
+        // Show all ticks, despite ignoring strategy.
+        var ticks = axis.scale.getTicks();
+
+        // The value is dataIndex, see the costomized scale.
+        each$27(ticks, function (value) {
+            var tickCoord = axis.dataToCoord(value);
+            var itemModel = data.getItemModel(value);
+            var itemStyleModel = itemModel.getModel('itemStyle');
+            var hoverStyleModel = itemModel.getModel('emphasis.itemStyle');
+            var symbolOpt = {
+                position: [tickCoord, 0],
+                onclick: bind$6(this._changeTimeline, this, value)
+            };
+            var el = giveSymbol(itemModel, itemStyleModel, group, symbolOpt);
+            setHoverStyle(el, hoverStyleModel.getItemStyle());
+
+            if (itemModel.get('tooltip')) {
+                el.dataIndex = value;
+                el.dataModel = timelineModel;
+            }
+            else {
+                el.dataIndex = el.dataModel = null;
+            }
+
+        }, this);
+    },
+
+    /**
+     * @private
+     */
+    _renderAxisLabel: function (layoutInfo, group, axis, timelineModel) {
+        var labelModel = axis.getLabelModel();
+
+        if (!labelModel.get('show')) {
+            return;
+        }
+
+        var data = timelineModel.getData();
+        var labels = axis.getViewLabels();
+
+        each$27(labels, function (labelItem) {
+            // The tickValue is dataIndex, see the costomized scale.
+            var dataIndex = labelItem.tickValue;
+
+            var itemModel = data.getItemModel(dataIndex);
+            var normalLabelModel = itemModel.getModel('label');
+            var hoverLabelModel = itemModel.getModel('emphasis.label');
+            var tickCoord = axis.dataToCoord(labelItem.tickValue);
+            var textEl = new Text({
+                position: [tickCoord, 0],
+                rotation: layoutInfo.labelRotation - layoutInfo.rotation,
+                onclick: bind$6(this._changeTimeline, this, dataIndex),
+                silent: false
+            });
+            setTextStyle(textEl.style, normalLabelModel, {
+                text: labelItem.formattedLabel,
+                textAlign: layoutInfo.labelAlign,
+                textVerticalAlign: layoutInfo.labelBaseline
+            });
+
+            group.add(textEl);
+            setHoverStyle(
+                textEl, setTextStyle({}, hoverLabelModel)
+            );
+
+        }, this);
+    },
+
+    /**
+     * @private
+     */
+    _renderControl: function (layoutInfo, group, axis, timelineModel) {
+        var controlSize = layoutInfo.controlSize;
+        var rotation = layoutInfo.rotation;
+
+        var itemStyle = timelineModel.getModel('controlStyle').getItemStyle();
+        var hoverStyle = timelineModel.getModel('emphasis.controlStyle').getItemStyle();
+        var rect = [0, -controlSize / 2, controlSize, controlSize];
+        var playState = timelineModel.getPlayState();
+        var inverse = timelineModel.get('inverse', true);
+
+        makeBtn(
+            layoutInfo.nextBtnPosition,
+            'controlStyle.nextIcon',
+            bind$6(this._changeTimeline, this, inverse ? '-' : '+')
+        );
+        makeBtn(
+            layoutInfo.prevBtnPosition,
+            'controlStyle.prevIcon',
+            bind$6(this._changeTimeline, this, inverse ? '+' : '-')
+        );
+        makeBtn(
+            layoutInfo.playPosition,
+            'controlStyle.' + (playState ? 'stopIcon' : 'playIcon'),
+            bind$6(this._handlePlayClick, this, !playState),
+            true
+        );
+
+        function makeBtn(position, iconPath, onclick, willRotate) {
+            if (!position) {
+                return;
+            }
+            var opt = {
+                position: position,
+                origin: [controlSize / 2, 0],
+                rotation: willRotate ? -rotation : 0,
+                rectHover: true,
+                style: itemStyle,
+                onclick: onclick
+            };
+            var btn = makeIcon(timelineModel, iconPath, rect, opt);
+            group.add(btn);
+            setHoverStyle(btn, hoverStyle);
+        }
+    },
+
+    _renderCurrentPointer: function (layoutInfo, group, axis, timelineModel) {
+        var data = timelineModel.getData();
+        var currentIndex = timelineModel.getCurrentIndex();
+        var pointerModel = data.getItemModel(currentIndex).getModel('checkpointStyle');
+        var me = this;
+
+        var callback = {
+            onCreate: function (pointer) {
+                pointer.draggable = true;
+                pointer.drift = bind$6(me._handlePointerDrag, me);
+                pointer.ondragend = bind$6(me._handlePointerDragend, me);
+                pointerMoveTo(pointer, currentIndex, axis, timelineModel, true);
+            },
+            onUpdate: function (pointer) {
+                pointerMoveTo(pointer, currentIndex, axis, timelineModel);
+            }
+        };
+
+        // Reuse when exists, for animation and drag.
+        this._currentPointer = giveSymbol(
+            pointerModel, pointerModel, this._mainGroup, {}, this._currentPointer, callback
+        );
+    },
+
+    _handlePlayClick: function (nextState) {
+        this._clearTimer();
+        this.api.dispatchAction({
+            type: 'timelinePlayChange',
+            playState: nextState,
+            from: this.uid
+        });
+    },
+
+    _handlePointerDrag: function (dx, dy, e) {
+        this._clearTimer();
+        this._pointerChangeTimeline([e.offsetX, e.offsetY]);
+    },
+
+    _handlePointerDragend: function (e) {
+        this._pointerChangeTimeline([e.offsetX, e.offsetY], true);
+    },
+
+    _pointerChangeTimeline: function (mousePos, trigger) {
+        var toCoord = this._toAxisCoord(mousePos)[0];
+
+        var axis = this._axis;
+        var axisExtent = asc(axis.getExtent().slice());
+
+        toCoord > axisExtent[1] && (toCoord = axisExtent[1]);
+        toCoord < axisExtent[0] && (toCoord = axisExtent[0]);
+
+        this._currentPointer.position[0] = toCoord;
+        this._currentPointer.dirty();
+
+        var targetDataIndex = this._findNearestTick(toCoord);
+        var timelineModel = this.model;
+
+        if (trigger || (
+            targetDataIndex !== timelineModel.getCurrentIndex()
+            && timelineModel.get('realtime')
+        )) {
+            this._changeTimeline(targetDataIndex);
+        }
+    },
+
+    _doPlayStop: function () {
+        this._clearTimer();
+
+        if (this.model.getPlayState()) {
+            this._timer = setTimeout(
+                bind$6(handleFrame, this),
+                this.model.get('playInterval')
+            );
+        }
+
+        function handleFrame() {
+            // Do not cache
+            var timelineModel = this.model;
+            this._changeTimeline(
+                timelineModel.getCurrentIndex()
+                + (timelineModel.get('rewind', true) ? -1 : 1)
+            );
+        }
+    },
+
+    _toAxisCoord: function (vertex) {
+        var trans = this._mainGroup.getLocalTransform();
+        return applyTransform$1(vertex, trans, true);
