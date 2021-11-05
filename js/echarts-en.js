@@ -88180,3 +88180,283 @@ inherits(TimelineAxis, Axis);
 * regarding copyright ownership.  The ASF licenses this file
 * to you under the Apache License, Version 2.0 (the
 * "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var bind$6 = bind;
+var each$27 = each$1;
+
+var PI$4 = Math.PI;
+
+TimelineView.extend({
+
+    type: 'timeline.slider',
+
+    init: function (ecModel, api) {
+
+        this.api = api;
+
+        /**
+         * @private
+         * @type {module:echarts/component/timeline/TimelineAxis}
+         */
+        this._axis;
+
+        /**
+         * @private
+         * @type {module:zrender/core/BoundingRect}
+         */
+        this._viewRect;
+
+        /**
+         * @type {number}
+         */
+        this._timer;
+
+        /**
+         * @type {module:zrender/Element}
+         */
+        this._currentPointer;
+
+        /**
+         * @type {module:zrender/container/Group}
+         */
+        this._mainGroup;
+
+        /**
+         * @type {module:zrender/container/Group}
+         */
+        this._labelGroup;
+    },
+
+    /**
+     * @override
+     */
+    render: function (timelineModel, ecModel, api, payload) {
+        this.model = timelineModel;
+        this.api = api;
+        this.ecModel = ecModel;
+
+        this.group.removeAll();
+
+        if (timelineModel.get('show', true)) {
+
+            var layoutInfo = this._layout(timelineModel, api);
+            var mainGroup = this._createGroup('mainGroup');
+            var labelGroup = this._createGroup('labelGroup');
+
+            /**
+             * @private
+             * @type {module:echarts/component/timeline/TimelineAxis}
+             */
+            var axis = this._axis = this._createAxis(layoutInfo, timelineModel);
+
+            timelineModel.formatTooltip = function (dataIndex) {
+                return encodeHTML(axis.scale.getLabel(dataIndex));
+            };
+
+            each$27(
+                ['AxisLine', 'AxisTick', 'Control', 'CurrentPointer'],
+                function (name) {
+                    this['_render' + name](layoutInfo, mainGroup, axis, timelineModel);
+                },
+                this
+            );
+
+            this._renderAxisLabel(layoutInfo, labelGroup, axis, timelineModel);
+            this._position(layoutInfo, timelineModel);
+        }
+
+        this._doPlayStop();
+    },
+
+    /**
+     * @override
+     */
+    remove: function () {
+        this._clearTimer();
+        this.group.removeAll();
+    },
+
+    /**
+     * @override
+     */
+    dispose: function () {
+        this._clearTimer();
+    },
+
+    _layout: function (timelineModel, api) {
+        var labelPosOpt = timelineModel.get('label.position');
+        var orient = timelineModel.get('orient');
+        var viewRect = getViewRect$4(timelineModel, api);
+        // Auto label offset.
+        if (labelPosOpt == null || labelPosOpt === 'auto') {
+            labelPosOpt = orient === 'horizontal'
+                ? ((viewRect.y + viewRect.height / 2) < api.getHeight() / 2 ? '-' : '+')
+                : ((viewRect.x + viewRect.width / 2) < api.getWidth() / 2 ? '+' : '-');
+        }
+        else if (isNaN(labelPosOpt)) {
+            labelPosOpt = ({
+                horizontal: {top: '-', bottom: '+'},
+                vertical: {left: '-', right: '+'}
+            })[orient][labelPosOpt];
+        }
+
+        var labelAlignMap = {
+            horizontal: 'center',
+            vertical: (labelPosOpt >= 0 || labelPosOpt === '+') ? 'left' : 'right'
+        };
+
+        var labelBaselineMap = {
+            horizontal: (labelPosOpt >= 0 || labelPosOpt === '+') ? 'top' : 'bottom',
+            vertical: 'middle'
+        };
+        var rotationMap = {
+            horizontal: 0,
+            vertical: PI$4 / 2
+        };
+
+        // Position
+        var mainLength = orient === 'vertical' ? viewRect.height : viewRect.width;
+
+        var controlModel = timelineModel.getModel('controlStyle');
+        var showControl = controlModel.get('show', true);
+        var controlSize = showControl ? controlModel.get('itemSize') : 0;
+        var controlGap = showControl ? controlModel.get('itemGap') : 0;
+        var sizePlusGap = controlSize + controlGap;
+
+        // Special label rotate.
+        var labelRotation = timelineModel.get('label.rotate') || 0;
+        labelRotation = labelRotation * PI$4 / 180; // To radian.
+
+        var playPosition;
+        var prevBtnPosition;
+        var nextBtnPosition;
+        var axisExtent;
+        var controlPosition = controlModel.get('position', true);
+        var showPlayBtn = showControl && controlModel.get('showPlayBtn', true);
+        var showPrevBtn = showControl && controlModel.get('showPrevBtn', true);
+        var showNextBtn = showControl && controlModel.get('showNextBtn', true);
+        var xLeft = 0;
+        var xRight = mainLength;
+
+        // position[0] means left, position[1] means middle.
+        if (controlPosition === 'left' || controlPosition === 'bottom') {
+            showPlayBtn && (playPosition = [0, 0], xLeft += sizePlusGap);
+            showPrevBtn && (prevBtnPosition = [xLeft, 0], xLeft += sizePlusGap);
+            showNextBtn && (nextBtnPosition = [xRight - controlSize, 0], xRight -= sizePlusGap);
+        }
+        else { // 'top' 'right'
+            showPlayBtn && (playPosition = [xRight - controlSize, 0], xRight -= sizePlusGap);
+            showPrevBtn && (prevBtnPosition = [0, 0], xLeft += sizePlusGap);
+            showNextBtn && (nextBtnPosition = [xRight - controlSize, 0], xRight -= sizePlusGap);
+        }
+        axisExtent = [xLeft, xRight];
+
+        if (timelineModel.get('inverse')) {
+            axisExtent.reverse();
+        }
+
+        return {
+            viewRect: viewRect,
+            mainLength: mainLength,
+            orient: orient,
+
+            rotation: rotationMap[orient],
+            labelRotation: labelRotation,
+            labelPosOpt: labelPosOpt,
+            labelAlign: timelineModel.get('label.align') || labelAlignMap[orient],
+            labelBaseline: timelineModel.get('label.verticalAlign')
+                || timelineModel.get('label.baseline')
+                || labelBaselineMap[orient],
+
+            // Based on mainGroup.
+            playPosition: playPosition,
+            prevBtnPosition: prevBtnPosition,
+            nextBtnPosition: nextBtnPosition,
+            axisExtent: axisExtent,
+
+            controlSize: controlSize,
+            controlGap: controlGap
+        };
+    },
+
+    _position: function (layoutInfo, timelineModel) {
+        // Position is be called finally, because bounding rect is needed for
+        // adapt content to fill viewRect (auto adapt offset).
+
+        // Timeline may be not all in the viewRect when 'offset' is specified
+        // as a number, because it is more appropriate that label aligns at
+        // 'offset' but not the other edge defined by viewRect.
+
+        var mainGroup = this._mainGroup;
+        var labelGroup = this._labelGroup;
+
+        var viewRect = layoutInfo.viewRect;
+        if (layoutInfo.orient === 'vertical') {
+            // transform to horizontal, inverse rotate by left-top point.
+            var m = create$1();
+            var rotateOriginX = viewRect.x;
+            var rotateOriginY = viewRect.y + viewRect.height;
+            translate(m, m, [-rotateOriginX, -rotateOriginY]);
+            rotate(m, m, -PI$4 / 2);
+            translate(m, m, [rotateOriginX, rotateOriginY]);
+            viewRect = viewRect.clone();
+            viewRect.applyTransform(m);
+        }
+
+        var viewBound = getBound(viewRect);
+        var mainBound = getBound(mainGroup.getBoundingRect());
+        var labelBound = getBound(labelGroup.getBoundingRect());
+
+        var mainPosition = mainGroup.position;
+        var labelsPosition = labelGroup.position;
+
+        labelsPosition[0] = mainPosition[0] = viewBound[0][0];
+
+        var labelPosOpt = layoutInfo.labelPosOpt;
+
+        if (isNaN(labelPosOpt)) { // '+' or '-'
+            var mainBoundIdx = labelPosOpt === '+' ? 0 : 1;
+            toBound(mainPosition, mainBound, viewBound, 1, mainBoundIdx);
+            toBound(labelsPosition, labelBound, viewBound, 1, 1 - mainBoundIdx);
+        }
+        else {
+            var mainBoundIdx = labelPosOpt >= 0 ? 0 : 1;
+            toBound(mainPosition, mainBound, viewBound, 1, mainBoundIdx);
+            labelsPosition[1] = mainPosition[1] + labelPosOpt;
+        }
+
+        mainGroup.attr('position', mainPosition);
+        labelGroup.attr('position', labelsPosition);
+        mainGroup.rotation = labelGroup.rotation = layoutInfo.rotation;
+
+        setOrigin(mainGroup);
+        setOrigin(labelGroup);
+
+        function setOrigin(targetGroup) {
+            var pos = targetGroup.position;
+            targetGroup.origin = [
+                viewBound[0][0] - pos[0],
+                viewBound[1][0] - pos[1]
+            ];
+        }
+
+        function getBound(rect) {
+            // [[xmin, xmax], [ymin, ymax]]
+            return [
+                [rect.x, rect.x + rect.width],
+                [rect.y, rect.y + rect.height]
+            ];
+        }
+
+        function toBound(fromPos, from, to, dimIdx, boundIdx) {
