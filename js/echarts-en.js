@@ -88723,3 +88723,302 @@ TimelineView.extend({
     _toAxisCoord: function (vertex) {
         var trans = this._mainGroup.getLocalTransform();
         return applyTransform$1(vertex, trans, true);
+    },
+
+    _findNearestTick: function (axisCoord) {
+        var data = this.model.getData();
+        var dist = Infinity;
+        var targetDataIndex;
+        var axis = this._axis;
+
+        data.each(['value'], function (value, dataIndex) {
+            var coord = axis.dataToCoord(value);
+            var d = Math.abs(coord - axisCoord);
+            if (d < dist) {
+                dist = d;
+                targetDataIndex = dataIndex;
+            }
+        });
+
+        return targetDataIndex;
+    },
+
+    _clearTimer: function () {
+        if (this._timer) {
+            clearTimeout(this._timer);
+            this._timer = null;
+        }
+    },
+
+    _changeTimeline: function (nextIndex) {
+        var currentIndex = this.model.getCurrentIndex();
+
+        if (nextIndex === '+') {
+            nextIndex = currentIndex + 1;
+        }
+        else if (nextIndex === '-') {
+            nextIndex = currentIndex - 1;
+        }
+
+        this.api.dispatchAction({
+            type: 'timelineChange',
+            currentIndex: nextIndex,
+            from: this.uid
+        });
+    }
+
+});
+
+function getViewRect$4(model, api) {
+    return getLayoutRect(
+        model.getBoxLayoutParams(),
+        {
+            width: api.getWidth(),
+            height: api.getHeight()
+        },
+        model.get('padding')
+    );
+}
+
+function makeIcon(timelineModel, objPath, rect, opts) {
+    var icon = makePath(
+        timelineModel.get(objPath).replace(/^path:\/\//, ''),
+        clone(opts || {}),
+        new BoundingRect(rect[0], rect[1], rect[2], rect[3]),
+        'center'
+    );
+
+    return icon;
+}
+
+/**
+ * Create symbol or update symbol
+ * opt: basic position and event handlers
+ */
+function giveSymbol(hostModel, itemStyleModel, group, opt, symbol, callback) {
+    var color = itemStyleModel.get('color');
+
+    if (!symbol) {
+        var symbolType = hostModel.get('symbol');
+        symbol = createSymbol(symbolType, -1, -1, 2, 2, color);
+        symbol.setStyle('strokeNoScale', true);
+        group.add(symbol);
+        callback && callback.onCreate(symbol);
+    }
+    else {
+        symbol.setColor(color);
+        group.add(symbol); // Group may be new, also need to add.
+        callback && callback.onUpdate(symbol);
+    }
+
+    // Style
+    var itemStyle = itemStyleModel.getItemStyle(['color', 'symbol', 'symbolSize']);
+    symbol.setStyle(itemStyle);
+
+    // Transform and events.
+    opt = merge({
+        rectHover: true,
+        z2: 100
+    }, opt, true);
+
+    var symbolSize = hostModel.get('symbolSize');
+    symbolSize = symbolSize instanceof Array
+        ? symbolSize.slice()
+        : [+symbolSize, +symbolSize];
+    symbolSize[0] /= 2;
+    symbolSize[1] /= 2;
+    opt.scale = symbolSize;
+
+    var symbolOffset = hostModel.get('symbolOffset');
+    if (symbolOffset) {
+        var pos = opt.position = opt.position || [0, 0];
+        pos[0] += parsePercent$1(symbolOffset[0], symbolSize[0]);
+        pos[1] += parsePercent$1(symbolOffset[1], symbolSize[1]);
+    }
+
+    var symbolRotate = hostModel.get('symbolRotate');
+    opt.rotation = (symbolRotate || 0) * Math.PI / 180 || 0;
+
+    symbol.attr(opt);
+
+    // FIXME
+    // (1) When symbol.style.strokeNoScale is true and updateTransform is not performed,
+    // getBoundingRect will return wrong result.
+    // (This is supposed to be resolved in zrender, but it is a little difficult to
+    // leverage performance and auto updateTransform)
+    // (2) All of ancesters of symbol do not scale, so we can just updateTransform symbol.
+    symbol.updateTransform();
+
+    return symbol;
+}
+
+function pointerMoveTo(pointer, dataIndex, axis, timelineModel, noAnimation) {
+    if (pointer.dragging) {
+        return;
+    }
+
+    var pointerModel = timelineModel.getModel('checkpointStyle');
+    var toCoord = axis.dataToCoord(timelineModel.getData().get(['value'], dataIndex));
+
+    if (noAnimation || !pointerModel.get('animation', true)) {
+        pointer.attr({position: [toCoord, 0]});
+    }
+    else {
+        pointer.stopAnimation(true);
+        pointer.animateTo(
+            {position: [toCoord, 0]},
+            pointerModel.get('animationDuration', true),
+            pointerModel.get('animationEasing', true)
+        );
+    }
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * DataZoom component entry
+ */
+
+registerPreprocessor(preprocessor$3);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var ToolboxModel = extendComponentModel({
+
+    type: 'toolbox',
+
+    layoutMode: {
+        type: 'box',
+        ignoreSize: true
+    },
+
+    optionUpdated: function () {
+        ToolboxModel.superApply(this, 'optionUpdated', arguments);
+
+        each$1(this.option.feature, function (featureOpt, featureName) {
+            var Feature = get$1(featureName);
+            Feature && merge(featureOpt, Feature.defaultOption);
+        });
+    },
+
+    defaultOption: {
+
+        show: true,
+
+        z: 6,
+
+        zlevel: 0,
+
+        orient: 'horizontal',
+
+        left: 'right',
+
+        top: 'top',
+
+        // right
+        // bottom
+
+        backgroundColor: 'transparent',
+
+        borderColor: '#ccc',
+
+        borderRadius: 0,
+
+        borderWidth: 0,
+
+        padding: 5,
+
+        itemSize: 15,
+
+        itemGap: 8,
+
+        showTitle: true,
+
+        iconStyle: {
+            borderColor: '#666',
+            color: 'none'
+        },
+        emphasis: {
+            iconStyle: {
+                borderColor: '#3E98C5'
+            }
+        }
+        // textStyle: {},
+
+        // feature
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+extendComponentView({
+
+    type: 'toolbox',
+
+    render: function (toolboxModel, ecModel, api, payload) {
+        var group = this.group;
+        group.removeAll();
+
+        if (!toolboxModel.get('show')) {
+            return;
+        }
+
+        var itemSize = +toolboxModel.get('itemSize');
+        var featureOpts = toolboxModel.get('feature') || {};
+        var features = this._features || (this._features = {});
+
+        var featureNames = [];
+        each$1(featureOpts, function (opt, name) {
+            featureNames.push(name);
+        });
