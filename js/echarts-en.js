@@ -89279,3 +89279,277 @@ proto$4.onclick = function (ecModel, api) {
     var $a = document.createElement('a');
     var type = model.get('type', true) || 'png';
     $a.download = title + '.' + type;
+    $a.target = '_blank';
+    var url = api.getConnectedDataURL({
+        type: type,
+        backgroundColor: model.get('backgroundColor', true)
+            || ecModel.get('backgroundColor') || '#fff',
+        excludeComponents: model.get('excludeComponents'),
+        pixelRatio: model.get('pixelRatio')
+    });
+    $a.href = url;
+    // Chrome and Firefox
+    if (typeof MouseEvent === 'function' && !env$1.browser.ie && !env$1.browser.edge) {
+        var evt = new MouseEvent('click', {
+            view: window,
+            bubbles: true,
+            cancelable: false
+        });
+        $a.dispatchEvent(evt);
+    }
+    // IE
+    else {
+        if (window.navigator.msSaveOrOpenBlob) {
+            var bstr = atob(url.split(',')[1]);
+            var n = bstr.length;
+            var u8arr = new Uint8Array(n);
+            while (n--) {
+                u8arr[n] = bstr.charCodeAt(n);
+            }
+            var blob = new Blob([u8arr]);
+            window.navigator.msSaveOrOpenBlob(blob, title + '.' + type);
+        }
+        else {
+            var lang$$1 = model.get('lang');
+            var html = ''
+                + '<body style="margin:0;">'
+                + '<img src="' + url + '" style="max-width:100%;" title="' + ((lang$$1 && lang$$1[0]) || '') + '" />'
+                + '</body>';
+            var tab = window.open();
+            tab.document.write(html);
+        }
+    }
+};
+
+register$1(
+    'saveAsImage', SaveAsImage
+);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var magicTypeLang = lang.toolbox.magicType;
+
+function MagicType(model) {
+    this.model = model;
+}
+
+MagicType.defaultOption = {
+    show: true,
+    type: [],
+    // Icon group
+    icon: {
+        /* eslint-disable */
+        line: 'M4.1,28.9h7.1l9.3-22l7.4,38l9.7-19.7l3,12.8h14.9M4.1,58h51.4',
+        bar: 'M6.7,22.9h10V48h-10V22.9zM24.9,13h10v35h-10V13zM43.2,2h10v46h-10V2zM3.1,58h53.7',
+        stack: 'M8.2,38.4l-8.4,4.1l30.6,15.3L60,42.5l-8.1-4.1l-21.5,11L8.2,38.4z M51.9,30l-8.1,4.2l-13.4,6.9l-13.9-6.9L8.2,30l-8.4,4.2l8.4,4.2l22.2,11l21.5-11l8.1-4.2L51.9,30z M51.9,21.7l-8.1,4.2L35.7,30l-5.3,2.8L24.9,30l-8.4-4.1l-8.3-4.2l-8.4,4.2L8.2,30l8.3,4.2l13.9,6.9l13.4-6.9l8.1-4.2l8.1-4.1L51.9,21.7zM30.4,2.2L-0.2,17.5l8.4,4.1l8.3,4.2l8.4,4.2l5.5,2.7l5.3-2.7l8.1-4.2l8.1-4.2l8.1-4.1L30.4,2.2z', // jshint ignore:line
+        tiled: 'M2.3,2.2h22.8V25H2.3V2.2z M35,2.2h22.8V25H35V2.2zM2.3,35h22.8v22.8H2.3V35z M35,35h22.8v22.8H35V35z'
+        /* eslint-enable */
+    },
+    // `line`, `bar`, `stack`, `tiled`
+    title: clone(magicTypeLang.title),
+    option: {},
+    seriesIndex: {}
+};
+
+var proto$5 = MagicType.prototype;
+
+proto$5.getIcons = function () {
+    var model = this.model;
+    var availableIcons = model.get('icon');
+    var icons = {};
+    each$1(model.get('type'), function (type) {
+        if (availableIcons[type]) {
+            icons[type] = availableIcons[type];
+        }
+    });
+    return icons;
+};
+
+var seriesOptGenreator = {
+    'line': function (seriesType, seriesId, seriesModel, model) {
+        if (seriesType === 'bar') {
+            return merge({
+                id: seriesId,
+                type: 'line',
+                // Preserve data related option
+                data: seriesModel.get('data'),
+                stack: seriesModel.get('stack'),
+                markPoint: seriesModel.get('markPoint'),
+                markLine: seriesModel.get('markLine')
+            }, model.get('option.line') || {}, true);
+        }
+    },
+    'bar': function (seriesType, seriesId, seriesModel, model) {
+        if (seriesType === 'line') {
+            return merge({
+                id: seriesId,
+                type: 'bar',
+                // Preserve data related option
+                data: seriesModel.get('data'),
+                stack: seriesModel.get('stack'),
+                markPoint: seriesModel.get('markPoint'),
+                markLine: seriesModel.get('markLine')
+            }, model.get('option.bar') || {}, true);
+        }
+    },
+    'stack': function (seriesType, seriesId, seriesModel, model) {
+        if (seriesType === 'line' || seriesType === 'bar') {
+            return merge({
+                id: seriesId,
+                stack: '__ec_magicType_stack__'
+            }, model.get('option.stack') || {}, true);
+        }
+    },
+    'tiled': function (seriesType, seriesId, seriesModel, model) {
+        if (seriesType === 'line' || seriesType === 'bar') {
+            return merge({
+                id: seriesId,
+                stack: ''
+            }, model.get('option.tiled') || {}, true);
+        }
+    }
+};
+
+var radioTypes = [
+    ['line', 'bar'],
+    ['stack', 'tiled']
+];
+
+proto$5.onclick = function (ecModel, api, type) {
+    var model = this.model;
+    var seriesIndex = model.get('seriesIndex.' + type);
+    // Not supported magicType
+    if (!seriesOptGenreator[type]) {
+        return;
+    }
+    var newOption = {
+        series: []
+    };
+    var generateNewSeriesTypes = function (seriesModel) {
+        var seriesType = seriesModel.subType;
+        var seriesId = seriesModel.id;
+        var newSeriesOpt = seriesOptGenreator[type](
+            seriesType, seriesId, seriesModel, model
+        );
+        if (newSeriesOpt) {
+            // PENDING If merge original option?
+            defaults(newSeriesOpt, seriesModel.option);
+            newOption.series.push(newSeriesOpt);
+        }
+        // Modify boundaryGap
+        var coordSys = seriesModel.coordinateSystem;
+        if (coordSys && coordSys.type === 'cartesian2d' && (type === 'line' || type === 'bar')) {
+            var categoryAxis = coordSys.getAxesByScale('ordinal')[0];
+            if (categoryAxis) {
+                var axisDim = categoryAxis.dim;
+                var axisType = axisDim + 'Axis';
+                var axisModel = ecModel.queryComponents({
+                    mainType: axisType,
+                    index: seriesModel.get(name + 'Index'),
+                    id: seriesModel.get(name + 'Id')
+                })[0];
+                var axisIndex = axisModel.componentIndex;
+
+                newOption[axisType] = newOption[axisType] || [];
+                for (var i = 0; i <= axisIndex; i++) {
+                    newOption[axisType][axisIndex] = newOption[axisType][axisIndex] || {};
+                }
+                newOption[axisType][axisIndex].boundaryGap = type === 'bar';
+            }
+        }
+    };
+
+    each$1(radioTypes, function (radio) {
+        if (indexOf(radio, type) >= 0) {
+            each$1(radio, function (item) {
+                model.setIconStatus(item, 'normal');
+            });
+        }
+    });
+
+    model.setIconStatus(type, 'emphasis');
+
+    ecModel.eachComponent(
+        {
+            mainType: 'series',
+            query: seriesIndex == null ? null : {
+                seriesIndex: seriesIndex
+            }
+        }, generateNewSeriesTypes
+    );
+    api.dispatchAction({
+        type: 'changeMagicType',
+        currentType: type,
+        newOption: newOption
+    });
+};
+
+registerAction({
+    type: 'changeMagicType',
+    event: 'magicTypeChanged',
+    update: 'prepareAndUpdate'
+}, function (payload, ecModel) {
+    ecModel.mergeOption(payload.newOption);
+});
+
+register$1('magicType', MagicType);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var dataViewLang = lang.toolbox.dataView;
+
+var BLOCK_SPLITER = new Array(60).join('-');
+var ITEM_SPLITER = '\t';
+/**
+ * Group series into two types
+ *  1. on category axis, like line, bar
+ *  2. others, like scatter, pie
+ * @param {module:echarts/model/Global} ecModel
+ * @return {Object}
+ * @inner
+ */
+function groupSeries(ecModel) {
+    var seriesGroupByCategoryAxis = {};
+    var otherSeries = [];
+    var meta = [];
+    ecModel.eachRawSeries(function (seriesModel) {
+        var coordSys = seriesModel.coordinateSystem;
+
+        if (coordSys && (coordSys.type === 'cartesian2d' || coordSys.type === 'polar')) {
+            var baseAxis = coordSys.getBaseAxis();
+            if (baseAxis.type === 'category') {
+                var key = baseAxis.dim + '_' + baseAxis.index;
