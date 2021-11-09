@@ -89837,3 +89837,282 @@ DataView.prototype.onclick = function (ecModel, api) {
     var result = getContentFromModel(ecModel);
     if (typeof optionToContent === 'function') {
         var htmlOrDom = optionToContent(api.getOption());
+        if (typeof htmlOrDom === 'string') {
+            viewMain.innerHTML = htmlOrDom;
+        }
+        else if (isDom(htmlOrDom)) {
+            viewMain.appendChild(htmlOrDom);
+        }
+    }
+    else {
+        // Use default textarea
+        viewMain.appendChild(textarea);
+        textarea.readOnly = model.get('readOnly');
+        textarea.style.cssText = 'width:100%;height:100%;font-family:monospace;font-size:14px;line-height:1.6rem;';
+        textarea.style.color = model.get('textColor');
+        textarea.style.borderColor = model.get('textareaBorderColor');
+        textarea.style.backgroundColor = model.get('textareaColor');
+        textarea.value = result.value;
+    }
+
+    var blockMetaList = result.meta;
+
+    var buttonContainer = document.createElement('div');
+    buttonContainer.style.cssText = 'position:absolute;bottom:0;left:0;right:0;';
+
+    var buttonStyle = 'float:right;margin-right:20px;border:none;'
+        + 'cursor:pointer;padding:2px 5px;font-size:12px;border-radius:3px';
+    var closeButton = document.createElement('div');
+    var refreshButton = document.createElement('div');
+
+    buttonStyle += ';background-color:' + model.get('buttonColor');
+    buttonStyle += ';color:' + model.get('buttonTextColor');
+
+    var self = this;
+
+    function close() {
+        container.removeChild(root);
+        self._dom = null;
+    }
+    addEventListener(closeButton, 'click', close);
+
+    addEventListener(refreshButton, 'click', function () {
+        var newOption;
+        try {
+            if (typeof contentToOption === 'function') {
+                newOption = contentToOption(viewMain, api.getOption());
+            }
+            else {
+                newOption = parseContents(textarea.value, blockMetaList);
+            }
+        }
+        catch (e) {
+            close();
+            throw new Error('Data view format error ' + e);
+        }
+        if (newOption) {
+            api.dispatchAction({
+                type: 'changeDataView',
+                newOption: newOption
+            });
+        }
+
+        close();
+    });
+
+    closeButton.innerHTML = lang$$1[1];
+    refreshButton.innerHTML = lang$$1[2];
+    refreshButton.style.cssText = buttonStyle;
+    closeButton.style.cssText = buttonStyle;
+
+    !model.get('readOnly') && buttonContainer.appendChild(refreshButton);
+    buttonContainer.appendChild(closeButton);
+
+    // http://stackoverflow.com/questions/6637341/use-tab-to-indent-in-textarea
+    addEventListener(textarea, 'keydown', function (e) {
+        if ((e.keyCode || e.which) === 9) {
+            // get caret position/selection
+            var val = this.value;
+            var start = this.selectionStart;
+            var end = this.selectionEnd;
+
+            // set textarea value to: text before caret + tab + text after caret
+            this.value = val.substring(0, start) + ITEM_SPLITER + val.substring(end);
+
+            // put caret at right position again
+            this.selectionStart = this.selectionEnd = start + 1;
+
+            // prevent the focus lose
+            stop(e);
+        }
+    });
+
+    root.appendChild(header);
+    root.appendChild(viewMain);
+    root.appendChild(buttonContainer);
+
+    viewMain.style.height = (container.clientHeight - 80) + 'px';
+
+    container.appendChild(root);
+    this._dom = root;
+};
+
+DataView.prototype.remove = function (ecModel, api) {
+    this._dom && api.getDom().removeChild(this._dom);
+};
+
+DataView.prototype.dispose = function (ecModel, api) {
+    this.remove(ecModel, api);
+};
+
+/**
+ * @inner
+ */
+function tryMergeDataOption(newData, originalData) {
+    return map(newData, function (newVal, idx) {
+        var original = originalData && originalData[idx];
+        if (isObject$1(original) && !isArray(original)) {
+            if (isObject$1(newVal) && !isArray(newVal)) {
+                newVal = newVal.value;
+            }
+            // Original data has option
+            return defaults({
+                value: newVal
+            }, original);
+        }
+        else {
+            return newVal;
+        }
+    });
+}
+
+register$1('dataView', DataView);
+
+registerAction({
+    type: 'changeDataView',
+    event: 'dataViewChanged',
+    update: 'prepareAndUpdate'
+}, function (payload, ecModel) {
+    var newSeriesOptList = [];
+    each$1(payload.newOption.series, function (seriesOpt) {
+        var seriesModel = ecModel.getSeriesByName(seriesOpt.name)[0];
+        if (!seriesModel) {
+            // New created series
+            // Geuss the series type
+            newSeriesOptList.push(extend({
+                // Default is scatter
+                type: 'scatter'
+            }, seriesOpt));
+        }
+        else {
+            var originalData = seriesModel.get('data');
+            newSeriesOptList.push({
+                name: seriesOpt.name,
+                data: tryMergeDataOption(seriesOpt.data, originalData)
+            });
+        }
+    });
+
+    ecModel.mergeOption(defaults({
+        series: newSeriesOptList
+    }, payload.newOption));
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var each$29 = each$1;
+
+var ATTR$2 = '\0_ec_hist_store';
+
+/**
+ * @param {module:echarts/model/Global} ecModel
+ * @param {Object} newSnapshot {dataZoomId, batch: [payloadInfo, ...]}
+ */
+function push(ecModel, newSnapshot) {
+    var store = giveStore$1(ecModel);
+
+    // If previous dataZoom can not be found,
+    // complete an range with current range.
+    each$29(newSnapshot, function (batchItem, dataZoomId) {
+        var i = store.length - 1;
+        for (; i >= 0; i--) {
+            var snapshot = store[i];
+            if (snapshot[dataZoomId]) {
+                break;
+            }
+        }
+        if (i < 0) {
+            // No origin range set, create one by current range.
+            var dataZoomModel = ecModel.queryComponents(
+                {mainType: 'dataZoom', subType: 'select', id: dataZoomId}
+            )[0];
+            if (dataZoomModel) {
+                var percentRange = dataZoomModel.getPercentRange();
+                store[0][dataZoomId] = {
+                    dataZoomId: dataZoomId,
+                    start: percentRange[0],
+                    end: percentRange[1]
+                };
+            }
+        }
+    });
+
+    store.push(newSnapshot);
+}
+
+/**
+ * @param {module:echarts/model/Global} ecModel
+ * @return {Object} snapshot
+ */
+function pop(ecModel) {
+    var store = giveStore$1(ecModel);
+    var head = store[store.length - 1];
+    store.length > 1 && store.pop();
+
+    // Find top for all dataZoom.
+    var snapshot = {};
+    each$29(head, function (batchItem, dataZoomId) {
+        for (var i = store.length - 1; i >= 0; i--) {
+            var batchItem = store[i][dataZoomId];
+            if (batchItem) {
+                snapshot[dataZoomId] = batchItem;
+                break;
+            }
+        }
+    });
+
+    return snapshot;
+}
+
+/**
+ * @param {module:echarts/model/Global} ecModel
+ */
+function clear$1(ecModel) {
+    ecModel[ATTR$2] = null;
+}
+
+/**
+ * @param {module:echarts/model/Global} ecModel
+ * @return {number} records. always >= 1.
+ */
+function count(ecModel) {
+    return giveStore$1(ecModel).length;
+}
+
+/**
+ * [{key: dataZoomId, value: {dataZoomId, range}}, ...]
+ * History length of each dataZoom may be different.
+ * this._history[0] is used to store origin range.
+ * @type {Array.<Object>}
+ */
+function giveStore$1(ecModel) {
+    var store = ecModel[ATTR$2];
+    if (!store) {
+        store = ecModel[ATTR$2] = [{}];
+    }
+    return store;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
