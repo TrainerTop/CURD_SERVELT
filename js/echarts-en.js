@@ -90398,3 +90398,274 @@ function updateZoomBtnStatus(featureModel, ecModel, view, payload, api) {
             return (targetInfo.xAxisDeclared && !targetInfo.yAxisDeclared)
                 ? 'lineX'
                 : (!targetInfo.xAxisDeclared && targetInfo.yAxisDeclared)
+                ? 'lineY'
+                : 'rect';
+        }))
+        .enableBrush(
+            zoomActive
+            ? {
+                brushType: 'auto',
+                brushStyle: {
+                    // FIXME user customized?
+                    lineWidth: 0,
+                    fill: 'rgba(0,0,0,0.2)'
+                }
+            }
+            : false
+        );
+}
+
+
+register$1('dataZoom', DataZoom);
+
+
+// Create special dataZoom option for select
+// FIXME consider the case of merge option, where axes options are not exists.
+registerPreprocessor(function (option) {
+    if (!option) {
+        return;
+    }
+
+    var dataZoomOpts = option.dataZoom || (option.dataZoom = []);
+    if (!isArray(dataZoomOpts)) {
+        option.dataZoom = dataZoomOpts = [dataZoomOpts];
+    }
+
+    var toolboxOpt = option.toolbox;
+    if (toolboxOpt) {
+        // Assume there is only one toolbox
+        if (isArray(toolboxOpt)) {
+            toolboxOpt = toolboxOpt[0];
+        }
+
+        if (toolboxOpt && toolboxOpt.feature) {
+            var dataZoomOpt = toolboxOpt.feature.dataZoom;
+            // FIXME: If add dataZoom when setOption in merge mode,
+            // no axis info to be added. See `test/dataZoom-extreme.html`
+            addForAxis('xAxis', dataZoomOpt);
+            addForAxis('yAxis', dataZoomOpt);
+        }
+    }
+
+    function addForAxis(axisName, dataZoomOpt) {
+        if (!dataZoomOpt) {
+            return;
+        }
+
+        // Try not to modify model, because it is not merged yet.
+        var axisIndicesName = axisName + 'Index';
+        var givenAxisIndices = dataZoomOpt[axisIndicesName];
+        if (givenAxisIndices != null
+            && givenAxisIndices !== 'all'
+            && !isArray(givenAxisIndices)
+        ) {
+            givenAxisIndices = (givenAxisIndices === false || givenAxisIndices === 'none') ? [] : [givenAxisIndices];
+        }
+
+        forEachComponent(axisName, function (axisOpt, axisIndex) {
+            if (givenAxisIndices != null
+                && givenAxisIndices !== 'all'
+                && indexOf(givenAxisIndices, axisIndex) === -1
+            ) {
+                return;
+            }
+            var newOpt = {
+                type: 'select',
+                $fromToolbox: true,
+                // Id for merge mapping.
+                id: DATA_ZOOM_ID_BASE + axisName + axisIndex
+            };
+            // FIXME
+            // Only support one axis now.
+            newOpt[axisIndicesName] = axisIndex;
+            dataZoomOpts.push(newOpt);
+        });
+    }
+
+    function forEachComponent(mainType, cb) {
+        var opts = option[mainType];
+        if (!isArray(opts)) {
+            opts = opts ? [opts] : [];
+        }
+        each$28(opts, cb);
+    }
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var restoreLang = lang.toolbox.restore;
+
+function Restore(model) {
+    this.model = model;
+}
+
+Restore.defaultOption = {
+    show: true,
+    /* eslint-disable */
+    icon: 'M3.8,33.4 M47,18.9h9.8V8.7 M56.3,20.1 C52.1,9,40.5,0.6,26.8,2.1C12.6,3.7,1.6,16.2,2.1,30.6 M13,41.1H3.1v10.2 M3.7,39.9c4.2,11.1,15.8,19.5,29.5,18 c14.2-1.6,25.2-14.1,24.7-28.5',
+    /* eslint-enable */
+    title: restoreLang.title
+};
+
+var proto$7 = Restore.prototype;
+
+proto$7.onclick = function (ecModel, api, type) {
+    clear$1(ecModel);
+
+    api.dispatchAction({
+        type: 'restore',
+        from: this.uid
+    });
+};
+
+register$1('restore', Restore);
+
+registerAction(
+    {type: 'restore', event: 'restore', update: 'prepareAndUpdate'},
+    function (payload, ecModel) {
+        ecModel.resetOption('recreate');
+    }
+);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var urn = 'urn:schemas-microsoft-com:vml';
+var win = typeof window === 'undefined' ? null : window;
+
+var vmlInited = false;
+
+var doc = win && win.document;
+
+function createNode(tagName) {
+    return doCreateNode(tagName);
+}
+
+// Avoid assign to an exported variable, for transforming to cjs.
+var doCreateNode;
+
+if (doc && !env$1.canvasSupported) {
+    try {
+        !doc.namespaces.zrvml && doc.namespaces.add('zrvml', urn);
+        doCreateNode = function (tagName) {
+            return doc.createElement('<zrvml:' + tagName + ' class="zrvml">');
+        };
+    }
+    catch (e) {
+        doCreateNode = function (tagName) {
+            return doc.createElement('<' + tagName + ' xmlns="' + urn + '" class="zrvml">');
+        };
+    }
+}
+
+// From raphael
+function initVML() {
+    if (vmlInited || !doc) {
+        return;
+    }
+    vmlInited = true;
+
+    var styleSheets = doc.styleSheets;
+    if (styleSheets.length < 31) {
+        doc.createStyleSheet().addRule('.zrvml', 'behavior:url(#default#VML)');
+    }
+    else {
+        // http://msdn.microsoft.com/en-us/library/ms531194%28VS.85%29.aspx
+        styleSheets[0].addRule('.zrvml', 'behavior:url(#default#VML)');
+    }
+}
+
+// http://www.w3.org/TR/NOTE-VML
+// TODO Use proxy like svg instead of overwrite brush methods
+
+var CMD$3 = PathProxy.CMD;
+var round$4 = Math.round;
+var sqrt = Math.sqrt;
+var abs$1 = Math.abs;
+var cos = Math.cos;
+var sin = Math.sin;
+var mathMax$8 = Math.max;
+
+if (!env$1.canvasSupported) {
+
+    var comma = ',';
+    var imageTransformPrefix = 'progid:DXImageTransform.Microsoft';
+
+    var Z = 21600;
+    var Z2 = Z / 2;
+
+    var ZLEVEL_BASE = 100000;
+    var Z_BASE$1 = 1000;
+
+    var initRootElStyle = function (el) {
+        el.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;';
+        el.coordsize = Z + ',' + Z;
+        el.coordorigin = '0,0';
+    };
+
+    var encodeHtmlAttribute = function (s) {
+        return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    };
+
+    var rgb2Str = function (r, g, b) {
+        return 'rgb(' + [r, g, b].join(',') + ')';
+    };
+
+    var append = function (parent, child) {
+        if (child && parent && child.parentNode !== parent) {
+            parent.appendChild(child);
+        }
+    };
+
+    var remove = function (parent, child) {
+        if (child && parent && child.parentNode === parent) {
+            parent.removeChild(child);
+        }
+    };
+
+    var getZIndex = function (zlevel, z, z2) {
+        // z 的取值范围为 [0, 1000]
+        return (parseFloat(zlevel) || 0) * ZLEVEL_BASE + (parseFloat(z) || 0) * Z_BASE$1 + z2;
+    };
+
+    var parsePercent$3 = function (value, maxValue) {
+        if (typeof value === 'string') {
+            if (value.lastIndexOf('%') >= 0) {
+                return parseFloat(value) / 100 * maxValue;
+            }
+            return parseFloat(value);
+        }
+        return value;
