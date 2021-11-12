@@ -90116,3 +90116,285 @@ function giveStore$1(ecModel) {
 * distributed with this work for additional information
 * regarding copyright ownership.  The ASF licenses this file
 * to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+DataZoomModel.extend({
+    type: 'dataZoom.select'
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+DataZoomView.extend({
+    type: 'dataZoom.select'
+});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+/**
+ * DataZoom component entry
+ */
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Use dataZoomSelect
+var dataZoomLang = lang.toolbox.dataZoom;
+var each$28 = each$1;
+
+// Spectial component id start with \0ec\0, see echarts/model/Global.js~hasInnerId
+var DATA_ZOOM_ID_BASE = '\0_ec_\0toolbox-dataZoom_';
+
+function DataZoom(model, ecModel, api) {
+
+    /**
+     * @private
+     * @type {module:echarts/component/helper/BrushController}
+     */
+    (this._brushController = new BrushController(api.getZr()))
+        .on('brush', bind(this._onBrush, this))
+        .mount();
+
+    /**
+     * @private
+     * @type {boolean}
+     */
+    this._isZoomActive;
+}
+
+DataZoom.defaultOption = {
+    show: true,
+    // Icon group
+    icon: {
+        zoom: 'M0,13.5h26.9 M13.5,26.9V0 M32.1,13.5H58V58H13.5 V32.1',
+        back: 'M22,1.4L9.9,13.5l12.3,12.3 M10.3,13.5H54.9v44.6 H10.3v-26'
+    },
+    // `zoom`, `back`
+    title: clone(dataZoomLang.title)
+};
+
+var proto$6 = DataZoom.prototype;
+
+proto$6.render = function (featureModel, ecModel, api, payload) {
+    this.model = featureModel;
+    this.ecModel = ecModel;
+    this.api = api;
+
+    updateZoomBtnStatus(featureModel, ecModel, this, payload, api);
+    updateBackBtnStatus(featureModel, ecModel);
+};
+
+proto$6.onclick = function (ecModel, api, type) {
+    handlers$1[type].call(this);
+};
+
+proto$6.remove = function (ecModel, api) {
+    this._brushController.unmount();
+};
+
+proto$6.dispose = function (ecModel, api) {
+    this._brushController.dispose();
+};
+
+/**
+ * @private
+ */
+var handlers$1 = {
+
+    zoom: function () {
+        var nextActive = !this._isZoomActive;
+
+        this.api.dispatchAction({
+            type: 'takeGlobalCursor',
+            key: 'dataZoomSelect',
+            dataZoomSelectActive: nextActive
+        });
+    },
+
+    back: function () {
+        this._dispatchZoomAction(pop(this.ecModel));
+    }
+};
+
+/**
+ * @private
+ */
+proto$6._onBrush = function (areas, opt) {
+    if (!opt.isEnd || !areas.length) {
+        return;
+    }
+    var snapshot = {};
+    var ecModel = this.ecModel;
+
+    this._brushController.updateCovers([]); // remove cover
+
+    var brushTargetManager = new BrushTargetManager(
+        retrieveAxisSetting(this.model.option), ecModel, {include: ['grid']}
+    );
+    brushTargetManager.matchOutputRanges(areas, ecModel, function (area, coordRange, coordSys) {
+        if (coordSys.type !== 'cartesian2d') {
+            return;
+        }
+
+        var brushType = area.brushType;
+        if (brushType === 'rect') {
+            setBatch('x', coordSys, coordRange[0]);
+            setBatch('y', coordSys, coordRange[1]);
+        }
+        else {
+            setBatch(({lineX: 'x', lineY: 'y'})[brushType], coordSys, coordRange);
+        }
+    });
+
+    push(ecModel, snapshot);
+
+    this._dispatchZoomAction(snapshot);
+
+    function setBatch(dimName, coordSys, minMax) {
+        var axis = coordSys.getAxis(dimName);
+        var axisModel = axis.model;
+        var dataZoomModel = findDataZoom(dimName, axisModel, ecModel);
+
+        // Restrict range.
+        var minMaxSpan = dataZoomModel.findRepresentativeAxisProxy(axisModel).getMinMaxSpan();
+        if (minMaxSpan.minValueSpan != null || minMaxSpan.maxValueSpan != null) {
+            minMax = sliderMove(
+                0, minMax.slice(), axis.scale.getExtent(), 0,
+                minMaxSpan.minValueSpan, minMaxSpan.maxValueSpan
+            );
+        }
+
+        dataZoomModel && (snapshot[dataZoomModel.id] = {
+            dataZoomId: dataZoomModel.id,
+            startValue: minMax[0],
+            endValue: minMax[1]
+        });
+    }
+
+    function findDataZoom(dimName, axisModel, ecModel) {
+        var found;
+        ecModel.eachComponent({mainType: 'dataZoom', subType: 'select'}, function (dzModel) {
+            var has = dzModel.getAxisModel(dimName, axisModel.componentIndex);
+            has && (found = dzModel);
+        });
+        return found;
+    }
+};
+
+/**
+ * @private
+ */
+proto$6._dispatchZoomAction = function (snapshot) {
+    var batch = [];
+
+    // Convert from hash map to array.
+    each$28(snapshot, function (batchItem, dataZoomId) {
+        batch.push(clone(batchItem));
+    });
+
+    batch.length && this.api.dispatchAction({
+        type: 'dataZoom',
+        from: this.uid,
+        batch: batch
+    });
+};
+
+function retrieveAxisSetting(option) {
+    var setting = {};
+    // Compatible with previous setting: null => all axis, false => no axis.
+    each$1(['xAxisIndex', 'yAxisIndex'], function (name) {
+        setting[name] = option[name];
+        setting[name] == null && (setting[name] = 'all');
+        (setting[name] === false || setting[name] === 'none') && (setting[name] = []);
+    });
+    return setting;
+}
+
+function updateBackBtnStatus(featureModel, ecModel) {
+    featureModel.setIconStatus(
+        'back',
+        count(ecModel) > 1 ? 'emphasis' : 'normal'
+    );
+}
+
+function updateZoomBtnStatus(featureModel, ecModel, view, payload, api) {
+    var zoomActive = view._isZoomActive;
+
+    if (payload && payload.type === 'takeGlobalCursor') {
+        zoomActive = payload.key === 'dataZoomSelect'
+            ? payload.dataZoomSelectActive : false;
+    }
+
+    view._isZoomActive = zoomActive;
+
+    featureModel.setIconStatus('zoom', zoomActive ? 'emphasis' : 'normal');
+
+    var brushTargetManager = new BrushTargetManager(
+        retrieveAxisSetting(featureModel.option), ecModel, {include: ['grid']}
+    );
+
+    view._brushController
+        .setPanels(brushTargetManager.makePanelOpts(api, function (targetInfo) {
+            return (targetInfo.xAxisDeclared && !targetInfo.yAxisDeclared)
+                ? 'lineX'
+                : (!targetInfo.xAxisDeclared && targetInfo.yAxisDeclared)
