@@ -90669,3 +90669,264 @@ if (!env$1.canvasSupported) {
             return parseFloat(value);
         }
         return value;
+    };
+
+    /***************************************************
+     * PATH
+     **************************************************/
+
+    var setColorAndOpacity = function (el, color, opacity) {
+        var colorArr = parse(color);
+        opacity = +opacity;
+        if (isNaN(opacity)) {
+            opacity = 1;
+        }
+        if (colorArr) {
+            el.color = rgb2Str(colorArr[0], colorArr[1], colorArr[2]);
+            el.opacity = opacity * colorArr[3];
+        }
+    };
+
+    var getColorAndAlpha = function (color) {
+        var colorArr = parse(color);
+        return [
+            rgb2Str(colorArr[0], colorArr[1], colorArr[2]),
+            colorArr[3]
+        ];
+    };
+
+    var updateFillNode = function (el, style, zrEl) {
+        // TODO pattern
+        var fill = style.fill;
+        if (fill != null) {
+            // Modified from excanvas
+            if (fill instanceof Gradient) {
+                var gradientType;
+                var angle = 0;
+                var focus = [0, 0];
+                // additional offset
+                var shift = 0;
+                // scale factor for offset
+                var expansion = 1;
+                var rect = zrEl.getBoundingRect();
+                var rectWidth = rect.width;
+                var rectHeight = rect.height;
+                if (fill.type === 'linear') {
+                    gradientType = 'gradient';
+                    var transform = zrEl.transform;
+                    var p0 = [fill.x * rectWidth, fill.y * rectHeight];
+                    var p1 = [fill.x2 * rectWidth, fill.y2 * rectHeight];
+                    if (transform) {
+                        applyTransform(p0, p0, transform);
+                        applyTransform(p1, p1, transform);
+                    }
+                    var dx = p1[0] - p0[0];
+                    var dy = p1[1] - p0[1];
+                    angle = Math.atan2(dx, dy) * 180 / Math.PI;
+                    // The angle should be a non-negative number.
+                    if (angle < 0) {
+                        angle += 360;
+                    }
+
+                    // Very small angles produce an unexpected result because they are
+                    // converted to a scientific notation string.
+                    if (angle < 1e-6) {
+                        angle = 0;
+                    }
+                }
+                else {
+                    gradientType = 'gradientradial';
+                    var p0 = [fill.x * rectWidth, fill.y * rectHeight];
+                    var transform = zrEl.transform;
+                    var scale$$1 = zrEl.scale;
+                    var width = rectWidth;
+                    var height = rectHeight;
+                    focus = [
+                        // Percent in bounding rect
+                        (p0[0] - rect.x) / width,
+                        (p0[1] - rect.y) / height
+                    ];
+                    if (transform) {
+                        applyTransform(p0, p0, transform);
+                    }
+
+                    width /= scale$$1[0] * Z;
+                    height /= scale$$1[1] * Z;
+                    var dimension = mathMax$8(width, height);
+                    shift = 2 * 0 / dimension;
+                    expansion = 2 * fill.r / dimension - shift;
+                }
+
+                // We need to sort the color stops in ascending order by offset,
+                // otherwise IE won't interpret it correctly.
+                var stops = fill.colorStops.slice();
+                stops.sort(function (cs1, cs2) {
+                    return cs1.offset - cs2.offset;
+                });
+
+                var length$$1 = stops.length;
+                // Color and alpha list of first and last stop
+                var colorAndAlphaList = [];
+                var colors = [];
+                for (var i = 0; i < length$$1; i++) {
+                    var stop = stops[i];
+                    var colorAndAlpha = getColorAndAlpha(stop.color);
+                    colors.push(stop.offset * expansion + shift + ' ' + colorAndAlpha[0]);
+                    if (i === 0 || i === length$$1 - 1) {
+                        colorAndAlphaList.push(colorAndAlpha);
+                    }
+                }
+
+                if (length$$1 >= 2) {
+                    var color1 = colorAndAlphaList[0][0];
+                    var color2 = colorAndAlphaList[1][0];
+                    var opacity1 = colorAndAlphaList[0][1] * style.opacity;
+                    var opacity2 = colorAndAlphaList[1][1] * style.opacity;
+
+                    el.type = gradientType;
+                    el.method = 'none';
+                    el.focus = '100%';
+                    el.angle = angle;
+                    el.color = color1;
+                    el.color2 = color2;
+                    el.colors = colors.join(',');
+                    // When colors attribute is used, the meanings of opacity and o:opacity2
+                    // are reversed.
+                    el.opacity = opacity2;
+                    // FIXME g_o_:opacity ?
+                    el.opacity2 = opacity1;
+                }
+                if (gradientType === 'radial') {
+                    el.focusposition = focus.join(',');
+                }
+            }
+            else {
+                // FIXME Change from Gradient fill to color fill
+                setColorAndOpacity(el, fill, style.opacity);
+            }
+        }
+    };
+
+    var updateStrokeNode = function (el, style) {
+        // if (style.lineJoin != null) {
+        //     el.joinstyle = style.lineJoin;
+        // }
+        // if (style.miterLimit != null) {
+        //     el.miterlimit = style.miterLimit * Z;
+        // }
+        // if (style.lineCap != null) {
+        //     el.endcap = style.lineCap;
+        // }
+        if (style.lineDash != null) {
+            el.dashstyle = style.lineDash.join(' ');
+        }
+        if (style.stroke != null && !(style.stroke instanceof Gradient)) {
+            setColorAndOpacity(el, style.stroke, style.opacity);
+        }
+    };
+
+    var updateFillAndStroke = function (vmlEl, type, style, zrEl) {
+        var isFill = type === 'fill';
+        var el = vmlEl.getElementsByTagName(type)[0];
+        // Stroke must have lineWidth
+        if (style[type] != null && style[type] !== 'none' && (isFill || (!isFill && style.lineWidth))) {
+            vmlEl[isFill ? 'filled' : 'stroked'] = 'true';
+            // FIXME Remove before updating, or set `colors` will throw error
+            if (style[type] instanceof Gradient) {
+                remove(vmlEl, el);
+            }
+            if (!el) {
+                el = createNode(type);
+            }
+
+            isFill ? updateFillNode(el, style, zrEl) : updateStrokeNode(el, style);
+            append(vmlEl, el);
+        }
+        else {
+            vmlEl[isFill ? 'filled' : 'stroked'] = 'false';
+            remove(vmlEl, el);
+        }
+    };
+
+    var points$3 = [[], [], []];
+    var pathDataToString = function (path, m) {
+        var M = CMD$3.M;
+        var C = CMD$3.C;
+        var L = CMD$3.L;
+        var A = CMD$3.A;
+        var Q = CMD$3.Q;
+
+        var str = [];
+        var nPoint;
+        var cmdStr;
+        var cmd;
+        var i;
+        var xi;
+        var yi;
+        var data = path.data;
+        var dataLength = path.len();
+        for (i = 0; i < dataLength;) {
+            cmd = data[i++];
+            cmdStr = '';
+            nPoint = 0;
+            switch (cmd) {
+                case M:
+                    cmdStr = ' m ';
+                    nPoint = 1;
+                    xi = data[i++];
+                    yi = data[i++];
+                    points$3[0][0] = xi;
+                    points$3[0][1] = yi;
+                    break;
+                case L:
+                    cmdStr = ' l ';
+                    nPoint = 1;
+                    xi = data[i++];
+                    yi = data[i++];
+                    points$3[0][0] = xi;
+                    points$3[0][1] = yi;
+                    break;
+                case Q:
+                case C:
+                    cmdStr = ' c ';
+                    nPoint = 3;
+                    var x1 = data[i++];
+                    var y1 = data[i++];
+                    var x2 = data[i++];
+                    var y2 = data[i++];
+                    var x3;
+                    var y3;
+                    if (cmd === Q) {
+                        // Convert quadratic to cubic using degree elevation
+                        x3 = x2;
+                        y3 = y2;
+                        x2 = (x2 + 2 * x1) / 3;
+                        y2 = (y2 + 2 * y1) / 3;
+                        x1 = (xi + 2 * x1) / 3;
+                        y1 = (yi + 2 * y1) / 3;
+                    }
+                    else {
+                        x3 = data[i++];
+                        y3 = data[i++];
+                    }
+                    points$3[0][0] = x1;
+                    points$3[0][1] = y1;
+                    points$3[1][0] = x2;
+                    points$3[1][1] = y2;
+                    points$3[2][0] = x3;
+                    points$3[2][1] = y3;
+
+                    xi = x3;
+                    yi = y3;
+                    break;
+                case A:
+                    var x = 0;
+                    var y = 0;
+                    var sx = 1;
+                    var sy = 1;
+                    var angle = 0;
+                    if (m) {
+                        // Extract SRT from matrix
+                        x = m[4];
+                        y = m[5];
+                        sx = sqrt(m[0] * m[0] + m[1] * m[1]);
