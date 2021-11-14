@@ -91205,3 +91205,256 @@ if (!env$1.canvasSupported) {
             hasRotation = m[1] || m[2];
         }
         if (hasRotation) {
+            // If filters are necessary (rotation exists), create them
+            // filters are bog-slow, so only create them if abbsolutely necessary
+            // The following check doesn't account for skews (which don't exist
+            // in the canvas spec (yet) anyway.
+            // From excanvas
+            var p0 = [x, y];
+            var p1 = [x + dw, y];
+            var p2 = [x, y + dh];
+            var p3 = [x + dw, y + dh];
+            applyTransform(p0, p0, m);
+            applyTransform(p1, p1, m);
+            applyTransform(p2, p2, m);
+            applyTransform(p3, p3, m);
+
+            var maxX = mathMax$8(p0[0], p1[0], p2[0], p3[0]);
+            var maxY = mathMax$8(p0[1], p1[1], p2[1], p3[1]);
+
+            var transformFilter = [];
+            transformFilter.push('M11=', m[0] / scaleX, comma,
+                        'M12=', m[2] / scaleY, comma,
+                        'M21=', m[1] / scaleX, comma,
+                        'M22=', m[3] / scaleY, comma,
+                        'Dx=', round$4(x * scaleX + m[4]), comma,
+                        'Dy=', round$4(y * scaleY + m[5]));
+
+            vmlElStyle.padding = '0 ' + round$4(maxX) + 'px ' + round$4(maxY) + 'px 0';
+            // FIXME DXImageTransform 在 IE11 的兼容模式下不起作用
+            vmlElStyle.filter = imageTransformPrefix + '.Matrix('
+                + transformFilter.join('') + ', SizingMethod=clip)';
+
+        }
+        else {
+            if (m) {
+                x = x * scaleX + m[4];
+                y = y * scaleY + m[5];
+            }
+            vmlElStyle.filter = '';
+            vmlElStyle.left = round$4(x) + 'px';
+            vmlElStyle.top = round$4(y) + 'px';
+        }
+
+        var imageEl = this._imageEl;
+        var cropEl = this._cropEl;
+
+        if (!imageEl) {
+            imageEl = doc.createElement('div');
+            this._imageEl = imageEl;
+        }
+        var imageELStyle = imageEl.style;
+        if (hasCrop) {
+            // Needs know image original width and height
+            if (!(ow && oh)) {
+                var tmpImage = new Image();
+                var self = this;
+                tmpImage.onload = function () {
+                    tmpImage.onload = null;
+                    ow = tmpImage.width;
+                    oh = tmpImage.height;
+                    // Adjust image width and height to fit the ratio destinationSize / sourceSize
+                    imageELStyle.width = round$4(scaleX * ow * dw / sw) + 'px';
+                    imageELStyle.height = round$4(scaleY * oh * dh / sh) + 'px';
+
+                    // Caching image original width, height and src
+                    self._imageWidth = ow;
+                    self._imageHeight = oh;
+                    self._imageSrc = image;
+                };
+                tmpImage.src = image;
+            }
+            else {
+                imageELStyle.width = round$4(scaleX * ow * dw / sw) + 'px';
+                imageELStyle.height = round$4(scaleY * oh * dh / sh) + 'px';
+            }
+
+            if (!cropEl) {
+                cropEl = doc.createElement('div');
+                cropEl.style.overflow = 'hidden';
+                this._cropEl = cropEl;
+            }
+            var cropElStyle = cropEl.style;
+            cropElStyle.width = round$4((dw + sx * dw / sw) * scaleX);
+            cropElStyle.height = round$4((dh + sy * dh / sh) * scaleY);
+            cropElStyle.filter = imageTransformPrefix + '.Matrix(Dx='
+                    + (-sx * dw / sw * scaleX) + ',Dy=' + (-sy * dh / sh * scaleY) + ')';
+
+            if (!cropEl.parentNode) {
+                vmlEl.appendChild(cropEl);
+            }
+            if (imageEl.parentNode !== cropEl) {
+                cropEl.appendChild(imageEl);
+            }
+        }
+        else {
+            imageELStyle.width = round$4(scaleX * dw) + 'px';
+            imageELStyle.height = round$4(scaleY * dh) + 'px';
+
+            vmlEl.appendChild(imageEl);
+
+            if (cropEl && cropEl.parentNode) {
+                vmlEl.removeChild(cropEl);
+                this._cropEl = null;
+            }
+        }
+
+        var filterStr = '';
+        var alpha = style.opacity;
+        if (alpha < 1) {
+            filterStr += '.Alpha(opacity=' + round$4(alpha * 100) + ') ';
+        }
+        filterStr += imageTransformPrefix + '.AlphaImageLoader(src=' + image + ', SizingMethod=scale)';
+
+        imageELStyle.filter = filterStr;
+
+        vmlEl.style.zIndex = getZIndex(this.zlevel, this.z, this.z2);
+
+        // Append to root
+        append(vmlRoot, vmlEl);
+
+        // Text
+        if (style.text != null) {
+            this.drawRectText(vmlRoot, this.getBoundingRect());
+        }
+    };
+
+    ZImage.prototype.onRemove = function (vmlRoot) {
+        remove(vmlRoot, this._vmlEl);
+
+        this._vmlEl = null;
+        this._cropEl = null;
+        this._imageEl = null;
+
+        this.removeRectText(vmlRoot);
+    };
+
+    ZImage.prototype.onAdd = function (vmlRoot) {
+        append(vmlRoot, this._vmlEl);
+        this.appendRectText(vmlRoot);
+    };
+
+
+    /***************************************************
+     * TEXT
+     **************************************************/
+
+    var DEFAULT_STYLE_NORMAL = 'normal';
+
+    var fontStyleCache = {};
+    var fontStyleCacheCount = 0;
+    var MAX_FONT_CACHE_SIZE = 100;
+    var fontEl = document.createElement('div');
+
+    var getFontStyle = function (fontString) {
+        var fontStyle = fontStyleCache[fontString];
+        if (!fontStyle) {
+            // Clear cache
+            if (fontStyleCacheCount > MAX_FONT_CACHE_SIZE) {
+                fontStyleCacheCount = 0;
+                fontStyleCache = {};
+            }
+
+            var style = fontEl.style;
+            var fontFamily;
+            try {
+                style.font = fontString;
+                fontFamily = style.fontFamily.split(',')[0];
+            }
+            catch (e) {
+            }
+
+            fontStyle = {
+                style: style.fontStyle || DEFAULT_STYLE_NORMAL,
+                variant: style.fontVariant || DEFAULT_STYLE_NORMAL,
+                weight: style.fontWeight || DEFAULT_STYLE_NORMAL,
+                size: parseFloat(style.fontSize || 12) | 0,
+                family: fontFamily || 'Microsoft YaHei'
+            };
+
+            fontStyleCache[fontString] = fontStyle;
+            fontStyleCacheCount++;
+        }
+        return fontStyle;
+    };
+
+    var textMeasureEl;
+    // Overwrite measure text method
+    $override$1('measureText', function (text, textFont) {
+        var doc$$1 = doc;
+        if (!textMeasureEl) {
+            textMeasureEl = doc$$1.createElement('div');
+            textMeasureEl.style.cssText = 'position:absolute;top:-20000px;left:0;'
+                + 'padding:0;margin:0;border:none;white-space:pre;';
+            doc.body.appendChild(textMeasureEl);
+        }
+
+        try {
+            textMeasureEl.style.font = textFont;
+        }
+        catch (ex) {
+            // Ignore failures to set to invalid font.
+        }
+        textMeasureEl.innerHTML = '';
+        // Don't use innerHTML or innerText because they allow markup/whitespace.
+        textMeasureEl.appendChild(doc$$1.createTextNode(text));
+        return {
+            width: textMeasureEl.offsetWidth
+        };
+    });
+
+    var tmpRect$2 = new BoundingRect();
+
+    var drawRectText = function (vmlRoot, rect, textRect, fromTextEl) {
+
+        var style = this.style;
+
+        // Optimize, avoid normalize every time.
+        this.__dirty && normalizeTextStyle(style, true);
+
+        var text = style.text;
+        // Convert to string
+        text != null && (text += '');
+        if (!text) {
+            return;
+        }
+
+        // Convert rich text to plain text. Rich text is not supported in
+        // IE8-, but tags in rich text template will be removed.
+        if (style.rich) {
+            var contentBlock = parseRichText(text, style);
+            text = [];
+            for (var i = 0; i < contentBlock.lines.length; i++) {
+                var tokens = contentBlock.lines[i].tokens;
+                var textLine = [];
+                for (var j = 0; j < tokens.length; j++) {
+                    textLine.push(tokens[j].text);
+                }
+                text.push(textLine.join(''));
+            }
+            text = text.join('\n');
+        }
+
+        var x;
+        var y;
+        var align = style.textAlign;
+        var verticalAlign = style.textVerticalAlign;
+
+        var fontStyle = getFontStyle(style.font);
+        // FIXME encodeHtmlAttribute ?
+        var font = fontStyle.style + ' ' + fontStyle.variant + ' ' + fontStyle.weight + ' '
+            + fontStyle.size + 'px "' + fontStyle.family + '"';
+
+        textRect = textRect || getBoundingRect(
+            text, font, align, verticalAlign, style.textPadding, style.textLineHeight
+        );
