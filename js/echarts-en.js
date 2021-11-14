@@ -90930,3 +90930,278 @@ if (!env$1.canvasSupported) {
                         x = m[4];
                         y = m[5];
                         sx = sqrt(m[0] * m[0] + m[1] * m[1]);
+                        sy = sqrt(m[2] * m[2] + m[3] * m[3]);
+                        angle = Math.atan2(-m[1] / sy, m[0] / sx);
+                    }
+
+                    var cx = data[i++];
+                    var cy = data[i++];
+                    var rx = data[i++];
+                    var ry = data[i++];
+                    var startAngle = data[i++] + angle;
+                    var endAngle = data[i++] + startAngle + angle;
+                    // FIXME
+                    // var psi = data[i++];
+                    i++;
+                    var clockwise = data[i++];
+
+                    var x0 = cx + cos(startAngle) * rx;
+                    var y0 = cy + sin(startAngle) * ry;
+
+                    var x1 = cx + cos(endAngle) * rx;
+                    var y1 = cy + sin(endAngle) * ry;
+
+                    var type = clockwise ? ' wa ' : ' at ';
+                    if (Math.abs(x0 - x1) < 1e-4) {
+                        // IE won't render arches drawn counter clockwise if x0 == x1.
+                        if (Math.abs(endAngle - startAngle) > 1e-2) {
+                            // Offset x0 by 1/80 of a pixel. Use something
+                            // that can be represented in binary
+                            if (clockwise) {
+                                x0 += 270 / Z;
+                            }
+                        }
+                        else {
+                            // Avoid case draw full circle
+                            if (Math.abs(y0 - cy) < 1e-4) {
+                                if ((clockwise && x0 < cx) || (!clockwise && x0 > cx)) {
+                                    y1 -= 270 / Z;
+                                }
+                                else {
+                                    y1 += 270 / Z;
+                                }
+                            }
+                            else if ((clockwise && y0 < cy) || (!clockwise && y0 > cy)) {
+                                x1 += 270 / Z;
+                            }
+                            else {
+                                x1 -= 270 / Z;
+                            }
+                        }
+                    }
+                    str.push(
+                        type,
+                        round$4(((cx - rx) * sx + x) * Z - Z2), comma,
+                        round$4(((cy - ry) * sy + y) * Z - Z2), comma,
+                        round$4(((cx + rx) * sx + x) * Z - Z2), comma,
+                        round$4(((cy + ry) * sy + y) * Z - Z2), comma,
+                        round$4((x0 * sx + x) * Z - Z2), comma,
+                        round$4((y0 * sy + y) * Z - Z2), comma,
+                        round$4((x1 * sx + x) * Z - Z2), comma,
+                        round$4((y1 * sy + y) * Z - Z2)
+                    );
+
+                    xi = x1;
+                    yi = y1;
+                    break;
+                case CMD$3.R:
+                    var p0 = points$3[0];
+                    var p1 = points$3[1];
+                    // x0, y0
+                    p0[0] = data[i++];
+                    p0[1] = data[i++];
+                    // x1, y1
+                    p1[0] = p0[0] + data[i++];
+                    p1[1] = p0[1] + data[i++];
+
+                    if (m) {
+                        applyTransform(p0, p0, m);
+                        applyTransform(p1, p1, m);
+                    }
+
+                    p0[0] = round$4(p0[0] * Z - Z2);
+                    p1[0] = round$4(p1[0] * Z - Z2);
+                    p0[1] = round$4(p0[1] * Z - Z2);
+                    p1[1] = round$4(p1[1] * Z - Z2);
+                    str.push(
+                        // x0, y0
+                        ' m ', p0[0], comma, p0[1],
+                        // x1, y0
+                        ' l ', p1[0], comma, p0[1],
+                        // x1, y1
+                        ' l ', p1[0], comma, p1[1],
+                        // x0, y1
+                        ' l ', p0[0], comma, p1[1]
+                    );
+                    break;
+                case CMD$3.Z:
+                    // FIXME Update xi, yi
+                    str.push(' x ');
+            }
+
+            if (nPoint > 0) {
+                str.push(cmdStr);
+                for (var k = 0; k < nPoint; k++) {
+                    var p = points$3[k];
+
+                    m && applyTransform(p, p, m);
+                    // 不 round 会非常慢
+                    str.push(
+                        round$4(p[0] * Z - Z2), comma, round$4(p[1] * Z - Z2),
+                        k < nPoint - 1 ? comma : ''
+                    );
+                }
+            }
+        }
+
+        return str.join('');
+    };
+
+    // Rewrite the original path method
+    Path.prototype.brushVML = function (vmlRoot) {
+        var style = this.style;
+
+        var vmlEl = this._vmlEl;
+        if (!vmlEl) {
+            vmlEl = createNode('shape');
+            initRootElStyle(vmlEl);
+
+            this._vmlEl = vmlEl;
+        }
+
+        updateFillAndStroke(vmlEl, 'fill', style, this);
+        updateFillAndStroke(vmlEl, 'stroke', style, this);
+
+        var m = this.transform;
+        var needTransform = m != null;
+        var strokeEl = vmlEl.getElementsByTagName('stroke')[0];
+        if (strokeEl) {
+            var lineWidth = style.lineWidth;
+            // Get the line scale.
+            // Determinant of this.m_ means how much the area is enlarged by the
+            // transformation. So its square root can be used as a scale factor
+            // for width.
+            if (needTransform && !style.strokeNoScale) {
+                var det = m[0] * m[3] - m[1] * m[2];
+                lineWidth *= sqrt(abs$1(det));
+            }
+            strokeEl.weight = lineWidth + 'px';
+        }
+
+        var path = this.path || (this.path = new PathProxy());
+        if (this.__dirtyPath) {
+            path.beginPath();
+            path.subPixelOptimize = false;
+            this.buildPath(path, this.shape);
+            path.toStatic();
+            this.__dirtyPath = false;
+        }
+
+        vmlEl.path = pathDataToString(path, this.transform);
+
+        vmlEl.style.zIndex = getZIndex(this.zlevel, this.z, this.z2);
+
+        // Append to root
+        append(vmlRoot, vmlEl);
+
+        // Text
+        if (style.text != null) {
+            this.drawRectText(vmlRoot, this.getBoundingRect());
+        }
+        else {
+            this.removeRectText(vmlRoot);
+        }
+    };
+
+    Path.prototype.onRemove = function (vmlRoot) {
+        remove(vmlRoot, this._vmlEl);
+        this.removeRectText(vmlRoot);
+    };
+
+    Path.prototype.onAdd = function (vmlRoot) {
+        append(vmlRoot, this._vmlEl);
+        this.appendRectText(vmlRoot);
+    };
+
+    /***************************************************
+     * IMAGE
+     **************************************************/
+    var isImage = function (img) {
+        // FIXME img instanceof Image 如果 img 是一个字符串的时候，IE8 下会报错
+        return (typeof img === 'object') && img.tagName && img.tagName.toUpperCase() === 'IMG';
+        // return img instanceof Image;
+    };
+
+    // Rewrite the original path method
+    ZImage.prototype.brushVML = function (vmlRoot) {
+        var style = this.style;
+        var image = style.image;
+
+        // Image original width, height
+        var ow;
+        var oh;
+
+        if (isImage(image)) {
+            var src = image.src;
+            if (src === this._imageSrc) {
+                ow = this._imageWidth;
+                oh = this._imageHeight;
+            }
+            else {
+                var imageRuntimeStyle = image.runtimeStyle;
+                var oldRuntimeWidth = imageRuntimeStyle.width;
+                var oldRuntimeHeight = imageRuntimeStyle.height;
+                imageRuntimeStyle.width = 'auto';
+                imageRuntimeStyle.height = 'auto';
+
+                // get the original size
+                ow = image.width;
+                oh = image.height;
+
+                // and remove overides
+                imageRuntimeStyle.width = oldRuntimeWidth;
+                imageRuntimeStyle.height = oldRuntimeHeight;
+
+                // Caching image original width, height and src
+                this._imageSrc = src;
+                this._imageWidth = ow;
+                this._imageHeight = oh;
+            }
+            image = src;
+        }
+        else {
+            if (image === this._imageSrc) {
+                ow = this._imageWidth;
+                oh = this._imageHeight;
+            }
+        }
+        if (!image) {
+            return;
+        }
+
+        var x = style.x || 0;
+        var y = style.y || 0;
+
+        var dw = style.width;
+        var dh = style.height;
+
+        var sw = style.sWidth;
+        var sh = style.sHeight;
+        var sx = style.sx || 0;
+        var sy = style.sy || 0;
+
+        var hasCrop = sw && sh;
+
+        var vmlEl = this._vmlEl;
+        if (!vmlEl) {
+            // FIXME 使用 group 在 left, top 都不是 0 的时候就无法显示了。
+            // vmlEl = vmlCore.createNode('group');
+            vmlEl = doc.createElement('div');
+            initRootElStyle(vmlEl);
+
+            this._vmlEl = vmlEl;
+        }
+
+        var vmlElStyle = vmlEl.style;
+        var hasRotation = false;
+        var m;
+        var scaleX = 1;
+        var scaleY = 1;
+        if (this.transform) {
+            m = this.transform;
+            scaleX = sqrt(m[0] * m[0] + m[1] * m[1]);
+            scaleY = sqrt(m[2] * m[2] + m[3] * m[3]);
+
+            hasRotation = m[1] || m[2];
+        }
+        if (hasRotation) {
