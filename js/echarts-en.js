@@ -91736,3 +91736,303 @@ VMLPainter.prototype = {
     getViewportRoot: function () {
         return this._vmlViewport;
     },
+
+    getViewportRootOffset: function () {
+        var viewportRoot = this.getViewportRoot();
+        if (viewportRoot) {
+            return {
+                offsetLeft: viewportRoot.offsetLeft || 0,
+                offsetTop: viewportRoot.offsetTop || 0
+            };
+        }
+    },
+
+    /**
+     * 刷新
+     */
+    refresh: function () {
+
+        var list = this.storage.getDisplayList(true, true);
+
+        this._paintList(list);
+    },
+
+    _paintList: function (list) {
+        var vmlRoot = this._vmlRoot;
+        for (var i = 0; i < list.length; i++) {
+            var el = list[i];
+            if (el.invisible || el.ignore) {
+                if (!el.__alreadyNotVisible) {
+                    el.onRemove(vmlRoot);
+                }
+                // Set as already invisible
+                el.__alreadyNotVisible = true;
+            }
+            else {
+                if (el.__alreadyNotVisible) {
+                    el.onAdd(vmlRoot);
+                }
+                el.__alreadyNotVisible = false;
+                if (el.__dirty) {
+                    el.beforeBrush && el.beforeBrush();
+                    (el.brushVML || el.brush).call(el, vmlRoot);
+                    el.afterBrush && el.afterBrush();
+                }
+            }
+            el.__dirty = false;
+        }
+
+        if (this._firstPaint) {
+            // Detached from document at first time
+            // to avoid page refreshing too many times
+
+            // FIXME 如果每次都先 removeChild 可能会导致一些填充和描边的效果改变
+            this._vmlViewport.appendChild(vmlRoot);
+            this._firstPaint = false;
+        }
+    },
+
+    resize: function (width, height) {
+        var width = width == null ? this._getWidth() : width;
+        var height = height == null ? this._getHeight() : height;
+
+        if (this._width !== width || this._height !== height) {
+            this._width = width;
+            this._height = height;
+
+            var vmlViewportStyle = this._vmlViewport.style;
+            vmlViewportStyle.width = width + 'px';
+            vmlViewportStyle.height = height + 'px';
+        }
+    },
+
+    dispose: function () {
+        this.root.innerHTML = '';
+
+        this._vmlRoot =
+        this._vmlViewport =
+        this.storage = null;
+    },
+
+    getWidth: function () {
+        return this._width;
+    },
+
+    getHeight: function () {
+        return this._height;
+    },
+
+    clear: function () {
+        if (this._vmlViewport) {
+            this.root.removeChild(this._vmlViewport);
+        }
+    },
+
+    _getWidth: function () {
+        var root = this.root;
+        var stl = root.currentStyle;
+
+        return ((root.clientWidth || parseInt10$1(stl.width))
+                - parseInt10$1(stl.paddingLeft)
+                - parseInt10$1(stl.paddingRight)) | 0;
+    },
+
+    _getHeight: function () {
+        var root = this.root;
+        var stl = root.currentStyle;
+
+        return ((root.clientHeight || parseInt10$1(stl.height))
+                - parseInt10$1(stl.paddingTop)
+                - parseInt10$1(stl.paddingBottom)) | 0;
+    }
+};
+
+// Not supported methods
+function createMethodNotSupport(method) {
+    return function () {
+        zrLog('In IE8.0 VML mode painter not support method "' + method + '"');
+    };
+}
+
+// Unsupported methods
+each$1([
+    'getLayer', 'insertLayer', 'eachLayer', 'eachBuiltinLayer', 'eachOtherLayer', 'getLayers',
+    'modLayer', 'delLayer', 'clearLayer', 'toDataURL', 'pathToImage'
+], function (name) {
+    VMLPainter.prototype[name] = createMethodNotSupport(name);
+});
+
+registerPainter('vml', VMLPainter);
+
+var svgURI = 'http://www.w3.org/2000/svg';
+
+function createElement(name) {
+    return document.createElementNS(svgURI, name);
+}
+
+// TODO
+// 1. shadow
+// 2. Image: sx, sy, sw, sh
+
+var CMD$4 = PathProxy.CMD;
+var arrayJoin = Array.prototype.join;
+
+var NONE = 'none';
+var mathRound = Math.round;
+var mathSin$3 = Math.sin;
+var mathCos$3 = Math.cos;
+var PI$5 = Math.PI;
+var PI2$7 = Math.PI * 2;
+var degree = 180 / PI$5;
+
+var EPSILON$4 = 1e-4;
+
+function round4(val) {
+    return mathRound(val * 1e4) / 1e4;
+}
+
+function isAroundZero$1(val) {
+    return val < EPSILON$4 && val > -EPSILON$4;
+}
+
+function pathHasFill(style, isText) {
+    var fill = isText ? style.textFill : style.fill;
+    return fill != null && fill !== NONE;
+}
+
+function pathHasStroke(style, isText) {
+    var stroke = isText ? style.textStroke : style.stroke;
+    return stroke != null && stroke !== NONE;
+}
+
+function setTransform(svgEl, m) {
+    if (m) {
+        attr(svgEl, 'transform', 'matrix(' + arrayJoin.call(m, ',') + ')');
+    }
+}
+
+function attr(el, key, val) {
+    if (!val || val.type !== 'linear' && val.type !== 'radial') {
+        // Don't set attribute for gradient, since it need new dom nodes
+        el.setAttribute(key, val);
+    }
+}
+
+function attrXLink(el, key, val) {
+    el.setAttributeNS('http://www.w3.org/1999/xlink', key, val);
+}
+
+function bindStyle(svgEl, style, isText, el) {
+    if (pathHasFill(style, isText)) {
+        var fill = isText ? style.textFill : style.fill;
+        fill = fill === 'transparent' ? NONE : fill;
+
+        /**
+         * FIXME:
+         * This is a temporary fix for Chrome's clipping bug
+         * that happens when a clip-path is referring another one.
+         * This fix should be used before Chrome's bug is fixed.
+         * For an element that has clip-path, and fill is none,
+         * set it to be "rgba(0, 0, 0, 0.002)" will hide the element.
+         * Otherwise, it will show black fill color.
+         * 0.002 is used because this won't work for alpha values smaller
+         * than 0.002.
+         *
+         * See
+         * https://bugs.chromium.org/p/chromium/issues/detail?id=659790
+         * for more information.
+         */
+        if (svgEl.getAttribute('clip-path') !== 'none' && fill === NONE) {
+            fill = 'rgba(0, 0, 0, 0.002)';
+        }
+
+        attr(svgEl, 'fill', fill);
+        attr(svgEl, 'fill-opacity', style.fillOpacity != null ? style.fillOpacity * style.opacity : style.opacity);
+    }
+    else {
+        attr(svgEl, 'fill', NONE);
+    }
+
+    if (pathHasStroke(style, isText)) {
+        var stroke = isText ? style.textStroke : style.stroke;
+        stroke = stroke === 'transparent' ? NONE : stroke;
+        attr(svgEl, 'stroke', stroke);
+        var strokeWidth = isText
+            ? style.textStrokeWidth
+            : style.lineWidth;
+        var strokeScale = !isText && style.strokeNoScale
+            ? el.getLineScale()
+            : 1;
+        attr(svgEl, 'stroke-width', strokeWidth / strokeScale);
+        // stroke then fill for text; fill then stroke for others
+        attr(svgEl, 'paint-order', isText ? 'stroke' : 'fill');
+        attr(svgEl, 'stroke-opacity', style.strokeOpacity != null ? style.strokeOpacity : style.opacity);
+        var lineDash = style.lineDash;
+        if (lineDash) {
+            attr(svgEl, 'stroke-dasharray', style.lineDash.join(','));
+            attr(svgEl, 'stroke-dashoffset', mathRound(style.lineDashOffset || 0));
+        }
+        else {
+            attr(svgEl, 'stroke-dasharray', '');
+        }
+
+        // PENDING
+        style.lineCap && attr(svgEl, 'stroke-linecap', style.lineCap);
+        style.lineJoin && attr(svgEl, 'stroke-linejoin', style.lineJoin);
+        style.miterLimit && attr(svgEl, 'stroke-miterlimit', style.miterLimit);
+    }
+    else {
+        attr(svgEl, 'stroke', NONE);
+    }
+}
+
+/***************************************************
+ * PATH
+ **************************************************/
+function pathDataToString$1(path) {
+    var str = [];
+    var data = path.data;
+    var dataLength = path.len();
+    for (var i = 0; i < dataLength;) {
+        var cmd = data[i++];
+        var cmdStr = '';
+        var nData = 0;
+        switch (cmd) {
+            case CMD$4.M:
+                cmdStr = 'M';
+                nData = 2;
+                break;
+            case CMD$4.L:
+                cmdStr = 'L';
+                nData = 2;
+                break;
+            case CMD$4.Q:
+                cmdStr = 'Q';
+                nData = 4;
+                break;
+            case CMD$4.C:
+                cmdStr = 'C';
+                nData = 6;
+                break;
+            case CMD$4.A:
+                var cx = data[i++];
+                var cy = data[i++];
+                var rx = data[i++];
+                var ry = data[i++];
+                var theta = data[i++];
+                var dTheta = data[i++];
+                var psi = data[i++];
+                var clockwise = data[i++];
+
+                var dThetaPositive = Math.abs(dTheta);
+                var isCircle = isAroundZero$1(dThetaPositive - PI2$7)
+                    && !isAroundZero$1(dThetaPositive);
+
+                var large = false;
+                if (dThetaPositive >= PI2$7) {
+                    large = true;
+                }
+                else if (isAroundZero$1(dThetaPositive)) {
+                    large = false;
+                }
+                else {
