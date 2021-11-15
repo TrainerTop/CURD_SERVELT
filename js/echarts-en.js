@@ -91458,3 +91458,281 @@ if (!env$1.canvasSupported) {
         textRect = textRect || getBoundingRect(
             text, font, align, verticalAlign, style.textPadding, style.textLineHeight
         );
+
+        // Transform rect to view space
+        var m = this.transform;
+        // Ignore transform for text in other element
+        if (m && !fromTextEl) {
+            tmpRect$2.copy(rect);
+            tmpRect$2.applyTransform(m);
+            rect = tmpRect$2;
+        }
+
+        if (!fromTextEl) {
+            var textPosition = style.textPosition;
+            var distance$$1 = style.textDistance;
+            // Text position represented by coord
+            if (textPosition instanceof Array) {
+                x = rect.x + parsePercent$3(textPosition[0], rect.width);
+                y = rect.y + parsePercent$3(textPosition[1], rect.height);
+
+                align = align || 'left';
+            }
+            else {
+                var res = adjustTextPositionOnRect(
+                    textPosition, rect, distance$$1
+                );
+                x = res.x;
+                y = res.y;
+
+                // Default align and baseline when has textPosition
+                align = align || res.textAlign;
+                verticalAlign = verticalAlign || res.textVerticalAlign;
+            }
+        }
+        else {
+            x = rect.x;
+            y = rect.y;
+        }
+
+        x = adjustTextX(x, textRect.width, align);
+        y = adjustTextY(y, textRect.height, verticalAlign);
+
+        // Force baseline 'middle'
+        y += textRect.height / 2;
+
+        // var fontSize = fontStyle.size;
+        // 1.75 is an arbitrary number, as there is no info about the text baseline
+        // switch (baseline) {
+            // case 'hanging':
+            // case 'top':
+            //     y += fontSize / 1.75;
+            //     break;
+        //     case 'middle':
+        //         break;
+        //     default:
+        //     // case null:
+        //     // case 'alphabetic':
+        //     // case 'ideographic':
+        //     // case 'bottom':
+        //         y -= fontSize / 2.25;
+        //         break;
+        // }
+
+        // switch (align) {
+        //     case 'left':
+        //         break;
+        //     case 'center':
+        //         x -= textRect.width / 2;
+        //         break;
+        //     case 'right':
+        //         x -= textRect.width;
+        //         break;
+            // case 'end':
+                // align = elementStyle.direction == 'ltr' ? 'right' : 'left';
+                // break;
+            // case 'start':
+                // align = elementStyle.direction == 'rtl' ? 'right' : 'left';
+                // break;
+            // default:
+            //     align = 'left';
+        // }
+
+        var createNode$$1 = createNode;
+
+        var textVmlEl = this._textVmlEl;
+        var pathEl;
+        var textPathEl;
+        var skewEl;
+        if (!textVmlEl) {
+            textVmlEl = createNode$$1('line');
+            pathEl = createNode$$1('path');
+            textPathEl = createNode$$1('textpath');
+            skewEl = createNode$$1('skew');
+
+            // FIXME Why here is not cammel case
+            // Align 'center' seems wrong
+            textPathEl.style['v-text-align'] = 'left';
+
+            initRootElStyle(textVmlEl);
+
+            pathEl.textpathok = true;
+            textPathEl.on = true;
+
+            textVmlEl.from = '0 0';
+            textVmlEl.to = '1000 0.05';
+
+            append(textVmlEl, skewEl);
+            append(textVmlEl, pathEl);
+            append(textVmlEl, textPathEl);
+
+            this._textVmlEl = textVmlEl;
+        }
+        else {
+            // 这里是在前面 appendChild 保证顺序的前提下
+            skewEl = textVmlEl.firstChild;
+            pathEl = skewEl.nextSibling;
+            textPathEl = pathEl.nextSibling;
+        }
+
+        var coords = [x, y];
+        var textVmlElStyle = textVmlEl.style;
+        // Ignore transform for text in other element
+        if (m && fromTextEl) {
+            applyTransform(coords, coords, m);
+
+            skewEl.on = true;
+
+            skewEl.matrix = m[0].toFixed(3) + comma + m[2].toFixed(3) + comma
+                            + m[1].toFixed(3) + comma + m[3].toFixed(3) + ',0,0';
+
+            // Text position
+            skewEl.offset = (round$4(coords[0]) || 0) + ',' + (round$4(coords[1]) || 0);
+            // Left top point as origin
+            skewEl.origin = '0 0';
+
+            textVmlElStyle.left = '0px';
+            textVmlElStyle.top = '0px';
+        }
+        else {
+            skewEl.on = false;
+            textVmlElStyle.left = round$4(x) + 'px';
+            textVmlElStyle.top = round$4(y) + 'px';
+        }
+
+        textPathEl.string = encodeHtmlAttribute(text);
+        // TODO
+        try {
+            textPathEl.style.font = font;
+        }
+        // Error font format
+        catch (e) {}
+
+        updateFillAndStroke(textVmlEl, 'fill', {
+            fill: style.textFill,
+            opacity: style.opacity
+        }, this);
+        updateFillAndStroke(textVmlEl, 'stroke', {
+            stroke: style.textStroke,
+            opacity: style.opacity,
+            lineDash: style.lineDash
+        }, this);
+
+        textVmlEl.style.zIndex = getZIndex(this.zlevel, this.z, this.z2);
+
+        // Attached to root
+        append(vmlRoot, textVmlEl);
+    };
+
+    var removeRectText = function (vmlRoot) {
+        remove(vmlRoot, this._textVmlEl);
+        this._textVmlEl = null;
+    };
+
+    var appendRectText = function (vmlRoot) {
+        append(vmlRoot, this._textVmlEl);
+    };
+
+    var list = [RectText, Displayable, ZImage, Path, Text];
+
+    // In case Displayable has been mixed in RectText
+    for (var i$3 = 0; i$3 < list.length; i$3++) {
+        var proto$8 = list[i$3].prototype;
+        proto$8.drawRectText = drawRectText;
+        proto$8.removeRectText = removeRectText;
+        proto$8.appendRectText = appendRectText;
+    }
+
+    Text.prototype.brushVML = function (vmlRoot) {
+        var style = this.style;
+        if (style.text != null) {
+            this.drawRectText(vmlRoot, {
+                x: style.x || 0, y: style.y || 0,
+                width: 0, height: 0
+            }, this.getBoundingRect(), true);
+        }
+        else {
+            this.removeRectText(vmlRoot);
+        }
+    };
+
+    Text.prototype.onRemove = function (vmlRoot) {
+        this.removeRectText(vmlRoot);
+    };
+
+    Text.prototype.onAdd = function (vmlRoot) {
+        this.appendRectText(vmlRoot);
+    };
+}
+
+/**
+ * VML Painter.
+ *
+ * @module zrender/vml/Painter
+ */
+
+function parseInt10$1(val) {
+    return parseInt(val, 10);
+}
+
+/**
+ * @alias module:zrender/vml/Painter
+ */
+function VMLPainter(root, storage) {
+
+    initVML();
+
+    this.root = root;
+
+    this.storage = storage;
+
+    var vmlViewport = document.createElement('div');
+
+    var vmlRoot = document.createElement('div');
+
+    vmlViewport.style.cssText = 'display:inline-block;overflow:hidden;position:relative;width:300px;height:150px;';
+
+    vmlRoot.style.cssText = 'position:absolute;left:0;top:0;';
+
+    root.appendChild(vmlViewport);
+
+    this._vmlRoot = vmlRoot;
+    this._vmlViewport = vmlViewport;
+
+    this.resize();
+
+    // Modify storage
+    var oldDelFromStorage = storage.delFromStorage;
+    var oldAddToStorage = storage.addToStorage;
+    storage.delFromStorage = function (el) {
+        oldDelFromStorage.call(storage, el);
+
+        if (el) {
+            el.onRemove && el.onRemove(vmlRoot);
+        }
+    };
+
+    storage.addToStorage = function (el) {
+        // Displayable already has a vml node
+        el.onAdd && el.onAdd(vmlRoot);
+
+        oldAddToStorage.call(storage, el);
+    };
+
+    this._firstPaint = true;
+}
+
+VMLPainter.prototype = {
+
+    constructor: VMLPainter,
+
+    getType: function () {
+        return 'vml';
+    },
+
+    /**
+     * @return {HTMLDivElement}
+     */
+    getViewportRoot: function () {
+        return this._vmlViewport;
+    },
