@@ -92306,3 +92306,271 @@ var svgTextDrawRectText = function (el, rect, textRect) {
     var textAnchor = align;
     // PENDING
     if (textAnchor === 'left') {
+        textAnchor = 'start';
+        textPadding && (x += textPadding[3]);
+    }
+    else if (textAnchor === 'right') {
+        textAnchor = 'end';
+        textPadding && (x -= textPadding[1]);
+    }
+    else if (textAnchor === 'center') {
+        textAnchor = 'middle';
+        textPadding && (x += (textPadding[3] - textPadding[1]) / 2);
+    }
+
+    var dy = 0;
+    if (verticalAlign === 'after-edge') {
+        dy = -textRect.height + lineHeight;
+        textPadding && (dy -= textPadding[2]);
+    }
+    else if (verticalAlign === 'middle') {
+        dy = (-textRect.height + lineHeight) / 2;
+        textPadding && (y += (textPadding[0] - textPadding[2]) / 2);
+    }
+    else {
+        textPadding && (dy += textPadding[0]);
+    }
+
+    // Font may affect position of each tspan elements
+    if (el.__text !== text || el.__textFont !== font) {
+        var tspanList = el.__tspanList || [];
+        el.__tspanList = tspanList;
+        for (var i = 0; i < nTextLines; i++) {
+            // Using cached tspan elements
+            var tspan = tspanList[i];
+            if (!tspan) {
+                tspan = tspanList[i] = createElement('tspan');
+                textSvgEl.appendChild(tspan);
+                attr(tspan, 'alignment-baseline', verticalAlign);
+                attr(tspan, 'text-anchor', textAnchor);
+            }
+            else {
+                tspan.innerHTML = '';
+            }
+            attr(tspan, 'x', x);
+            attr(tspan, 'y', y + i * lineHeight + dy);
+            tspan.appendChild(document.createTextNode(textLines[i]));
+        }
+        // Remove unsed tspan elements
+        for (; i < tspanList.length; i++) {
+            textSvgEl.removeChild(tspanList[i]);
+        }
+        tspanList.length = nTextLines;
+
+        el.__text = text;
+        el.__textFont = font;
+    }
+    else if (el.__tspanList.length) {
+        // Update span x and y
+        var len = el.__tspanList.length;
+        for (var i = 0; i < len; ++i) {
+            var tspan = el.__tspanList[i];
+            if (tspan) {
+                attr(tspan, 'x', x);
+                attr(tspan, 'y', y + i * lineHeight + dy);
+            }
+        }
+    }
+};
+
+function getVerticalAlignForSvg(verticalAlign) {
+    if (verticalAlign === 'middle') {
+        return 'middle';
+    }
+    else if (verticalAlign === 'bottom') {
+        return 'after-edge';
+    }
+    else {
+        return 'hanging';
+    }
+}
+
+svgText.drawRectText = svgTextDrawRectText;
+
+svgText.brush = function (el) {
+    var style = el.style;
+    if (style.text != null) {
+        // 强制设置 textPosition
+        style.textPosition = [0, 0];
+        svgTextDrawRectText(el, {
+            x: style.x || 0, y: style.y || 0,
+            width: 0, height: 0
+        }, el.getBoundingRect());
+    }
+};
+
+// Myers' Diff Algorithm
+// Modified from https://github.com/kpdecker/jsdiff/blob/master/src/diff/base.js
+
+function Diff() {}
+
+Diff.prototype = {
+    diff: function (oldArr, newArr, equals) {
+        if (!equals) {
+            equals = function (a, b) {
+                return a === b;
+            };
+        }
+        this.equals = equals;
+
+        var self = this;
+
+        oldArr = oldArr.slice();
+        newArr = newArr.slice();
+        // Allow subclasses to massage the input prior to running
+        var newLen = newArr.length;
+        var oldLen = oldArr.length;
+        var editLength = 1;
+        var maxEditLength = newLen + oldLen;
+        var bestPath = [{ newPos: -1, components: [] }];
+
+        // Seed editLength = 0, i.e. the content starts with the same values
+        var oldPos = this.extractCommon(bestPath[0], newArr, oldArr, 0);
+        if (bestPath[0].newPos + 1 >= newLen && oldPos + 1 >= oldLen) {
+            var indices = [];
+            for (var i = 0; i < newArr.length; i++) {
+                indices.push(i);
+            }
+            // Identity per the equality and tokenizer
+            return [{
+                indices: indices, count: newArr.length
+            }];
+        }
+
+        // Main worker method. checks all permutations of a given edit length for acceptance.
+        function execEditLength() {
+            for (var diagonalPath = -1 * editLength; diagonalPath <= editLength; diagonalPath += 2) {
+                var basePath;
+                var addPath = bestPath[diagonalPath - 1];
+                var removePath = bestPath[diagonalPath + 1];
+                var oldPos = (removePath ? removePath.newPos : 0) - diagonalPath;
+                if (addPath) {
+                    // No one else is going to attempt to use this value, clear it
+                    bestPath[diagonalPath - 1] = undefined;
+                }
+
+                var canAdd = addPath && addPath.newPos + 1 < newLen;
+                var canRemove = removePath && 0 <= oldPos && oldPos < oldLen;
+                if (!canAdd && !canRemove) {
+                    // If this path is a terminal then prune
+                    bestPath[diagonalPath] = undefined;
+                    continue;
+                }
+
+                // Select the diagonal that we want to branch from. We select the prior
+                // path whose position in the new string is the farthest from the origin
+                // and does not pass the bounds of the diff graph
+                if (!canAdd || (canRemove && addPath.newPos < removePath.newPos)) {
+                    basePath = clonePath(removePath);
+                    self.pushComponent(basePath.components, undefined, true);
+                }
+                else {
+                    basePath = addPath;   // No need to clone, we've pulled it from the list
+                    basePath.newPos++;
+                    self.pushComponent(basePath.components, true, undefined);
+                }
+
+                oldPos = self.extractCommon(basePath, newArr, oldArr, diagonalPath);
+
+                // If we have hit the end of both strings, then we are done
+                if (basePath.newPos + 1 >= newLen && oldPos + 1 >= oldLen) {
+                    return buildValues(self, basePath.components, newArr, oldArr);
+                }
+                else {
+                    // Otherwise track this path as a potential candidate and continue.
+                    bestPath[diagonalPath] = basePath;
+                }
+            }
+
+            editLength++;
+        }
+
+        while (editLength <= maxEditLength) {
+            var ret = execEditLength();
+            if (ret) {
+                return ret;
+            }
+        }
+    },
+
+    pushComponent: function (components, added, removed) {
+        var last = components[components.length - 1];
+        if (last && last.added === added && last.removed === removed) {
+            // We need to clone here as the component clone operation is just
+            // as shallow array clone
+            components[components.length - 1] = {count: last.count + 1, added: added, removed: removed };
+        }
+        else {
+            components.push({count: 1, added: added, removed: removed });
+        }
+    },
+    extractCommon: function (basePath, newArr, oldArr, diagonalPath) {
+        var newLen = newArr.length;
+        var oldLen = oldArr.length;
+        var newPos = basePath.newPos;
+        var oldPos = newPos - diagonalPath;
+        var commonCount = 0;
+
+        while (newPos + 1 < newLen && oldPos + 1 < oldLen && this.equals(newArr[newPos + 1], oldArr[oldPos + 1])) {
+            newPos++;
+            oldPos++;
+            commonCount++;
+        }
+
+        if (commonCount) {
+            basePath.components.push({count: commonCount});
+        }
+
+        basePath.newPos = newPos;
+        return oldPos;
+    },
+    tokenize: function (value) {
+        return value.slice();
+    },
+    join: function (value) {
+        return value.slice();
+    }
+};
+
+function buildValues(diff, components, newArr, oldArr) {
+    var componentPos = 0;
+    var componentLen = components.length;
+    var newPos = 0;
+    var oldPos = 0;
+
+    for (; componentPos < componentLen; componentPos++) {
+        var component = components[componentPos];
+        if (!component.removed) {
+            var indices = [];
+            for (var i = newPos; i < newPos + component.count; i++) {
+                indices.push(i);
+            }
+            component.indices = indices;
+            newPos += component.count;
+            // Common case
+            if (!component.added) {
+                oldPos += component.count;
+            }
+        }
+        else {
+            var indices = [];
+            for (var i = oldPos; i < oldPos + component.count; i++) {
+                indices.push(i);
+            }
+            component.indices = indices;
+            oldPos += component.count;
+        }
+    }
+
+    return components;
+}
+
+function clonePath(path) {
+    return { newPos: path.newPos, components: path.components.slice(0) };
+}
+
+var arrayDiff = new Diff();
+
+var arrayDiff$1 = function (oldArr, newArr, callback) {
+    return arrayDiff.diff(oldArr, newArr, callback);
+};
