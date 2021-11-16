@@ -92036,3 +92036,273 @@ function pathDataToString$1(path) {
                     large = false;
                 }
                 else {
+                    large = (dTheta > -PI$5 && dTheta < 0 || dTheta > PI$5)
+                        === !!clockwise;
+                }
+
+                var x0 = round4(cx + rx * mathCos$3(theta));
+                var y0 = round4(cy + ry * mathSin$3(theta));
+
+                // It will not draw if start point and end point are exactly the same
+                // We need to shift the end point with a small value
+                // FIXME A better way to draw circle ?
+                if (isCircle) {
+                    if (clockwise) {
+                        dTheta = PI2$7 - 1e-4;
+                    }
+                    else {
+                        dTheta = -PI2$7 + 1e-4;
+                    }
+
+                    large = true;
+
+                    if (i === 9) {
+                        // Move to (x0, y0) only when CMD.A comes at the
+                        // first position of a shape.
+                        // For instance, when drawing a ring, CMD.A comes
+                        // after CMD.M, so it's unnecessary to move to
+                        // (x0, y0).
+                        str.push('M', x0, y0);
+                    }
+                }
+
+                var x = round4(cx + rx * mathCos$3(theta + dTheta));
+                var y = round4(cy + ry * mathSin$3(theta + dTheta));
+
+                // FIXME Ellipse
+                str.push('A', round4(rx), round4(ry),
+                    mathRound(psi * degree), +large, +clockwise, x, y);
+                break;
+            case CMD$4.Z:
+                cmdStr = 'Z';
+                break;
+            case CMD$4.R:
+                var x = round4(data[i++]);
+                var y = round4(data[i++]);
+                var w = round4(data[i++]);
+                var h = round4(data[i++]);
+                str.push(
+                    'M', x, y,
+                    'L', x + w, y,
+                    'L', x + w, y + h,
+                    'L', x, y + h,
+                    'L', x, y
+                );
+                break;
+        }
+        cmdStr && str.push(cmdStr);
+        for (var j = 0; j < nData; j++) {
+            // PENDING With scale
+            str.push(round4(data[i++]));
+        }
+    }
+    return str.join(' ');
+}
+
+var svgPath = {};
+svgPath.brush = function (el) {
+    var style = el.style;
+
+    var svgEl = el.__svgEl;
+    if (!svgEl) {
+        svgEl = createElement('path');
+        el.__svgEl = svgEl;
+    }
+
+    if (!el.path) {
+        el.createPathProxy();
+    }
+    var path = el.path;
+
+    if (el.__dirtyPath) {
+        path.beginPath();
+        path.subPixelOptimize = false;
+        el.buildPath(path, el.shape);
+        el.__dirtyPath = false;
+
+        var pathStr = pathDataToString$1(path);
+        if (pathStr.indexOf('NaN') < 0) {
+            // Ignore illegal path, which may happen such in out-of-range
+            // data in Calendar series.
+            attr(svgEl, 'd', pathStr);
+        }
+    }
+
+    bindStyle(svgEl, style, false, el);
+    setTransform(svgEl, el.transform);
+
+    if (style.text != null) {
+        svgTextDrawRectText(el, el.getBoundingRect());
+    }
+};
+
+/***************************************************
+ * IMAGE
+ **************************************************/
+var svgImage = {};
+svgImage.brush = function (el) {
+    var style = el.style;
+    var image = style.image;
+
+    if (image instanceof HTMLImageElement) {
+        var src = image.src;
+        image = src;
+    }
+    if (!image) {
+        return;
+    }
+
+    var x = style.x || 0;
+    var y = style.y || 0;
+
+    var dw = style.width;
+    var dh = style.height;
+
+    var svgEl = el.__svgEl;
+    if (!svgEl) {
+        svgEl = createElement('image');
+        el.__svgEl = svgEl;
+    }
+
+    if (image !== el.__imageSrc) {
+        attrXLink(svgEl, 'href', image);
+        // Caching image src
+        el.__imageSrc = image;
+    }
+
+    attr(svgEl, 'width', dw);
+    attr(svgEl, 'height', dh);
+
+    attr(svgEl, 'x', x);
+    attr(svgEl, 'y', y);
+
+    setTransform(svgEl, el.transform);
+
+    if (style.text != null) {
+        svgTextDrawRectText(el, el.getBoundingRect());
+    }
+};
+
+/***************************************************
+ * TEXT
+ **************************************************/
+var svgText = {};
+var tmpRect$3 = new BoundingRect();
+
+var svgTextDrawRectText = function (el, rect, textRect) {
+    var style = el.style;
+
+    el.__dirty && normalizeTextStyle(style, true);
+
+    var text = style.text;
+    // Convert to string
+    if (text == null) {
+        // Draw no text only when text is set to null, but not ''
+        return;
+    }
+    else {
+        text += '';
+    }
+
+    var textSvgEl = el.__textSvgEl;
+    if (!textSvgEl) {
+        textSvgEl = createElement('text');
+        el.__textSvgEl = textSvgEl;
+    }
+
+    var x;
+    var y;
+    var textPosition = style.textPosition;
+    var distance = style.textDistance;
+    var align = style.textAlign || 'left';
+
+    if (typeof style.fontSize === 'number') {
+        style.fontSize += 'px';
+    }
+    var font = style.font
+        || [
+            style.fontStyle || '',
+            style.fontWeight || '',
+            style.fontSize || '',
+            style.fontFamily || ''
+        ].join(' ')
+        || DEFAULT_FONT$1;
+
+    var verticalAlign = getVerticalAlignForSvg(style.textVerticalAlign);
+
+    textRect = getBoundingRect(
+        text, font, align,
+        verticalAlign, style.textPadding, style.textLineHeight
+    );
+
+    var lineHeight = textRect.lineHeight;
+    // Text position represented by coord
+    if (textPosition instanceof Array) {
+        x = rect.x + textPosition[0];
+        y = rect.y + textPosition[1];
+    }
+    else {
+        var newPos = adjustTextPositionOnRect(
+            textPosition, rect, distance
+        );
+        x = newPos.x;
+        y = newPos.y;
+        verticalAlign = getVerticalAlignForSvg(newPos.textVerticalAlign);
+        align = newPos.textAlign;
+    }
+
+    attr(textSvgEl, 'alignment-baseline', verticalAlign);
+
+    if (font) {
+        textSvgEl.style.font = font;
+    }
+
+    var textPadding = style.textPadding;
+
+    // Make baseline top
+    attr(textSvgEl, 'x', x);
+    attr(textSvgEl, 'y', y);
+
+    bindStyle(textSvgEl, style, true, el);
+    if (el instanceof Text || el.style.transformText) {
+        // Transform text with element
+        setTransform(textSvgEl, el.transform);
+    }
+    else {
+        if (el.transform) {
+            tmpRect$3.copy(rect);
+            tmpRect$3.applyTransform(el.transform);
+            rect = tmpRect$3;
+        }
+        else {
+            var pos = el.transformCoordToGlobal(rect.x, rect.y);
+            rect.x = pos[0];
+            rect.y = pos[1];
+            el.transform = identity(create$1());
+        }
+
+        // Text rotation, but no element transform
+        var origin = style.textOrigin;
+        if (origin === 'center') {
+            x = textRect.width / 2 + x;
+            y = textRect.height / 2 + y;
+        }
+        else if (origin) {
+            x = origin[0] + x;
+            y = origin[1] + y;
+        }
+        var rotate$$1 = -style.textRotation || 0;
+        var transform = create$1();
+        // Apply textRotate to element matrix
+        rotate(transform, transform, rotate$$1);
+
+        var pos = [el.transform[4], el.transform[5]];
+        translate(transform, transform, pos);
+        setTransform(textSvgEl, transform);
+    }
+
+    var textLines = text.split('\n');
+    var nTextLines = textLines.length;
+    var textAnchor = align;
+    // PENDING
+    if (textAnchor === 'left') {
