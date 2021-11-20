@@ -93105,3 +93105,276 @@ ClippathManager.prototype.updateDom = function (
     isText
 ) {
     if (clipPaths && clipPaths.length > 0) {
+        // Has clipPath, create <clipPath> with the first clipPath
+        var defs = this.getDefs(true);
+        var clipPath = clipPaths[0];
+        var clipPathEl;
+        var id;
+
+        var dom = isText ? '_textDom' : '_dom';
+
+        if (clipPath[dom]) {
+            // Use a dom that is already in <defs>
+            id = clipPath[dom].getAttribute('id');
+            clipPathEl = clipPath[dom];
+
+            // Use a dom that is already in <defs>
+            if (!defs.contains(clipPathEl)) {
+                // This happens when set old clipPath that has
+                // been previously removed
+                defs.appendChild(clipPathEl);
+            }
+        }
+        else {
+            // New <clipPath>
+            id = 'zr' + this._zrId + '-clip-' + this.nextId;
+            ++this.nextId;
+            clipPathEl = this.createElement('clipPath');
+            clipPathEl.setAttribute('id', id);
+            defs.appendChild(clipPathEl);
+
+            clipPath[dom] = clipPathEl;
+        }
+
+        // Build path and add to <clipPath>
+        var svgProxy = this.getSvgProxy(clipPath);
+        if (clipPath.transform
+            && clipPath.parent.invTransform
+            && !isText
+        ) {
+            /**
+             * If a clipPath has a parent with transform, the transform
+             * of parent should not be considered when setting transform
+             * of clipPath. So we need to transform back from parent's
+             * transform, which is done by multiplying parent's inverse
+             * transform.
+             */
+            // Store old transform
+            var transform = Array.prototype.slice.call(
+                clipPath.transform
+            );
+
+            // Transform back from parent, and brush path
+            mul$1(
+                clipPath.transform,
+                clipPath.parent.invTransform,
+                clipPath.transform
+            );
+            svgProxy.brush(clipPath);
+
+            // Set back transform of clipPath
+            clipPath.transform = transform;
+        }
+        else {
+            svgProxy.brush(clipPath);
+        }
+
+        var pathEl = this.getSvgElement(clipPath);
+
+        clipPathEl.innerHTML = '';
+        /**
+         * Use `cloneNode()` here to appendChild to multiple parents,
+         * which may happend when Text and other shapes are using the same
+         * clipPath. Since Text will create an extra clipPath DOM due to
+         * different transform rules.
+         */
+        clipPathEl.appendChild(pathEl.cloneNode());
+
+        parentEl.setAttribute('clip-path', 'url(#' + id + ')');
+
+        if (clipPaths.length > 1) {
+            // Make the other clipPaths recursively
+            this.updateDom(clipPathEl, clipPaths.slice(1), isText);
+        }
+    }
+    else {
+        // No clipPath
+        if (parentEl) {
+            parentEl.setAttribute('clip-path', 'none');
+        }
+    }
+};
+
+/**
+ * Mark a single clipPath to be used
+ *
+ * @param {Displayable} displayable displayable element
+ */
+ClippathManager.prototype.markUsed = function (displayable) {
+    var that = this;
+    if (displayable.__clipPaths && displayable.__clipPaths.length > 0) {
+        each$1(displayable.__clipPaths, function (clipPath) {
+            if (clipPath._dom) {
+                Definable.prototype.markUsed.call(that, clipPath._dom);
+            }
+            if (clipPath._textDom) {
+                Definable.prototype.markUsed.call(that, clipPath._textDom);
+            }
+        });
+    }
+};
+
+/**
+ * @file Manages SVG shadow elements.
+ * @author Zhang Wenli
+ */
+
+/**
+ * Manages SVG shadow elements.
+ *
+ * @class
+ * @extends Definable
+ * @param   {number}     zrId    zrender instance id
+ * @param   {SVGElement} svgRoot root of SVG document
+ */
+function ShadowManager(zrId, svgRoot) {
+    Definable.call(
+        this,
+        zrId,
+        svgRoot,
+        ['filter'],
+        '__filter_in_use__',
+        '_shadowDom'
+    );
+}
+
+
+inherits(ShadowManager, Definable);
+
+
+/**
+ * Create new shadow DOM for fill or stroke if not exist,
+ * but will not update shadow if exists.
+ *
+ * @param {SvgElement}  svgElement   SVG element to paint
+ * @param {Displayable} displayable  zrender displayable element
+ */
+ShadowManager.prototype.addWithoutUpdate = function (
+    svgElement,
+    displayable
+) {
+    if (displayable && hasShadow(displayable.style)) {
+        var style = displayable.style;
+
+        // Create dom in <defs> if not exists
+        var dom;
+        if (style._shadowDom) {
+            // Gradient exists
+            dom = style._shadowDom;
+
+            var defs = this.getDefs(true);
+            if (!defs.contains(style._shadowDom)) {
+                // _shadowDom is no longer in defs, recreate
+                this.addDom(dom);
+            }
+        }
+        else {
+            // New dom
+            dom = this.add(displayable);
+        }
+
+        this.markUsed(displayable);
+
+        var id = dom.getAttribute('id');
+        svgElement.style.filter = 'url(#' + id + ')';
+    }
+};
+
+
+/**
+ * Add a new shadow tag in <defs>
+ *
+ * @param {Displayable} displayable  zrender displayable element
+ * @return {SVGFilterElement} created DOM
+ */
+ShadowManager.prototype.add = function (displayable) {
+    var dom = this.createElement('filter');
+    var style = displayable.style;
+
+    // Set dom id with shadow id, since each shadow instance
+    // will have no more than one dom element.
+    // id may exists before for those dirty elements, in which case
+    // id should remain the same, and other attributes should be
+    // updated.
+    style._shadowDomId = style._shadowDomId || this.nextId++;
+    dom.setAttribute('id', 'zr' + this._zrId
+        + '-shadow-' + style._shadowDomId);
+
+    this.updateDom(displayable, dom);
+    this.addDom(dom);
+
+    return dom;
+};
+
+
+/**
+ * Update shadow.
+ *
+ * @param {Displayable} displayable  zrender displayable element
+ */
+ShadowManager.prototype.update = function (svgElement, displayable) {
+    var style = displayable.style;
+    if (hasShadow(style)) {
+        var that = this;
+        Definable.prototype.update.call(this, displayable, function (style) {
+            that.updateDom(displayable, style._shadowDom);
+        });
+    }
+    else {
+        // Remove shadow
+        this.remove(svgElement, style);
+    }
+};
+
+
+/**
+ * Remove DOM and clear parent filter
+ */
+ShadowManager.prototype.remove = function (svgElement, style) {
+    if (style._shadowDomId != null) {
+        this.removeDom(style);
+        svgElement.style.filter = '';
+    }
+};
+
+
+/**
+ * Update shadow dom
+ *
+ * @param {Displayable} displayable  zrender displayable element
+ * @param {SVGFilterElement} dom DOM to update
+ */
+ShadowManager.prototype.updateDom = function (displayable, dom) {
+    var domChild = dom.getElementsByTagName('feDropShadow');
+    if (domChild.length === 0) {
+        domChild = this.createElement('feDropShadow');
+    }
+    else {
+        domChild = domChild[0];
+    }
+
+    var style = displayable.style;
+    var scaleX = displayable.scale ? (displayable.scale[0] || 1) : 1;
+    var scaleY = displayable.scale ? (displayable.scale[1] || 1) : 1;
+
+    // TODO: textBoxShadowBlur is not supported yet
+    var offsetX, offsetY, blur, color;
+    if (style.shadowBlur || style.shadowOffsetX || style.shadowOffsetY) {
+        offsetX = style.shadowOffsetX || 0;
+        offsetY = style.shadowOffsetY || 0;
+        blur = style.shadowBlur;
+        color = style.shadowColor;
+    }
+    else if (style.textShadowBlur) {
+        offsetX = style.textShadowOffsetX || 0;
+        offsetY = style.textShadowOffsetY || 0;
+        blur = style.textShadowBlur;
+        color = style.textShadowColor;
+    }
+    else {
+        // Remove shadow
+        this.removeDom(dom, style);
+        return;
+    }
+
+    domChild.setAttribute('dx', offsetX / scaleX);
