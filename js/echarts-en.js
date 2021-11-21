@@ -93378,3 +93378,271 @@ ShadowManager.prototype.updateDom = function (displayable, dom) {
     }
 
     domChild.setAttribute('dx', offsetX / scaleX);
+    domChild.setAttribute('dy', offsetY / scaleY);
+    domChild.setAttribute('flood-color', color);
+
+    // Divide by two here so that it looks the same as in canvas
+    // See: https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-shadowblur
+    var stdDx = blur / 2 / scaleX;
+    var stdDy = blur / 2 / scaleY;
+    var stdDeviation = stdDx + ' ' + stdDy;
+    domChild.setAttribute('stdDeviation', stdDeviation);
+
+    // Fix filter clipping problem
+    dom.setAttribute('x', '-100%');
+    dom.setAttribute('y', '-100%');
+    dom.setAttribute('width', Math.ceil(blur / 2 * 200) + '%');
+    dom.setAttribute('height', Math.ceil(blur / 2 * 200) + '%');
+
+    dom.appendChild(domChild);
+
+    // Store dom element in shadow, to avoid creating multiple
+    // dom instances for the same shadow element
+    style._shadowDom = dom;
+};
+
+/**
+ * Mark a single shadow to be used
+ *
+ * @param {Displayable} displayable displayable element
+ */
+ShadowManager.prototype.markUsed = function (displayable) {
+    var style = displayable.style;
+    if (style && style._shadowDom) {
+        Definable.prototype.markUsed.call(this, style._shadowDom);
+    }
+};
+
+function hasShadow(style) {
+    // TODO: textBoxShadowBlur is not supported yet
+    return style
+        && (style.shadowBlur || style.shadowOffsetX || style.shadowOffsetY
+            || style.textShadowBlur || style.textShadowOffsetX
+            || style.textShadowOffsetY);
+}
+
+/**
+ * SVG Painter
+ * @module zrender/svg/Painter
+ */
+
+function parseInt10$2(val) {
+    return parseInt(val, 10);
+}
+
+function getSvgProxy(el) {
+    if (el instanceof Path) {
+        return svgPath;
+    }
+    else if (el instanceof ZImage) {
+        return svgImage;
+    }
+    else if (el instanceof Text) {
+        return svgText;
+    }
+    else {
+        return svgPath;
+    }
+}
+
+function checkParentAvailable(parent, child) {
+    return child && parent && child.parentNode !== parent;
+}
+
+function insertAfter(parent, child, prevSibling) {
+    if (checkParentAvailable(parent, child) && prevSibling) {
+        var nextSibling = prevSibling.nextSibling;
+        nextSibling ? parent.insertBefore(child, nextSibling)
+            : parent.appendChild(child);
+    }
+}
+
+function prepend(parent, child) {
+    if (checkParentAvailable(parent, child)) {
+        var firstChild = parent.firstChild;
+        firstChild ? parent.insertBefore(child, firstChild)
+            : parent.appendChild(child);
+    }
+}
+
+function remove$1(parent, child) {
+    if (child && parent && child.parentNode === parent) {
+        parent.removeChild(child);
+    }
+}
+
+function getTextSvgElement(displayable) {
+    return displayable.__textSvgEl;
+}
+
+function getSvgElement(displayable) {
+    return displayable.__svgEl;
+}
+
+/**
+ * @alias module:zrender/svg/Painter
+ * @constructor
+ * @param {HTMLElement} root 绘图容器
+ * @param {module:zrender/Storage} storage
+ * @param {Object} opts
+ */
+var SVGPainter = function (root, storage, opts, zrId) {
+
+    this.root = root;
+    this.storage = storage;
+    this._opts = opts = extend({}, opts || {});
+
+    var svgRoot = createElement('svg');
+    svgRoot.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    svgRoot.setAttribute('version', '1.1');
+    svgRoot.setAttribute('baseProfile', 'full');
+    svgRoot.style.cssText = 'user-select:none;position:absolute;left:0;top:0;';
+
+    this.gradientManager = new GradientManager(zrId, svgRoot);
+    this.clipPathManager = new ClippathManager(zrId, svgRoot);
+    this.shadowManager = new ShadowManager(zrId, svgRoot);
+
+    var viewport = document.createElement('div');
+    viewport.style.cssText = 'overflow:hidden;position:relative';
+
+    this._svgRoot = svgRoot;
+    this._viewport = viewport;
+
+    root.appendChild(viewport);
+    viewport.appendChild(svgRoot);
+
+    this.resize(opts.width, opts.height);
+
+    this._visibleList = [];
+};
+
+SVGPainter.prototype = {
+
+    constructor: SVGPainter,
+
+    getType: function () {
+        return 'svg';
+    },
+
+    getViewportRoot: function () {
+        return this._viewport;
+    },
+
+    getViewportRootOffset: function () {
+        var viewportRoot = this.getViewportRoot();
+        if (viewportRoot) {
+            return {
+                offsetLeft: viewportRoot.offsetLeft || 0,
+                offsetTop: viewportRoot.offsetTop || 0
+            };
+        }
+    },
+
+    refresh: function () {
+
+        var list = this.storage.getDisplayList(true);
+
+        this._paintList(list);
+    },
+
+    setBackgroundColor: function (backgroundColor) {
+        // TODO gradient
+        this._viewport.style.background = backgroundColor;
+    },
+
+    _paintList: function (list) {
+        this.gradientManager.markAllUnused();
+        this.clipPathManager.markAllUnused();
+        this.shadowManager.markAllUnused();
+
+        var svgRoot = this._svgRoot;
+        var visibleList = this._visibleList;
+        var listLen = list.length;
+
+        var newVisibleList = [];
+        var i;
+        for (i = 0; i < listLen; i++) {
+            var displayable = list[i];
+            var svgProxy = getSvgProxy(displayable);
+            var svgElement = getSvgElement(displayable)
+                || getTextSvgElement(displayable);
+            if (!displayable.invisible) {
+                if (displayable.__dirty) {
+                    svgProxy && svgProxy.brush(displayable);
+
+                    // Update clipPath
+                    this.clipPathManager.update(displayable);
+
+                    // Update gradient and shadow
+                    if (displayable.style) {
+                        this.gradientManager
+                            .update(displayable.style.fill);
+                        this.gradientManager
+                            .update(displayable.style.stroke);
+
+                        this.shadowManager
+                            .update(svgElement, displayable);
+                    }
+
+                    displayable.__dirty = false;
+                }
+                newVisibleList.push(displayable);
+            }
+        }
+
+        var diff = arrayDiff$1(visibleList, newVisibleList);
+        var prevSvgElement;
+
+        // First do remove, in case element moved to the head and do remove
+        // after add
+        for (i = 0; i < diff.length; i++) {
+            var item = diff[i];
+            if (item.removed) {
+                for (var k = 0; k < item.count; k++) {
+                    var displayable = visibleList[item.indices[k]];
+                    var svgElement = getSvgElement(displayable);
+                    var textSvgElement = getTextSvgElement(displayable);
+                    remove$1(svgRoot, svgElement);
+                    remove$1(svgRoot, textSvgElement);
+                }
+            }
+        }
+        for (i = 0; i < diff.length; i++) {
+            var item = diff[i];
+            if (item.added) {
+                for (var k = 0; k < item.count; k++) {
+                    var displayable = newVisibleList[item.indices[k]];
+                    var svgElement = getSvgElement(displayable);
+                    var textSvgElement = getTextSvgElement(displayable);
+                    prevSvgElement
+                        ? insertAfter(svgRoot, svgElement, prevSvgElement)
+                        : prepend(svgRoot, svgElement);
+                    if (svgElement) {
+                        insertAfter(svgRoot, textSvgElement, svgElement);
+                    }
+                    else if (prevSvgElement) {
+                        insertAfter(
+                            svgRoot, textSvgElement, prevSvgElement
+                        );
+                    }
+                    else {
+                        prepend(svgRoot, textSvgElement);
+                    }
+                    // Insert text
+                    insertAfter(svgRoot, textSvgElement, svgElement);
+                    prevSvgElement = textSvgElement || svgElement
+                        || prevSvgElement;
+
+                    this.gradientManager
+                        .addWithoutUpdate(svgElement, displayable);
+                    this.shadowManager
+                        .addWithoutUpdate(prevSvgElement, displayable);
+                    this.clipPathManager.markUsed(displayable);
+                }
+            }
+            else if (!item.removed) {
+                for (var k = 0; k < item.count; k++) {
+                    var displayable = newVisibleList[item.indices[k]];
+                    prevSvgElement =
+                        svgElement =
+                        getTextSvgElement(displayable)
