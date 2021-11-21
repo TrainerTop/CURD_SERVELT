@@ -93646,3 +93646,236 @@ SVGPainter.prototype = {
                     prevSvgElement =
                         svgElement =
                         getTextSvgElement(displayable)
+                        || getSvgElement(displayable)
+                        || prevSvgElement;
+
+                    this.gradientManager.markUsed(displayable);
+                    this.gradientManager
+                        .addWithoutUpdate(svgElement, displayable);
+
+                    this.shadowManager.markUsed(displayable);
+                    this.shadowManager
+                        .addWithoutUpdate(svgElement, displayable);
+
+                    this.clipPathManager.markUsed(displayable);
+                }
+            }
+        }
+
+        this.gradientManager.removeUnused();
+        this.clipPathManager.removeUnused();
+        this.shadowManager.removeUnused();
+
+        this._visibleList = newVisibleList;
+    },
+
+    _getDefs: function (isForceCreating) {
+        var svgRoot = this._svgRoot;
+        var defs = this._svgRoot.getElementsByTagName('defs');
+        if (defs.length === 0) {
+            // Not exist
+            if (isForceCreating) {
+                var defs = svgRoot.insertBefore(
+                    createElement('defs'), // Create new tag
+                    svgRoot.firstChild // Insert in the front of svg
+                );
+                if (!defs.contains) {
+                    // IE doesn't support contains method
+                    defs.contains = function (el) {
+                        var children = defs.children;
+                        if (!children) {
+                            return false;
+                        }
+                        for (var i = children.length - 1; i >= 0; --i) {
+                            if (children[i] === el) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+                }
+                return defs;
+            }
+            else {
+                return null;
+            }
+        }
+        else {
+            return defs[0];
+        }
+    },
+
+    resize: function (width, height) {
+        var viewport = this._viewport;
+        // FIXME Why ?
+        viewport.style.display = 'none';
+
+        // Save input w/h
+        var opts = this._opts;
+        width != null && (opts.width = width);
+        height != null && (opts.height = height);
+
+        width = this._getSize(0);
+        height = this._getSize(1);
+
+        viewport.style.display = '';
+
+        if (this._width !== width || this._height !== height) {
+            this._width = width;
+            this._height = height;
+
+            var viewportStyle = viewport.style;
+            viewportStyle.width = width + 'px';
+            viewportStyle.height = height + 'px';
+
+            var svgRoot = this._svgRoot;
+            // Set width by 'svgRoot.width = width' is invalid
+            svgRoot.setAttribute('width', width);
+            svgRoot.setAttribute('height', height);
+        }
+    },
+
+    /**
+     * 获取绘图区域宽度
+     */
+    getWidth: function () {
+        return this._width;
+    },
+
+    /**
+     * 获取绘图区域高度
+     */
+    getHeight: function () {
+        return this._height;
+    },
+
+    _getSize: function (whIdx) {
+        var opts = this._opts;
+        var wh = ['width', 'height'][whIdx];
+        var cwh = ['clientWidth', 'clientHeight'][whIdx];
+        var plt = ['paddingLeft', 'paddingTop'][whIdx];
+        var prb = ['paddingRight', 'paddingBottom'][whIdx];
+
+        if (opts[wh] != null && opts[wh] !== 'auto') {
+            return parseFloat(opts[wh]);
+        }
+
+        var root = this.root;
+        // IE8 does not support getComputedStyle, but it use VML.
+        var stl = document.defaultView.getComputedStyle(root);
+
+        return (
+            (root[cwh] || parseInt10$2(stl[wh]) || parseInt10$2(root.style[wh]))
+            - (parseInt10$2(stl[plt]) || 0)
+            - (parseInt10$2(stl[prb]) || 0)
+        ) | 0;
+    },
+
+    dispose: function () {
+        this.root.innerHTML = '';
+
+        this._svgRoot =
+            this._viewport =
+            this.storage =
+            null;
+    },
+
+    clear: function () {
+        if (this._viewport) {
+            this.root.removeChild(this._viewport);
+        }
+    },
+
+    pathToDataUrl: function () {
+        this.refresh();
+        var html = this._svgRoot.outerHTML;
+        return 'data:image/svg+xml;charset=UTF-8,' + html;
+    }
+};
+
+// Not supported methods
+function createMethodNotSupport$1(method) {
+    return function () {
+        zrLog('In SVG mode painter not support method "' + method + '"');
+    };
+}
+
+// Unsuppoted methods
+each$1([
+    'getLayer', 'insertLayer', 'eachLayer', 'eachBuiltinLayer',
+    'eachOtherLayer', 'getLayers', 'modLayer', 'delLayer', 'clearLayer',
+    'toDataURL', 'pathToImage'
+], function (name) {
+    SVGPainter.prototype[name] = createMethodNotSupport$1(name);
+});
+
+registerPainter('svg', SVGPainter);
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+// Import all charts and components
+
+exports.version = version;
+exports.dependencies = dependencies;
+exports.PRIORITY = PRIORITY;
+exports.init = init;
+exports.connect = connect;
+exports.disConnect = disConnect;
+exports.disconnect = disconnect;
+exports.dispose = dispose;
+exports.getInstanceByDom = getInstanceByDom;
+exports.getInstanceById = getInstanceById;
+exports.registerTheme = registerTheme;
+exports.registerPreprocessor = registerPreprocessor;
+exports.registerProcessor = registerProcessor;
+exports.registerPostUpdate = registerPostUpdate;
+exports.registerAction = registerAction;
+exports.registerCoordinateSystem = registerCoordinateSystem;
+exports.getCoordinateSystemDimensions = getCoordinateSystemDimensions;
+exports.registerLayout = registerLayout;
+exports.registerVisual = registerVisual;
+exports.registerLoading = registerLoading;
+exports.extendComponentModel = extendComponentModel;
+exports.extendComponentView = extendComponentView;
+exports.extendSeriesModel = extendSeriesModel;
+exports.extendChartView = extendChartView;
+exports.setCanvasCreator = setCanvasCreator;
+exports.registerMap = registerMap;
+exports.getMap = getMap;
+exports.dataTool = dataTool;
+exports.zrender = zrender;
+exports.number = number;
+exports.format = format;
+exports.throttle = throttle;
+exports.helper = helper;
+exports.matrix = matrix;
+exports.vector = vector;
+exports.color = color;
+exports.parseGeoJSON = parseGeoJson$1;
+exports.parseGeoJson = parseGeoJson;
+exports.util = ecUtil;
+exports.graphic = graphic$1;
+exports.List = List;
+exports.Model = Model;
+exports.Axis = Axis;
+exports.env = env$1;
+
+})));
+//# sourceMappingURL=echarts-en.js.map
